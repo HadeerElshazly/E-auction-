@@ -128,7 +128,7 @@ bidding on the bundle. Total area and plot count are derived display fields.
 
 | Service | Stack | Responsibility |
 |---|---|---|
-| **bid-catcher** | .NET 9 minimal API, AOT | Accept bids, verify, append to Kafka. No DB, no outbound calls |
+| **bid-catcher** | .NET 8 minimal API | Accept bids, verify, append to Kafka. No DB, no outbound calls |
 | **bid-processor** | .NET worker | Order by offset, apply auction rules, determine winner, maintain the ladder and the hash-chained ledger |
 | **auction-admin** | .NET + Postgres + outbox | Auction CRUD, plots, documents, scheduling, preparation + award workflows |
 | **participant** | .NET + Postgres | Registration, profile, booklet purchase, deposit, eligibility |
@@ -527,3 +527,54 @@ apply — land is physical — but a PDF sold in-app is exactly the grey zone Ap
 Review argues over. Mitigation: make the booklet purchase web-only with the app
 deep-linking out, or get a pre-submission ruling. Cheap to design around now; a
 rejected build days before launch is not.
+
+
+---
+
+## 12. Validation status
+
+A vertical slice of the hot path is implemented and tested: `EAuction.Core`
+(frame codec, bid log, auction engine, ledger), `EAuction.BidCatcher` (the
+HTTP endpoint) and `EAuction.BidProcessor` (the pump that drives the engine).
+
+### Verified
+
+**37 tests pass** (`dotnet test tests/EAuction.Tests`), covering:
+
+| Claim | Where |
+|---|---|
+| Binary frame round-trips; HMAC rejects a forged or altered amount | `BidFrameTests` |
+| Server metadata does not invalidate the client signature | `BidFrameTests` |
+| Minimum increment and opening price enforced | `AuctionEngineTests` |
+| Equal bids resolve by offset order with no tie-break rule (D-05) | `AuctionEngineTests` |
+| A leader cannot outbid themselves | `AuctionEngineTests` |
+| A retried bid with the same `clientBidId` is not counted twice | `AuctionEngineTests` |
+| Quiet-period extension slides the end, and stops at `max_extensions` (D-04) | `AuctionEngineTests` |
+| Extension lets a bid land that the original end time would have refused | `AuctionEngineTests` |
+| Catcher accepts past `ends_at` but inside the hard ceiling (§6.3) | `EndToEndTests` |
+| Ineligible bidder, unknown auction and forged signature rejected at the edge | `EndToEndTests` |
+| Concurrent bids produce one total order and one winner | `EndToEndTests` |
+| Replaying the log twice reproduces the identical winner and ledger head | `EndToEndTests` |
+| Cascade walks the ladder, honours `>=` reserve, skips the disqualified | `LadderAndLedgerTests` |
+| Altering or removing a ledger record breaks the hash chain (D-21) | `LadderAndLedgerTests` |
+
+Load: **630,816 requests, 31,538 req/s, p99 13.83 ms, zero failures** on four
+shared vCPU with the generator on the same host. See `tools/loadtest/README.md`.
+
+### Not yet verified
+
+| Gap | Why |
+|---|---|
+| **`KafkaBidLog` has never run against a broker** | No Docker daemon in the build container. The pipeline is validated through `InMemoryBidLog`, which mirrors the same per-partition ordering contract, but the Kafka path is unexercised code |
+| **The `acks=all` round trip is not in the measured latency** | It is the largest remaining cost in the budget. ~36 ms of the 50 ms target is unspent, which should be comfortable — but it is an estimate, not a measurement |
+| **The p99 ≤ 50 ms @ 10k bids/sec target is therefore not yet met** | It needs a real three-broker cluster with the generator on a separate host |
+| **`docker-compose.yml` is unrun** | Same reason. Treat the first `up` as work, not as a regression |
+| **JWT verification is not wired** | The seam is documented in `Program.cs`. The HMAC signature (D-20), which binds a bid to a bidder, is implemented |
+| **Admin, participant, payment, fan-out, notification services** | Not started — the slice covers the bid path only |
+
+### Next
+
+1. Run the Compose stack and point the catcher at real Kafka; re-measure.
+2. Wire JWT verification against cached JWKS.
+3. Auction-admin service with the outbox, and the approval workflow that
+   publishes to `auctions.upcoming`.

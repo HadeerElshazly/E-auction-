@@ -1,0 +1,59 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{F4D7B1A6-EFE0-47F2-A335-796609419F49}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EAuction.Core", "src\EAuction.Core\EAuction.Core.csproj", "{5EACCEA7-43C9-4B87-9BA0-EB44E9B11D05}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EAuction.BidCatcher", "src\EAuction.BidCatcher\EAuction.BidCatcher.csproj", "{18C24976-E6CF-42A5-A826-A06165DA3AF5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EAuction.BidProcessor", "src\EAuction.BidProcessor\EAuction.BidProcessor.csproj", "{6E308DFD-9D6B-4D43-9755-888D4831759E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{A242872C-59A3-41CD-90D0-ADE3ECBFD43B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EAuction.Tests", "tests\EAuction.Tests\EAuction.Tests.csproj", "{A2BB5D19-87CC-4E24-A532-2B59D6AA1CEA}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{A92D71F4-B202-487E-9832-C71F6A64C20B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EAuction.LoadTest", "tools\loadtest\EAuction.LoadTest.csproj", "{12069120-BEEE-4071-906C-88D1A5876886}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5EACCEA7-43C9-4B87-9BA0-EB44E9B11D05}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5EACCEA7-43C9-4B87-9BA0-EB44E9B11D05}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5EACCEA7-43C9-4B87-9BA0-EB44E9B11D05}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5EACCEA7-43C9-4B87-9BA0-EB44E9B11D05}.Release|Any CPU.Build.0 = Release|Any CPU
+		{18C24976-E6CF-42A5-A826-A06165DA3AF5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{18C24976-E6CF-42A5-A826-A06165DA3AF5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{18C24976-E6CF-42A5-A826-A06165DA3AF5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{18C24976-E6CF-42A5-A826-A06165DA3AF5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6E308DFD-9D6B-4D43-9755-888D4831759E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6E308DFD-9D6B-4D43-9755-888D4831759E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6E308DFD-9D6B-4D43-9755-888D4831759E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6E308DFD-9D6B-4D43-9755-888D4831759E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A2BB5D19-87CC-4E24-A532-2B59D6AA1CEA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A2BB5D19-87CC-4E24-A532-2B59D6AA1CEA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A2BB5D19-87CC-4E24-A532-2B59D6AA1CEA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A2BB5D19-87CC-4E24-A532-2B59D6AA1CEA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{12069120-BEEE-4071-906C-88D1A5876886}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{12069120-BEEE-4071-906C-88D1A5876886}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{12069120-BEEE-4071-906C-88D1A5876886}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{12069120-BEEE-4071-906C-88D1A5876886}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5EACCEA7-43C9-4B87-9BA0-EB44E9B11D05} = {F4D7B1A6-EFE0-47F2-A335-796609419F49}
+		{18C24976-E6CF-42A5-A826-A06165DA3AF5} = {F4D7B1A6-EFE0-47F2-A335-796609419F49}
+		{6E308DFD-9D6B-4D43-9755-888D4831759E} = {F4D7B1A6-EFE0-47F2-A335-796609419F49}
+		{A2BB5D19-87CC-4E24-A532-2B59D6AA1CEA} = {A242872C-59A3-41CD-90D0-ADE3ECBFD43B}
+		{12069120-BEEE-4071-906C-88D1A5876886} = {A92D71F4-B202-487E-9832-C71F6A64C20B}
+	EndGlobalSection
+EndGlobal

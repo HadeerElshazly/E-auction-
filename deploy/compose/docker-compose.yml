@@ -1,0 +1,114 @@
+# Local development stack.
+#
+# NOT YET RUN: the development container used to author this has no Docker
+# daemon, so this file is unexercised. Treat the first `docker compose up` as
+# part of the work, not as a regression.
+#
+#   docker compose -f deploy/compose/docker-compose.yml up -d
+#
+# Configuration is env-var only (12-factor) so Compose and Helm share one
+# source of truth.
+
+name: e-auction
+
+services:
+  kafka:
+    image: apache/kafka:3.8.1
+    container_name: eauction-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft: no ZooKeeper. Single broker for development only — deployment
+      # runs 3 brokers with RF=3 and min.insync.replicas=2 (D-10).
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Topics are created by the admin workflow before an auction is
+      # published to auctions.upcoming (§5), never implicitly.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: eauction-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: eauction
+      POSTGRES_PASSWORD: eauction
+      POSTGRES_DB: eauction
+      # Debezium reads the WAL for the transactional outbox (D-16).
+      POSTGRES_INITDB_ARGS: "-c wal_level=logical"
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eauction"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: eauction-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: eauction
+      MINIO_ROOT_PASSWORD: eauction123
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: eauction-keycloak
+    command: ["start-dev"]
+    ports:
+      - "8080:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_DB: dev-file
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/master HTTP/1.1\\nHost: localhost\\n\\n' >&3 && cat <&3 | head -1 | grep 200"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  bid-catcher:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.bidcatcher
+    container_name: eauction-bid-catcher
+    ports:
+      - "5080:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Kafka__BootstrapServers: kafka:9092
+      Catcher__PodOrdinal: "0"
+      DOTNET_gcServer: "1"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  minio-data:
