@@ -1122,3 +1122,81 @@ the limit in tests that are not about rate limiting.
 | Payments are references, not integrations | `DepositRequested` is published; nothing consumes it. PayTabs and SADAD adapters are not built |
 | Documents are ids only | The bank guarantee is a `Guid` validated against nothing |
 | Company bidders | Individuals only; Nafath's delegation path is a different integration |
+
+---
+
+## 18. Kafka, against a real broker
+
+Three Kafka implementations and a Debezium connector were written without a
+broker ever being available. In-memory stand-ins mirror the ordering contract,
+but they cannot tell you whether the *client* is configured correctly — and
+that is where the bug was.
+
+A single-node KRaft broker now runs with no Docker, straight from Java:
+
+```bash
+./tools/kafka/run-local-broker.sh start
+KAFKA_BOOTSTRAP=127.0.0.1:9092 dotnet test EAuction.sln
+./tools/kafka/run-local-broker.sh stop
+```
+
+Without `KAFKA_BOOTSTRAP` those 16 tests **skip** rather than fail, so the
+rest of the suite still runs anywhere.
+
+### The bug it found
+
+`KafkaBidLog.ReadAsync` assigned **partition 0**. The producer keys every bid
+by `auctionId`, and the relay created each bid topic with **12 partitions**.
+One key hashes to exactly one partition — essentially never partition 0.
+
+So the reader attached to a partition the bids were not in, and **read
+nothing**. No error, no exception, no warning. An auction with a full bid log
+would have looked empty: no winner, no candidate for the committee, nothing to
+explain it. Every in-memory test passed throughout, because an in-memory log
+has no partitions to get wrong.
+
+Two changes:
+
+- **A bid topic has exactly one partition, and that is no longer
+  configurable.** Topic-per-auction means the topic *is* the ordering domain
+  (D-03). Extra partitions do not spread load — every record carries the same
+  key, so they all land on one anyway — they just put that one somewhere the
+  reader is not looking. Scale comes from more auctions, which means more
+  topics. The setting was removed from configuration rather than given a safer
+  default, because exposing it only invites the bug back. Compose said 6 and
+  the admin service defaulted to 12; both were wrong.
+- **The reader checks and fails loudly.** `ReadAsync` and `GetEndOffsetAsync`
+  verify the topic has one partition and throw a named error otherwise. Silent
+  data loss becomes a startup failure.
+
+### What now runs on a real broker
+
+| | |
+|---|---|
+| `KafkaBidLog` | append returns durable offsets, offsets increase, replay from 0, resume from an offset, end-offset watermarks, **60 concurrent appends still yield one total order** (D-03), multi-partition topic refused |
+| `KafkaEventStream` | key and event-type header round-trip, a cold consumer replays a topic from the beginning, two consumers each get a full copy (every catcher pod holds the whole control plane, so they must not share a group) |
+| `KafkaTopicPublisher` | `EnsureTopicAsync` creates with one partition and is idempotent on repeat, published rows readable with their event type |
+| Full pipeline | approval and reserve on their topics → registry assembles the auction → bids through the log → close → `CandidateOffered`; current-winner reaches the topic the catcher reads; quiet-period extension pushes the close out; checkpoints survive on their topic |
+
+**151 tests** with the broker; 135 without.
+
+### A test-design fault this surfaced
+
+Several tests polled `CatcherState.Screen()` as a wait predicate. `Screen()`
+takes a rate-limit token on every call, so a polling loop drains the bucket and
+the condition can never become true. It passed in isolation and failed when
+four test assemblies and a JVM shared four cores — the worst kind of flake,
+since it looks like slowness.
+
+Raising the timeout did not fix it, which was the clue: the waits now poll
+non-mutating accessors (`TryGetSigningSecret`, `TryGetCurrentPrice`) and assert
+on `Screen()` once, afterwards.
+
+### Still not done
+
+| Gap | Note |
+|---|---|
+| **The Debezium connector is still unregistered** | Needs a Kafka Connect cluster, which this broker is not. The config is written against EventRouter's documented defaults and the table matches them |
+| Single broker, replication factor 1 | Deployment is 3 brokers, RF=3, `min.insync.replicas=2`. `acks=all` returning `Persisted` means less with one replica than with three |
+| No ACL enforcement tested | `auctions.sealed` and `auctions.participants` rely on topic ACLs (D-23). PLAINTEXT with no authorization here |
+| No failure injection | Broker restarts, leader elections and partition unavailability are untested |

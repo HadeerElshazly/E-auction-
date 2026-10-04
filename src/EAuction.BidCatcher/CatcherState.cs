@@ -48,6 +48,20 @@ public sealed class CatcherState(byte[] bidderMasterKey)
     internal void GrantEligibilityWithSecret(Guid auctionId, Guid bidderId, byte[] signingSecret) =>
         _eligibility[(auctionId, bidderId)] = signingSecret;
 
+    /// <summary>
+    /// Reads the derived key without touching the rate limiter.
+    ///
+    /// Tests that wait for a topic to propagate need a signal they can poll;
+    /// <see cref="Screen"/> is not one, because it takes a token every call
+    /// and a polling loop drains the bucket before the condition can hold.
+    /// </summary>
+    internal bool TryGetSigningSecret(Guid auctionId, Guid bidderId, out byte[] secret) =>
+        _eligibility.TryGetValue((auctionId, bidderId), out secret!);
+
+    /// <summary>Reads the advisory price without touching the rate limiter.</summary>
+    internal bool TryGetCurrentPrice(Guid auctionId, out long price) =>
+        _currentPrice.TryGetValue(auctionId, out price);
+
     public void RevokeEligibility(Guid auctionId, Guid bidderId) =>
         _eligibility.TryRemove((auctionId, bidderId), out _);
 

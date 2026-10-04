@@ -39,8 +39,16 @@ dotnet build EAuction.sln
 dotnet test EAuction.sln
 ```
 
-Apply the auction-admin schema with
-`dotnet ef database update --project src/EAuction.AuctionAdmin`.
+Apply the schemas with `dotnet ef database update --project src/EAuction.AuctionAdmin`
+and the same for `src/EAuction.Participant`.
+
+The Kafka integration tests need a broker. Without `KAFKA_BOOTSTRAP` they skip:
+
+```bash
+./tools/kafka/run-local-broker.sh start      # KRaft, no Docker needed
+KAFKA_BOOTSTRAP=127.0.0.1:9092 dotnet test EAuction.sln
+./tools/kafka/run-local-broker.sh stop
+```
 
 Load harness and its measured results: [tools/loadtest](tools/loadtest/README.md).
 
@@ -62,11 +70,15 @@ Architecture document is in review.
   See [deploy/helm](deploy/helm/README.md).
 - **Participant service + catcher wiring** — registration through to
   eligibility, and the catcher now fills its state from the control topics
-  rather than from nothing. 135 tests green.
+  rather than from nothing.
+- **Kafka verified against a real broker** — 151 tests green with one running,
+  135 without. Found and fixed a silent data-loss bug no in-memory test could
+  have caught.
 
-The Kafka implementations have **not** been run against a live broker, and the
-Debezium connector has not been registered against a live Connect cluster (no
-Docker daemon in the build environment). The end-to-end p99 ≤ 50 ms @ 10k
-bids/sec target is therefore not yet met. See
+The Kafka clients now run against a real single-node broker. Still outstanding:
+the Debezium connector has never been registered against a Connect cluster, the
+broker here is one node at replication factor 1 rather than the three
+deployment uses, and the end-to-end p99 ≤ 50 ms @ 10k bids/sec target is not
+yet measured with Kafka in the path. See
 [Validation status](docs/ARCHITECTURE.md#12-validation-status) for the full
 list of what is and is not verified.

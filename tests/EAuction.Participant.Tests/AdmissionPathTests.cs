@@ -71,7 +71,10 @@ public class AdmissionPathTests(PostgresFixture pg) : IAsyncDisposable
 
     private static async Task WaitFor(Func<bool> condition, string message)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        // Generous on purpose: the wait returns the moment its condition
+        // holds, so a long deadline costs nothing when the machine is idle
+        // and stops the suite flaking when several assemblies share it.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;
@@ -178,9 +181,12 @@ public class AdmissionPathTests(PostgresFixture pg) : IAsyncDisposable
 
         var newSecret = BidderKeys.Derive(_master, auctionId, bidderId, 1);
         await WaitFor(
-            () => catcher.Screen(TestFrame(auctionId, bidderId, 1_200_000_00, now, newSecret), now)
-                == RejectionReason.None,
+            () => catcher.TryGetSigningSecret(auctionId, bidderId, out var held)
+                  && held.AsSpan().SequenceEqual(newSecret),
             "rotation never reached the catcher");
+
+        Assert.Equal(RejectionReason.None,
+            catcher.Screen(TestFrame(auctionId, bidderId, 1_200_000_00, now, newSecret), now));
 
         var withOld = TestFrame(auctionId, bidderId, 1_200_000_00, now, oldSecret);
         Assert.Equal(RejectionReason.BadSignature, catcher.Screen(withOld, now));

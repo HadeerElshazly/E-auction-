@@ -24,8 +24,10 @@ else
         new KafkaPublisherOptions
         {
             BootstrapServers = bootstrap,
-            ReplicationFactor = (short)builder.Configuration.GetValue("Kafka:ReplicationFactor", 3),
-            BidTopicPartitions = builder.Configuration.GetValue("Kafka:BidTopicPartitions", 12)
+            ReplicationFactor = (short)builder.Configuration.GetValue("Kafka:ReplicationFactor", 3)
+            // BidTopicPartitions is deliberately not configurable: a bid topic
+            // is one auction's ordering domain and must have exactly one
+            // partition. Exposing it only invites someone to break an auction.
         },
         sp.GetRequiredService<ILogger<KafkaTopicPublisher>>()));
 }

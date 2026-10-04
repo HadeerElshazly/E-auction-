@@ -170,7 +170,10 @@ internal sealed class ProcessorHarness : IAsyncDisposable
 
     private static async Task WaitFor(Func<bool> condition, string message)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        // Generous on purpose: the wait returns the moment its condition
+        // holds, so a long deadline costs nothing when the machine is idle
+        // and stops the suite flaking when several assemblies share it.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;

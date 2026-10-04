@@ -128,7 +128,6 @@ services:
       ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=eauction"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ReplicationFactor: "1"
-      Kafka__BidTopicPartitions: "6"
       Award__ComplianceWindowDays: "5"
     depends_on:
       kafka:

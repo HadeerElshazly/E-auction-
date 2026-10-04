@@ -58,7 +58,10 @@ public class ControlPlaneTests : IAsyncDisposable
 
     private async Task WaitFor(Func<bool> condition, string message)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        // Generous on purpose: the wait returns the moment its condition
+        // holds, so a long deadline costs nothing when the machine is idle
+        // and stops the suite flaking when several assemblies share it.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;
@@ -126,9 +129,8 @@ public class ControlPlaneTests : IAsyncDisposable
         await PublishEligibilityAsync(auctionId, bidder, eligible: true, epoch: 1);
         var newSecret = BidderKeys.Derive(_master, auctionId, bidder, 1);
         await WaitFor(
-            () => _state.Screen(
-                TestAuction.Frame(auctionId, bidder, 1_200_000_00, now, secret: newSecret), now)
-                == RejectionReason.None,
+            () => _state.TryGetSigningSecret(auctionId, bidder, out var held)
+                  && held.AsSpan().SequenceEqual(newSecret),
             "rotation never took effect");
 
         var withOldKey = TestAuction.Frame(auctionId, bidder, 1_200_000_00, now, secret: oldSecret);
@@ -173,10 +175,11 @@ public class ControlPlaneTests : IAsyncDisposable
         var secret = BidderKeys.Derive(_master, auctionId, bidder, 0);
 
         await WaitFor(
-            () => _state.Screen(
-                TestAuction.Frame(auctionId, bidder, 1_520_000_00, now, secret: secret), now)
-                == RejectionReason.BelowMinimumIncrement,
+            () => _state.TryGetCurrentPrice(auctionId, out var price) && price == 1_500_000_00,
             "the price from auctions.current-winner was never applied");
+
+        Assert.Equal(RejectionReason.BelowMinimumIncrement,
+            _state.Screen(TestAuction.Frame(auctionId, bidder, 1_520_000_00, now, secret: secret), now));
 
         // Clearing the increment is still accepted — the check is advisory,
         // not a second authority on the price.

@@ -33,6 +33,7 @@ public sealed class KafkaBidLog : IBidLog
 {
     private readonly KafkaBidLogOptions _options;
     private readonly IProducer<byte[], byte[]> _producer;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _verifiedTopics = new();
 
     public KafkaBidLog(KafkaBidLogOptions options)
     {
@@ -48,6 +49,40 @@ public sealed class KafkaBidLog : IBidLog
     }
 
     private string TopicFor(Guid auctionId) => _options.TopicPrefix + auctionId.ToString("N");
+
+    /// <summary>
+    /// An auction's bid topic must have exactly one partition.
+    ///
+    /// Topic-per-auction means the topic IS the ordering domain (D-03). With
+    /// more than one partition the producer's key sends every record to
+    /// whichever partition it hashes to, while a reader assigned to another
+    /// sees nothing — so the auction looks empty instead of failing, which is
+    /// the worst way for this to go wrong. Checked loudly at read time rather
+    /// than trusted.
+    /// </summary>
+    private void EnsureSinglePartition(string topic)
+    {
+        if (_verifiedTopics.ContainsKey(topic)) return;
+
+        using var admin = new AdminClientBuilder(
+            new AdminClientConfig { BootstrapServers = _options.BootstrapServers }).Build();
+
+        var metadata = admin.GetMetadata(topic, TimeSpan.FromSeconds(10));
+        var match = metadata.Topics.FirstOrDefault(t => t.Topic == topic);
+
+        if (match is null || match.Error.IsError)
+            throw new InvalidOperationException(
+                $"Bid topic '{topic}' is not available: {match?.Error.Reason ?? "no metadata"}. "
+                + "It is created by the auction approval workflow before the auction is published.");
+
+        if (match.Partitions.Count != 1)
+            throw new InvalidOperationException(
+                $"Bid topic '{topic}' has {match.Partitions.Count} partitions; it must have exactly 1. "
+                + "A bid topic is one auction's ordering domain, and extra partitions would "
+                + "scatter its bids where the reader cannot see them.");
+
+        _verifiedTopics[topic] = true;
+    }
 
     public async ValueTask<long> AppendAsync(
         Guid auctionId, ReadOnlyMemory<byte> frame, CancellationToken ct)
@@ -72,6 +107,8 @@ public sealed class KafkaBidLog : IBidLog
         Guid auctionId, long fromOffset,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
+        EnsureSinglePartition(TopicFor(auctionId));
+
         using var consumer = new ConsumerBuilder<byte[], byte[]>(new ConsumerConfig
         {
             BootstrapServers = _options.BootstrapServers,
@@ -114,6 +151,8 @@ public sealed class KafkaBidLog : IBidLog
 
     public ValueTask<long> GetEndOffsetAsync(Guid auctionId, CancellationToken ct)
     {
+        EnsureSinglePartition(TopicFor(auctionId));
+
         using var consumer = new ConsumerBuilder<byte[], byte[]>(new ConsumerConfig
         {
             BootstrapServers = _options.BootstrapServers,

@@ -8,7 +8,17 @@ public sealed record KafkaPublisherOptions
 {
     public required string BootstrapServers { get; init; }
     public short ReplicationFactor { get; init; } = 3;
-    public int BidTopicPartitions { get; init; } = 12;
+
+    /// <summary>
+    /// Exactly one, and changing it breaks the auction.
+    ///
+    /// A bid topic is one auction's ordering domain (D-03). More partitions do
+    /// not spread its load — every record carries the same key, so they all
+    /// land on one anyway — and they put that one somewhere the single-partition
+    /// reader is not looking. Scale comes from more auctions, which means more
+    /// topics, not from splitting one auction across partitions.
+    /// </summary>
+    public int BidTopicPartitions { get; init; } = 1;
 }
 
 /// <summary>
