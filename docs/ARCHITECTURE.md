@@ -1200,3 +1200,122 @@ on `Screen()` once, afterwards.
 | Single broker, replication factor 1 | Deployment is 3 brokers, RF=3, `min.insync.replicas=2`. `acks=all` returning `Persisted` means less with one replica than with three |
 | No ACL enforcement tested | `auctions.sealed` and `auctions.participants` rely on topic ACLs (D-23). PLAINTEXT with no authorization here |
 | No failure injection | Broker restarts, leader elections and partition unavailability are untested |
+
+---
+
+## 19. Authentication and authorization
+
+Every endpoint was open, including the one that hands a bidder the credential
+that signs their bids. That is now closed.
+
+### Tokens, verified offline
+
+Keycloak issues the tokens; every service validates them against the issuer's
+**cached signing keys** (D-19). No request waits on the identity provider, and
+no bid does in particular — an introspection call per bid would put Keycloak
+on the hot path and make its availability the auction's availability.
+
+Keycloak nests realm roles under `realm_access.roles`, which no standard
+handler reads. `KeycloakRoles.Project` copies them into role claims on token
+validation. A test mints tokens with that exact nesting, because a test using
+flat role claims would prove nothing about the real token — and if this
+regressed, every policy would silently deny and the system would look broken
+rather than insecure.
+
+A **fallback policy** requires an authenticated user, so a new endpoint is
+closed unless it opts out. Only the health probes do.
+
+### The bidder's identity is the Keycloak subject
+
+`Bidder.Id` **is** the `sub` claim rather than a separate identifier. No token
+mapper, no custom claim, no lookup stands between a request and knowing who
+made it.
+
+That matters most in the catcher, which cannot afford a lookup on the hot
+path — and a service that cannot check ownership cheaply tends to stop
+checking it.
+
+### Two proofs on the bid path, for two different questions
+
+| | Proves |
+|---|---|
+| **JWT** | *Who is calling.* Revocable, short-lived, tied to a session |
+| **HMAC** (D-20) | *What they asked for.* Non-repudiable, bound to the exact amount |
+
+Neither replaces the other. The catcher checks that the token's subject
+matches the bidder named in the frame:
+
+```
+caller = token.sub
+if caller != frame.bidderId  →  403 BidderMismatch
+```
+
+**The signature alone would not catch this.** An eligible bidder's own key
+signs whatever frame they choose to build, including one that spends another
+bidder's deposit. The token is what ties a request to a person; the signature
+is what ties it to an amount.
+
+### Roles, and why there are only four
+
+| Role | Arabic | Holds |
+|---|---|---|
+| `bidder` | مزايد | Their own subscription and their own bids |
+| `auction-admin` | مدير النظام | Auction preparation, documents, dates, guarantee verification |
+| `award-committee` | ممثل لجنة الترسية | Approval, award confirmation, disqualification, settlement |
+| `operator` | — | Floor bids for an on-site auction (not yet used) |
+
+**The separation between the last two is the point, not bureaucracy.** Slide 6
+shows them as different actors. Whoever sets an auction's terms must not also
+decide who won it, and a committee member able to edit an auction could change
+its terms to fit the outcome they intend. Tests assert the denial in both
+directions.
+
+### The signing key belongs to the bidder alone
+
+`GET /signing-key` is the most dangerous endpoint in the system, and **not
+even an administrator can call it**. Anyone holding that key could bid as the
+bidder, and the signature would be indistinguishable from the real one — which
+would destroy the entire evidential value of signing.
+
+### Verified
+
+**179 tests** with a broker. New coverage:
+
+| Claim | Where |
+|---|---|
+| No token, expired token, or wrong signature is refused | `CatcherAuthTests`, `ParticipantAuthTests` |
+| An authenticated caller without the right role is refused | `CatcherAuthTests` |
+| A bidder cannot submit a frame naming someone else | `CatcherAuthTests` |
+| Keycloak's nested realm roles are actually read | `CatcherAuthTests` |
+| Health probes stay open | `CatcherAuthTests`, `AdminAuthTests` |
+| An administrator cannot confirm an award | `AdminAuthTests` |
+| The committee cannot edit the auction it is awarding | `AdminAuthTests` |
+| A bidder cannot read another bidder's signing key — nor can an administrator | `ParticipantAuthTests` |
+| A bidder cannot drive another's subscription, or start one in their name | `ParticipantAuthTests` |
+| A bidder cannot verify their own guarantee or revoke a subscription | `ParticipantAuthTests` |
+
+### A bug a flaky test was pointing at
+
+`TokenBucket.TryTake` computed `elapsed = now - lastSeen` without clamping. If
+`now` was ever **earlier** than the bucket's last-seen time, elapsed went
+negative and the refill *subtracted* tokens.
+
+Time does move backwards in practice: an NTP correction, a VM clock
+adjustment, or simply two requests whose timestamps are taken out of order. An
+unclamped bucket locks a bidder out of their own auction for no reason, and
+the longer the step, the longer the lockout.
+
+It surfaced as an intermittent test failure that looked like slowness — raising
+the timeout did not help, which was the clue. Elapsed is now clamped at zero
+and the refill clock never rewinds.
+
+### Still open
+
+| Gap | Note |
+|---|---|
+| **Nafath is not integrated** | `POST /bidders/register` trusts the token's subject and reads `national_id` / `name` claims. The Keycloak↔Nafath mapper that populates them does not exist, and the endpoint falls back to the request body — which must be removed before production |
+| **No Keycloak realm definition** | Roles, clients and mappers are described here but not provisioned. A realm export belongs in `deploy/` |
+| **Tokens are not revocable mid-session** | Short lifetimes limit the window; a back-channel logout or token-revocation check is not wired |
+| **`/dev/seed` still exists** | Config-gated and refuses to start in Production without a master key, but it should not ship at all |
+| Service-to-service calls are unauthenticated | Nothing makes them today; when something does, it needs client credentials |
+| The load figures predate auth | 13,196 req/s at p99 19.49 ms was measured without JWT validation on the hot path |

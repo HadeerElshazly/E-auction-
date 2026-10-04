@@ -118,6 +118,10 @@ one source of truth.
   value: /tmp
 - name: Kafka__BootstrapServers
   value: {{ .root.Values.config.kafka.bootstrapServers | quote }}
+- name: Jwt__Authority
+  value: {{ .root.Values.config.jwt.authority | quote }}
+- name: Jwt__Audience
+  value: {{ .root.Values.config.jwt.audience | quote }}
 {{- end -}}
 
 {{- define "e-auction.serviceAccount" -}}

@@ -11,13 +11,13 @@ public class SubscriptionTests
     public void Identity_cannot_be_self_asserted_without_a_national_id()
     {
         Assert.Throws<ParticipantValidationException>(
-            () => Bidder.FromNafath("", "سارة", "Sara", Now));
+            () => Bidder.FromNafath(Guid.NewGuid(), "", "سارة", "Sara", Now));
     }
 
     [Fact]
     public void A_profile_needs_a_usable_phone_and_email()
     {
-        var bidder = Bidder.FromNafath("1234567890", "سارة", "Sara", Now);
+        var bidder = Bidder.FromNafath(Guid.NewGuid(), "1234567890", "سارة", "Sara", Now);
 
         Assert.Throws<ParticipantValidationException>(
             () => bidder.CompleteProfile("", "sara@example.com", Now));
@@ -88,7 +88,7 @@ public class SubscriptionTests
         // Everything else can be bought or clicked. This one cannot.
         var auctionId = Guid.NewGuid();
         var terms = Build.Terms(auctionId);
-        var unverified = Bidder.FromNafath("1234567890", "سارة", "Sara", Now);
+        var unverified = Bidder.FromNafath(Guid.NewGuid(), "1234567890", "سارة", "Sara", Now);
 
         var s = Subscription.Start(auctionId, unverified.Id);
         s.PurchaseBooklet("ref", Now);

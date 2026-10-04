@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using EAuction.BidCatcher;
 using EAuction.Core;
+using EAuction.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
@@ -59,14 +60,19 @@ builder.Services.AddSingleton(eventStream);
 builder.Services.AddSingleton<ControlPlane>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ControlPlane>());
 
+builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+
 var app = builder.Build();
 
-app.MapGet("/health/live", () => Results.Ok("ok"));
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/health/live", () => Results.Ok("ok")).AllowAnonymous();
 
 // Not ready until the control topics have been replayed: a catcher that
 // accepts traffic with empty state can only reject it.
 app.MapGet("/health/ready", (ControlPlane control) =>
-    control.Warm ? Results.Ok("ok") : Results.StatusCode(503));
+    control.Warm ? Results.Ok("ok") : Results.StatusCode(503)).AllowAnonymous();
 
 // ---------------------------------------------------------------------------
 // Development only. In deployment this state arrives from the compacted topics
@@ -96,7 +102,7 @@ if (builder.Configuration.GetValue("Catcher:EnableDevSeed", false))
                 request.AuctionId, bidder, Convert.FromHexString(request.SecretHex));
 
         return Results.Ok(new { seeded = request.Bidders.Length });
-    });
+    }).AllowAnonymous();
 }
 
 
@@ -119,6 +125,15 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
 
         var now = DateTimeOffset.UtcNow;
         var frame = buffer.AsMemory(0, BidFrame.ServerLength);
+
+        // The token says who is calling; the frame says who the bid is for.
+        // They must be the same person, or a bidder could spend someone else's
+        // deposit — the signature alone would not catch it, because an
+        // eligible bidder's own key signs any frame they choose to build.
+        var caller = http.User.SubjectId();
+        if (caller is null || caller != BidFrame.BidderId(frame.Span))
+            return Results.Json(
+                new { reason = "BidderMismatch" }, statusCode: StatusCodes.Status403Forbidden);
 
         var screen = state.Screen(frame.Span, now);
         if (screen != RejectionReason.None)
@@ -144,7 +159,7 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
     {
         ArrayPool<byte>.Shared.Return(buffer);
     }
-});
+}).RequireAuthorization(Policies.Bidder);
 
 app.Run();
 

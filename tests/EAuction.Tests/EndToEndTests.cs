@@ -3,7 +3,8 @@ using System.Net.Http.Json;
 using EAuction.BidCatcher;
 using EAuction.BidProcessor;
 using EAuction.Core;
-using Microsoft.AspNetCore.Mvc.Testing;
+using EAuction.Security;
+using EAuction.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -19,11 +20,11 @@ namespace EAuction.Tests;
 /// against a live broker (no Docker daemon available) — see the note on
 /// <see cref="KafkaBidLog"/>.
 /// </summary>
-public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
+public class EndToEndTests : IClassFixture<AuthenticatedFactory<Program>>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly AuthenticatedFactory<Program> _factory;
 
-    public EndToEndTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public EndToEndTests(AuthenticatedFactory<Program> factory) => _factory = factory;
 
     private static HttpContent Body(byte[] frame)
     {
@@ -32,21 +33,25 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         return content;
     }
 
-    private (HttpClient Client, CatcherState State, IBidLog Log) Arrange()
+    /// <summary>A client carrying a bidder token for <paramref name="bidder"/>.</summary>
+    private (HttpClient Client, CatcherState State, IBidLog Log) Arrange(Guid bidder)
     {
-        var client = _factory.CreateClient();
+        var client = _factory.CreateClient().As(bidder, Roles.Bidder);
         return (client,
             _factory.Services.GetRequiredService<CatcherState>(),
             _factory.Services.GetRequiredService<IBidLog>());
     }
 
+    private (HttpClient Client, CatcherState State, IBidLog Log) Arrange() =>
+        Arrange(Guid.NewGuid());
+
     [Fact]
     public async Task A_bid_from_an_eligible_bidder_is_accepted_and_receipted()
     {
-        var (client, state, _) = Arrange();
+        var bidder = Guid.NewGuid();
+        var (client, state, _) = Arrange(bidder);
         var now = DateTimeOffset.UtcNow;
         var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
-        var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
         state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
@@ -66,14 +71,15 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
     [Fact]
     public async Task A_bidder_who_has_not_paid_the_deposit_is_turned_away_at_the_edge()
     {
-        var (client, state, _) = Arrange();
+        var bidder = Guid.NewGuid();
+        var (client, state, _) = Arrange(bidder);
         var now = DateTimeOffset.UtcNow;
         var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
 
         state.UpsertAuction(auction);
         // No GrantEligibility: the bidder never completed subscription.
 
-        var frame = TestAuction.Frame(auction.AuctionId, Guid.NewGuid(), 1_200_000_00, now);
+        var frame = TestAuction.Frame(auction.AuctionId, bidder, 1_200_000_00, now);
         var response = await client.PostAsync("/bids", Body(frame));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -83,8 +89,9 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
     [Fact]
     public async Task An_unknown_auction_is_rejected_without_touching_the_log()
     {
-        var (client, _, _) = Arrange();
-        var frame = TestAuction.Frame(Guid.NewGuid(), Guid.NewGuid(), 100, DateTimeOffset.UtcNow);
+        var bidder = Guid.NewGuid();
+        var (client, _, _) = Arrange(bidder);
+        var frame = TestAuction.Frame(Guid.NewGuid(), bidder, 100, DateTimeOffset.UtcNow);
 
         var response = await client.PostAsync("/bids", Body(frame));
 
@@ -107,12 +114,12 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         // §6.3: the catcher must not gate on ends_at, or a bid that an
         // extension would have made valid is refused before the catcher ever
         // learns of the extension.
-        var (client, state, _) = Arrange();
+        var bidder = Guid.NewGuid();
+        var (client, state, _) = Arrange(bidder);
         var now = DateTimeOffset.UtcNow;
 
         var auction = TestAuction.Build(
             now.AddMinutes(-60), now.AddMinutes(-1), quiet: TimeSpan.FromMinutes(2));
-        var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
         state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
@@ -129,12 +136,12 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
     [Fact]
     public async Task The_catcher_refuses_a_bid_past_the_hard_ceiling()
     {
-        var (client, state, _) = Arrange();
+        var bidder = Guid.NewGuid();
+        var (client, state, _) = Arrange(bidder);
         var now = DateTimeOffset.UtcNow;
 
         var auction = TestAuction.Build(
             now.AddMinutes(-180), now.AddMinutes(-120), quiet: TimeSpan.FromMinutes(2));
-        var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
         state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
@@ -149,10 +156,10 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
     [Fact]
     public async Task A_forged_signature_is_rejected_even_from_an_eligible_bidder()
     {
-        var (client, state, _) = Arrange();
+        var bidder = Guid.NewGuid();
+        var (client, state, _) = Arrange(bidder);
         var now = DateTimeOffset.UtcNow;
         var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
-        var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
         state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
@@ -181,7 +188,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
 
         // Everyone fires at once, at a spread of amounts.
         var posts = bidders.Select((b, i) =>
-            client.PostAsync("/bids",
+            _factory.CreateClient().As(b, Roles.Bidder).PostAsync("/bids",
                 Body(TestAuction.Frame(
                     auction.AuctionId, b, 1_000_000_00 + (i + 1) * 50_000_00, now))));
 
@@ -221,7 +228,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
             state.GrantEligibilityWithSecret(auction.AuctionId, b, TestAuction.Secret);
 
         await Task.WhenAll(bidders.Select((b, i) =>
-            client.PostAsync("/bids",
+            _factory.CreateClient().As(b, Roles.Bidder).PostAsync("/bids",
                 Body(TestAuction.Frame(
                     auction.AuctionId, b, 1_000_000_00 + (i + 1) * 60_000_00, now)))));
 

@@ -126,8 +126,18 @@ public sealed class TokenBucket(int perSecond)
     {
         lock (_gate)
         {
-            var elapsed = (now.UtcTicks - _lastTicks) / (double)TimeSpan.TicksPerSecond;
-            _lastTicks = now.UtcTicks;
+            // Clamped at zero because time can move backwards: an NTP step, a
+            // VM clock correction, or simply two requests whose timestamps are
+            // taken out of order. Unclamped, a backwards step subtracts
+            // tokens instead of adding them and locks the bidder out of their
+            // own auction for no reason — the worst possible moment for a
+            // refill to go the wrong way.
+            var elapsed = Math.Max(0, (now.UtcTicks - _lastTicks) / (double)TimeSpan.TicksPerSecond);
+
+            // Likewise never let the clock rewind, or the next legitimate
+            // refill would be measured from the future.
+            if (now.UtcTicks > _lastTicks) _lastTicks = now.UtcTicks;
+
             _tokens = Math.Min(perSecond, _tokens + elapsed * perSecond);
             if (_tokens < 1) return false;
             _tokens -= 1;

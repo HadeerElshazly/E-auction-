@@ -14,5 +14,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/EAuction.Participant/EAuction.Participant.csproj" />
     <ProjectReference Include="../../src/EAuction.BidCatcher/EAuction.BidCatcher.csproj" />
+    <ProjectReference Include="..\EAuction.TestSupport\EAuction.TestSupport.csproj" />
   </ItemGroup>
 </Project>

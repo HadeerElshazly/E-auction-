@@ -44,6 +44,7 @@ internal static class Build
     public static Bidder VerifiedBidder(string? nationalId = null)
     {
         var bidder = Bidder.FromNafath(
+            Guid.NewGuid(),
             nationalId ?? Random.Shared.NextInt64(1_000_000_000, 9_999_999_999).ToString(),
             "سارة", "Sara", Now);
         bidder.CompleteProfile("+966500000000", "sara@example.com", Now);

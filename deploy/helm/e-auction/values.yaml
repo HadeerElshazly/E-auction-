@@ -35,6 +35,13 @@ config:
   kafka:
     bootstrapServers: eauction-kafka-bootstrap:9092
 
+  # Keycloak realm. Every service validates tokens offline against this
+  # issuer's cached signing keys — nothing calls it per request, so its
+  # availability is not the auction's availability.
+  jwt:
+    authority: https://id.example.sa/realms/eauction
+    audience: eauction
+
 # ---------------------------------------------------------------------------
 # Services
 # ---------------------------------------------------------------------------

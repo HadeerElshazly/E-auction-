@@ -9,10 +9,13 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../../src/EAuction.AuctionAdmin/EAuction.AuctionAdmin.csproj" />
-    <ProjectReference Include="..\EAuction.TestSupport\EAuction.TestSupport.csproj" />
+    <!--
+      Only the participant service. Referencing the bid catcher too would put
+      two generated Program types in one assembly, which do not coexist.
+    -->
+    <ProjectReference Include="../../src/EAuction.Participant/EAuction.Participant.csproj" />
+    <ProjectReference Include="../EAuction.TestSupport/EAuction.TestSupport.csproj" />
   </ItemGroup>
 </Project>

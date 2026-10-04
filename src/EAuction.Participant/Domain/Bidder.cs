@@ -39,14 +39,23 @@ public sealed class Bidder
     /// Created from a Nafath assertion, never from a form. The identity is the
     /// one thing a bidder cannot be allowed to assert about themselves.
     /// </summary>
+    /// <param name="subjectId">
+    /// The Keycloak subject, used as the bidder's own id. Keeping them the
+    /// same means ownership can be checked from a token with no lookup —
+    /// which the bid catcher needs, and a service that cannot check ownership
+    /// cheaply tends to stop checking it.
+    /// </param>
     public static Bidder FromNafath(
-        string nationalId, string nameAr, string nameEn, DateTimeOffset verifiedAt)
+        Guid subjectId, string nationalId, string nameAr, string nameEn, DateTimeOffset verifiedAt)
     {
+        if (subjectId == Guid.Empty)
+            throw new ParticipantValidationException(new[] { "An authenticated subject is required." });
         if (string.IsNullOrWhiteSpace(nationalId))
             throw new ParticipantValidationException(new[] { "National ID is required." });
 
         return new Bidder
         {
+            Id = subjectId,
             NationalId = nationalId.Trim(),
             NameAr = nameAr?.Trim() ?? "",
             NameEn = nameEn?.Trim() ?? "",

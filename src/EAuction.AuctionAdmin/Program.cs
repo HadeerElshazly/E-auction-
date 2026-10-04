@@ -3,6 +3,7 @@ using EAuction.AuctionAdmin.Outbox;
 using EAuction.AuctionAdmin.Persistence;
 using EAuction.Core;
 using EAuction.Outbox;
+using EAuction.Security;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -54,14 +55,19 @@ builder.Services.AddHostedService<LifecycleConsumerService>();
 var complianceWindow = TimeSpan.FromDays(
     builder.Configuration.GetValue("Award:ComplianceWindowDays", 5));
 
+builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+
 var app = builder.Build();
 
-app.MapGet("/health/live", () => Results.Ok("ok"));
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/health/live", () => Results.Ok("ok")).AllowAnonymous();
 app.MapGet("/health/ready", async (IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
     return await db.Database.CanConnectAsync(ct) ? Results.Ok("ok") : Results.StatusCode(503);
-});
+}).AllowAnonymous();
 
 // --- إعداد المزاد : auction preparation ------------------------------------
 
@@ -72,27 +78,33 @@ app.MapPost("/auctions", async (CreateAuctionRequest r, IDbContextFactory<AdminD
     db.Auctions.Add(auction);
     await db.SaveChangesAsync(ct);
     return Results.Created($"/auctions/{auction.Id}", AuctionResponse.From(auction));
-});
+})
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPut("/auctions/{id:guid}", (Guid id, UpdateAuctionRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.UpdateDetails(
         r.NameAr, r.NameEn, r.Channel, r.StartsAt, r.EndsAt,
         r.OpeningPriceMinorUnits, r.ReservePriceMinorUnits, r.MinIncrementMinorUnits,
         r.DepositMinorUnits, r.BrokerageFeePercent, r.BookletPriceMinorUnits,
-        r.QuietPeriodSeconds, r.MaxExtensions, r.Phase)));
+        r.QuietPeriodSeconds, r.MaxExtensions, r.Phase)))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/plots", (Guid id, AddPlotRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.AddPlot(new Plot(
-        id, r.DeedNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn))));
+        id, r.DeedNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn))))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapDelete("/auctions/{id:guid}/plots/{plotId:guid}", (Guid id, Guid plotId, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.RemovePlot(plotId)));
+    Mutate(f, id, ct, a => a.RemovePlot(plotId)))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/booklet", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.AttachBooklet(r.DocumentId)));
+    Mutate(f, id, ct, a => a.AttachBooklet(r.DocumentId)))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/cover-image", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.AttachCoverImage(r.DocumentId)));
+    Mutate(f, id, ct, a => a.AttachCoverImage(r.DocumentId)))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapGet("/auctions/{id:guid}/validation", async (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
@@ -101,16 +113,20 @@ app.MapGet("/auctions/{id:guid}/validation", async (Guid id, IDbContextFactory<A
     return auction is null
         ? Results.NotFound()
         : Results.Ok(new { problems = auction.Validate(DateTimeOffset.UtcNow) });
-});
+})
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/submit", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.SubmitForReview(DateTimeOffset.UtcNow)));
+    Mutate(f, id, ct, a => a.SubmitForReview(DateTimeOffset.UtcNow)))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/approve", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.Approve(DateTimeOffset.UtcNow)));
+    Mutate(f, id, ct, a => a.Approve(DateTimeOffset.UtcNow)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/reject", (Guid id, RejectRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.Reject(r.Reason)));
+    Mutate(f, id, ct, a => a.Reject(r.Reason)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 // --- lifecycle --------------------------------------------------------------
 //
@@ -130,40 +146,50 @@ app.MapPost("/auctions/{id:guid}/lifecycle/{transition}", (Guid id, string trans
             default: throw new AuctionValidationException(
                 new[] { $"Unknown lifecycle transition '{transition}'." });
         }
-    }));
+    }))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 // --- الترسية : award workflow ----------------------------------------------
 
 app.MapPost("/auctions/{id:guid}/candidate", (Guid id, OfferCandidateRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.OfferCandidate(r.BidderId, r.AmountMinorUnits)));
+    Mutate(f, id, ct, a => a.OfferCandidate(r.BidderId, r.AmountMinorUnits)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/award", (Guid id, ConfirmAwardRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)));
+    Mutate(f, id, ct, a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/award/letter", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.GenerateAwardLetter(r.DocumentId)));
+    Mutate(f, id, ct, a => a.GenerateAwardLetter(r.DocumentId)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/award/signed-letter", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.UploadSignedAwardLetter(r.DocumentId)));
+    Mutate(f, id, ct, a => a.UploadSignedAwardLetter(r.DocumentId)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/award/notify", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.NotifyWinner(DateTimeOffset.UtcNow)));
+    Mutate(f, id, ct, a => a.NotifyWinner(DateTimeOffset.UtcNow)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/award/disqualify", (Guid id, DisqualifyRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow)));
+    Mutate(f, id, ct, a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/unsold", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.MarkUnsold()));
+    Mutate(f, id, ct, a => a.MarkUnsold()))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/settle", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.Settle(DateTimeOffset.UtcNow)));
+    Mutate(f, id, ct, a => a.Settle(DateTimeOffset.UtcNow)))
+    .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapGet("/auctions/{id:guid}", async (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
     var auction = await Load(db, id, ct);
     return auction is null ? Results.NotFound() : Results.Ok(AuctionResponse.From(auction));
-});
+})
+    .RequireAuthorization();
 
 app.Run();
 

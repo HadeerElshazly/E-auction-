@@ -126,6 +126,9 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=eauction"
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ReplicationFactor: "1"
       Award__ComplianceWindowDays: "5"
@@ -145,6 +148,9 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ReplicationFactor: "1"
       # Must match the catcher's: both derive each bidder's signing key from it,
@@ -166,6 +172,9 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Kafka__BootstrapServers: kafka:9092
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
       Catcher__PodOrdinal: "0"
       # The same master key the participant service holds.
       Catcher__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"

@@ -3,6 +3,7 @@ using EAuction.Outbox;
 using EAuction.Participant.Domain;
 using EAuction.Participant.Integration;
 using EAuction.Participant.Persistence;
+using EAuction.Security;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -58,14 +59,19 @@ builder.Services.AddSingleton<OutboxRelay<ParticipantDbContext>>();
 builder.Services.AddHostedService<OutboxRelayService<ParticipantDbContext>>();
 builder.Services.AddHostedService<CatalogConsumer>();
 
+builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+
 var app = builder.Build();
 
-app.MapGet("/health/live", () => Results.Ok("ok"));
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/health/live", () => Results.Ok("ok")).AllowAnonymous();
 app.MapGet("/health/ready", async (IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
     return await db.Database.CanConnectAsync(ct) ? Results.Ok("ok") : Results.StatusCode(503);
-});
+}).AllowAnonymous();
 
 // --- registration ----------------------------------------------------------
 
@@ -73,17 +79,29 @@ app.MapGet("/health/ready", async (IDbContextFactory<ParticipantDbContext> f, Ca
 // thing a bidder cannot be allowed to assert about themselves. The Nafath
 // integration itself is not built, so this endpoint stands in for its
 // callback and must be gated before any real use.
-app.MapPost("/bidders/nafath", async (
-    NafathAssertionRequest r, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+app.MapPost("/bidders/register", async (
+    HttpContext http, NafathAssertionRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    // The identity comes from the token, which Keycloak issued after Nafath
+    // verified it. Taking it from the request body would let anyone register
+    // as anyone.
+    var subject = http.User.SubjectId();
+    if (subject is null) return Results.Forbid();
+
+    var nationalId = http.User.FindFirst("national_id")?.Value ?? r.NationalId;
+    var nameAr = http.User.FindFirst("name_ar")?.Value ?? r.NameAr;
+    var nameEn = http.User.FindFirst("name")?.Value ?? r.NameEn;
+
     await using var db = await f.CreateDbContextAsync(ct);
 
-    var existing = await db.Bidders.FirstOrDefaultAsync(b => b.NationalId == r.NationalId, ct);
+    var existing = await db.Bidders.FindAsync(new object?[] { subject.Value }, ct);
     if (existing is not null) return Results.Ok(BidderResponse.From(existing));
 
     try
     {
-        var bidder = Bidder.FromNafath(r.NationalId, r.NameAr, r.NameEn, DateTimeOffset.UtcNow);
+        var bidder = Bidder.FromNafath(
+            subject.Value, nationalId, nameAr, nameEn, DateTimeOffset.UtcNow);
         db.Bidders.Add(bidder);
         await db.SaveChangesAsync(ct);
         return Results.Created($"/bidders/{bidder.Id}", BidderResponse.From(bidder));
@@ -92,12 +110,14 @@ app.MapPost("/bidders/nafath", async (
     {
         return Results.BadRequest(new { problems = ex.Problems });
     }
-});
+}).RequireAuthorization();
 
 app.MapPost("/bidders/{id:guid}/profile", async (
-    Guid id, CompleteProfileRequest r,
+    HttpContext http, Guid id, CompleteProfileRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    if (http.User.SubjectId() != id) return Results.Forbid();
+
     await using var db = await f.CreateDbContextAsync(ct);
     var bidder = await db.Bidders.FindAsync(new object?[] { id }, ct);
     if (bidder is null) return Results.NotFound();
@@ -112,22 +132,27 @@ app.MapPost("/bidders/{id:guid}/profile", async (
     {
         return Results.BadRequest(new { problems = ex.Problems });
     }
-});
+}).RequireAuthorization(Policies.Bidder);
 
 app.MapGet("/bidders/{id:guid}", async (
-    Guid id, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    HttpContext http, Guid id, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    if (http.User.SubjectId() != id && !http.User.IsInRole(Roles.AuctionAdmin))
+        return Results.Forbid();
+
     await using var db = await f.CreateDbContextAsync(ct);
     var bidder = await db.Bidders.FindAsync(new object?[] { id }, ct);
     return bidder is null ? Results.NotFound() : Results.Ok(BidderResponse.From(bidder));
-});
+}).RequireAuthorization();
 
 // --- subscription (الاشتراك في المزاد) --------------------------------------
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions", async (
-    Guid auctionId, StartSubscriptionRequest r,
+    HttpContext http, Guid auctionId, StartSubscriptionRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    if (http.User.SubjectId() != r.BidderId) return Results.Forbid();
+
     await using var db = await f.CreateDbContextAsync(ct);
 
     if (await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct) is null)
@@ -144,66 +169,79 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions", async (
     return Results.Created(
         $"/auctions/{auctionId}/subscriptions/{r.BidderId}",
         SubscriptionResponse.From(subscription));
-});
+}).RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/booklet", (
-    Guid auctionId, Guid bidderId, PaymentRefRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId, PaymentRefRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.PurchaseBooklet(r.PaymentRef, DateTimeOffset.UtcNow)));
+        (s, _, _) => s.PurchaseBooklet(r.PaymentRef, DateTimeOffset.UtcNow), http))
+    .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/terms", (
-    Guid auctionId, Guid bidderId,
+    HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.AcceptTerms(DateTimeOffset.UtcNow)));
+        (s, _, _) => s.AcceptTerms(DateTimeOffset.UtcNow), http))
+    .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit-method", (
-    Guid auctionId, Guid bidderId, DepositMethodRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId, DepositMethodRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, terms) => s.ChooseDeposit(r.Method, terms, DateTimeOffset.UtcNow)));
+        (s, _, terms) => s.ChooseDeposit(r.Method, terms, DateTimeOffset.UtcNow), http))
+    .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit", (
-    Guid auctionId, Guid bidderId, PaymentRefRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId, PaymentRefRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, bidder, _) => s.ConfirmDepositPayment(r.PaymentRef, bidder, DateTimeOffset.UtcNow)));
+        (s, bidder, _) => s.ConfirmDepositPayment(r.PaymentRef, bidder, DateTimeOffset.UtcNow), http))
+    .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee", (
-    Guid auctionId, Guid bidderId, BankGuaranteeRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId, BankGuaranteeRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, terms) => s.SubmitBankGuarantee(r.DocumentId, r.ExpiresAt, terms)));
+        (s, _, terms) => s.SubmitBankGuarantee(r.DocumentId, r.ExpiresAt, terms), http))
+    .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/verify", (
-    Guid auctionId, Guid bidderId, VerifyGuaranteeRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId, VerifyGuaranteeRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, bidder, _) => s.VerifyBankGuarantee(r.VerifiedByUserId, bidder, DateTimeOffset.UtcNow)));
+        (s, bidder, _) => s.VerifyBankGuarantee(r.VerifiedByUserId, bidder, DateTimeOffset.UtcNow),
+        http, staffAction: true))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/revoke", (
-    Guid auctionId, Guid bidderId, RevokeRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId, RevokeRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.Revoke(r.Reason, DateTimeOffset.UtcNow)));
+        (s, _, _) => s.Revoke(r.Reason, DateTimeOffset.UtcNow), http, staffAction: true))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key", (
-    Guid auctionId, Guid bidderId,
+    HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
-    Mutate(f, auctionId, bidderId, ct, (s, _, _) => s.RotateKey()));
+    Mutate(f, auctionId, bidderId, ct, (s, _, _) => s.RotateKey(), http,
+        staffAction: http.User.IsInRole(Roles.AuctionAdmin)))
+    .RequireAuthorization();
 
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
-    Guid auctionId, Guid bidderId,
+    HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    if (http.User.SubjectId() != bidderId && !http.User.IsInRole(Roles.AuctionAdmin))
+        return Results.Forbid();
+
     await using var db = await f.CreateDbContextAsync(ct);
     var subscription = await db.Subscriptions
         .FirstOrDefaultAsync(s => s.AuctionId == auctionId && s.BidderId == bidderId, ct);
     return subscription is null
         ? Results.NotFound()
         : Results.Ok(SubscriptionResponse.From(subscription));
-});
+}).RequireAuthorization();
 
 // The bidder's signing secret, handed over once they are eligible.
 //
@@ -211,9 +249,14 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
 // This endpoint must be authenticated as the bidder before any real use —
 // right now it is open, like everything else in this service.
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/signing-key", async (
-    Guid auctionId, Guid bidderId,
+    HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    // The bidder and nobody else. An administrator who could read this could
+    // bid as them, and the signature would be indistinguishable from the real
+    // bidder's — which is the whole evidential value of signing.
+    if (http.User.SubjectId() != bidderId) return Results.Forbid();
+
     await using var db = await f.CreateDbContextAsync(ct);
     var subscription = await db.Subscriptions
         .FirstOrDefaultAsync(s => s.AuctionId == auctionId && s.BidderId == bidderId, ct);
@@ -235,8 +278,15 @@ app.Run();
 static async Task<IResult> Mutate(
     IDbContextFactory<ParticipantDbContext> factory,
     Guid auctionId, Guid bidderId, CancellationToken ct,
-    Action<Subscription, Bidder, AuctionTerms> change)
+    Action<Subscription, Bidder, AuctionTerms> change,
+    HttpContext? http = null, bool staffAction = false)
 {
+    // A bidder may act only on their own subscription. Staff actions —
+    // verifying a guarantee, revoking — are gated by role instead, because
+    // they are by definition performed on someone else's.
+    if (http is not null && !staffAction && http.User.SubjectId() != bidderId)
+        return Results.Forbid();
+
     await using var db = await factory.CreateDbContextAsync(ct);
 
     var subscription = await db.Subscriptions

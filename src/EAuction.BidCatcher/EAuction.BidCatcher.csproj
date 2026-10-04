@@ -10,5 +10,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../EAuction.Core/EAuction.Core.csproj" />
+    <ProjectReference Include="..\EAuction.Security\EAuction.Security.csproj" />
   </ItemGroup>
 </Project>
