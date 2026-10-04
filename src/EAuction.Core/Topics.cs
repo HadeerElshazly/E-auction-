@@ -15,6 +15,16 @@ public static class Topics
     /// </summary>
     public const string Sealed = "auctions.sealed";
 
+    /// <summary>
+    /// Compacted. Who may bid in which auction, from the participant service.
+    ///
+    /// Carries the eligibility fact and a key epoch — never a signing secret.
+    /// A secret published to a topic is readable by anything with topic access
+    /// and sits in the log until compaction catches up; the catcher derives
+    /// each bidder's key instead (see <see cref="BidderKeys"/>).
+    /// </summary>
+    public const string Participants = "auctions.participants";
+
     /// <summary>Workflow events in both directions between admin and processor.</summary>
     public const string Lifecycle = "auctions.lifecycle";
 

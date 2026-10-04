@@ -13,7 +13,21 @@ IBidLog bidLog = string.IsNullOrWhiteSpace(bootstrap)
     ? new InMemoryBidLog()
     : new KafkaBidLog(new KafkaBidLogOptions { BootstrapServers = bootstrap });
 
-var state = new CatcherState
+// Shared with the participant service, from the cluster's secret store. Both
+// derive the same per-bidder signing key from it, so no secret ever travels on
+// a topic (see BidderKeys).
+var bidderMasterKeyHex = builder.Configuration["Catcher:BidderMasterKeyHex"];
+if (string.IsNullOrWhiteSpace(bidderMasterKeyHex))
+{
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(
+            "Catcher:BidderMasterKeyHex is required. Without the same master key the "
+            + "participant service uses, no bidder's signature can be verified.");
+
+    bidderMasterKeyHex = Convert.ToHexString(BidderKeys.NewMasterKey());
+}
+
+var state = new CatcherState(Convert.FromHexString(bidderMasterKeyHex))
 {
     MaxBidsPerSecondPerBidder =
         builder.Configuration.GetValue("Catcher:MaxBidsPerSecondPerBidder", 20),
@@ -31,10 +45,28 @@ var receiptKey = Convert.FromHexString(
 builder.Services.AddSingleton(state);
 builder.Services.AddSingleton(bidLog);
 
+// Fills the state above from the compacted control topics. Without it the
+// catcher starts empty and rejects every bid as an unknown auction.
+IEventStream eventStream = string.IsNullOrWhiteSpace(bootstrap)
+    ? new InMemoryEventStream()
+    : new KafkaEventStream(new KafkaEventStreamOptions
+    {
+        BootstrapServers = bootstrap,
+        ConsumerGroup = "bid-catcher"
+    });
+
+builder.Services.AddSingleton(eventStream);
+builder.Services.AddSingleton<ControlPlane>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ControlPlane>());
+
 var app = builder.Build();
 
 app.MapGet("/health/live", () => Results.Ok("ok"));
-app.MapGet("/health/ready", () => Results.Ok("ok"));
+
+// Not ready until the control topics have been replayed: a catcher that
+// accepts traffic with empty state can only reject it.
+app.MapGet("/health/ready", (ControlPlane control) =>
+    control.Warm ? Results.Ok("ok") : Results.StatusCode(503));
 
 // ---------------------------------------------------------------------------
 // Development only. In deployment this state arrives from the compacted topics
@@ -60,7 +92,8 @@ if (builder.Configuration.GetValue("Catcher:EnableDevSeed", false))
 
         state.UpsertAuction(auction);
         foreach (var bidder in request.Bidders)
-            state.GrantEligibility(request.AuctionId, bidder, Convert.FromHexString(request.SecretHex));
+            state.GrantEligibilityWithSecret(
+                request.AuctionId, bidder, Convert.FromHexString(request.SecretHex));
 
         return Results.Ok(new { seeded = request.Bidders.Length });
     });

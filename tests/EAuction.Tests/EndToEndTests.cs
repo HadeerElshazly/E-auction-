@@ -49,7 +49,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
-        state.GrantEligibility(auction.AuctionId, bidder, TestAuction.Secret);
+        state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
 
         var frame = TestAuction.Frame(auction.AuctionId, bidder, 1_200_000_00, now);
         var response = await client.PostAsync("/bids", Body(frame));
@@ -115,7 +115,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
-        state.GrantEligibility(auction.AuctionId, bidder, TestAuction.Secret);
+        state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
 
         // One minute past ends_at; ceiling is ends_at + 3x2min + 1min grace.
         Assert.True(now < auction.HardCeiling(TimeSpan.FromMinutes(1)));
@@ -137,7 +137,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
-        state.GrantEligibility(auction.AuctionId, bidder, TestAuction.Secret);
+        state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
 
         var frame = TestAuction.Frame(auction.AuctionId, bidder, 1_200_000_00, now);
         var response = await client.PostAsync("/bids", Body(frame));
@@ -155,7 +155,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         var bidder = Guid.NewGuid();
 
         state.UpsertAuction(auction);
-        state.GrantEligibility(auction.AuctionId, bidder, TestAuction.Secret);
+        state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
 
         var frame = TestAuction.Frame(
             auction.AuctionId, bidder, 1_200_000_00, now, secret: new byte[32]);
@@ -177,7 +177,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         var bidders = Enumerable.Range(0, 40).Select(_ => Guid.NewGuid()).ToArray();
         state.UpsertAuction(auction);
         foreach (var b in bidders)
-            state.GrantEligibility(auction.AuctionId, b, TestAuction.Secret);
+            state.GrantEligibilityWithSecret(auction.AuctionId, b, TestAuction.Secret);
 
         // Everyone fires at once, at a spread of amounts.
         var posts = bidders.Select((b, i) =>
@@ -218,7 +218,7 @@ public class EndToEndTests : IClassFixture<WebApplicationFactory<Program>>
         var bidders = Enumerable.Range(0, 25).Select(_ => Guid.NewGuid()).ToArray();
         state.UpsertAuction(auction);
         foreach (var b in bidders)
-            state.GrantEligibility(auction.AuctionId, b, TestAuction.Secret);
+            state.GrantEligibilityWithSecret(auction.AuctionId, b, TestAuction.Secret);
 
         await Task.WhenAll(bidders.Select((b, i) =>
             client.PostAsync("/bids",

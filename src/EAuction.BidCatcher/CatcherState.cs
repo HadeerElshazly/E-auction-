@@ -15,7 +15,7 @@ namespace EAuction.BidCatcher;
 /// Every pod keeps a full copy via its own consumer group. Cheap: hundreds of
 /// auctions, thousands of eligibility rows, one long per current price.
 /// </summary>
-public sealed class CatcherState
+public sealed class CatcherState(byte[] bidderMasterKey)
 {
     private readonly ConcurrentDictionary<Guid, AuctionDefinition> _auctions = new();
     private readonly ConcurrentDictionary<Guid, long> _currentPrice = new();
@@ -25,16 +25,27 @@ public sealed class CatcherState
     public TimeSpan CeilingGrace { get; init; } = TimeSpan.FromMinutes(1);
     public int MaxBidsPerSecondPerBidder { get; init; } = 20;
 
+    public int AuctionCount => _auctions.Count;
+    public int EligibilityCount => _eligibility.Count;
+
     /// <summary>Applied from <c>auctions.upcoming</c> (compacted).</summary>
     public void UpsertAuction(AuctionDefinition auction) =>
         _auctions[auction.AuctionId] = auction;
 
     /// <summary>
-    /// Applied from <c>auctions.participants</c> (compacted). The secret is the
-    /// bidder's per-auction signing key (D-20), minted at auction entry and
-    /// bound to their Nafath-verified identity.
+    /// Applied from <c>auctions.participants</c> (compacted).
+    ///
+    /// The topic carries an epoch, not a secret. The signing key is derived
+    /// here and kept in process memory only — it never reaches a topic or a
+    /// disk. Deriving once at grant time rather than per bid keeps the hot
+    /// path to the single HMAC that verifies the frame.
     /// </summary>
-    public void GrantEligibility(Guid auctionId, Guid bidderId, byte[] signingSecret) =>
+    public void GrantEligibility(Guid auctionId, Guid bidderId, int keyEpoch) =>
+        _eligibility[(auctionId, bidderId)] =
+            BidderKeys.Derive(bidderMasterKey, auctionId, bidderId, keyEpoch);
+
+    /// <summary>Test and dev-seed hook: grants with a secret supplied directly.</summary>
+    internal void GrantEligibilityWithSecret(Guid auctionId, Guid bidderId, byte[] signingSecret) =>
         _eligibility[(auctionId, bidderId)] = signingSecret;
 
     public void RevokeEligibility(Guid auctionId, Guid bidderId) =>
