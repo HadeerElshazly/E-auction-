@@ -449,11 +449,8 @@ requirement directly.
 Two environment facts are **unknown** at time of writing (see §11), so the
 charts are written defensively:
 
-- **Kubernetes distribution unknown** → charts target plain Kubernetes but all
-  containers run as **non-root with explicit UIDs**, security contexts are
-  fully parameterised, and ingress is switchable between `Ingress` and
-  OpenShift `Route`. This costs little now and avoids a rewrite if the client
-  turns out to run OpenShift.
+- **Kubernetes distribution unknown** → the chart carries both paths behind a
+  single `platform` value. **Built and verified** — see §16.
 - **Outbound internet access unknown** → every external call (Nafath, PayTabs,
   SADAD, SMS, FCM/APNs) goes through a single configurable **egress proxy
   abstraction**. Works unchanged whether the DC has full access, a whitelist,
@@ -462,17 +459,25 @@ charts are written defensively:
 ### 10.2 Chart structure
 
 ```
-deploy/helm/
-├── e-auction/                 umbrella chart — version = release version
-│   ├── Chart.yaml             version: 0.1.0   appVersion: 0.1.0
-│   ├── values.yaml
-│   ├── values-<client>.yaml   per-client overrides
-│   └── charts/                subchart per service
-└── e-auction-common/          library chart: shared templates, security contexts
+deploy/helm/e-auction/
+├── Chart.yaml              version 0.1.0 = the deployment version
+├── values.yaml             defaults
+├── values-openshift.yaml   platform overlay
+├── values-jeddah.yaml      client overlay
+├── charts/
+│   └── e-auction-common/   library chart: shared templates
+└── templates/              one file per service
 ```
 
 Chart version drives the deployment version. Images are tagged with
 `appVersion`. Charts are pushed as OCI artifacts alongside images.
+
+This is a library chart plus one application chart, **not** the umbrella and
+subcharts originally proposed here. Subcharts buy independent versioning, and
+the chart version *is* the deployment version — a client names one number for
+the whole release. Three near-identical subcharts would be duplication in
+exchange for a property we deliberately do not want. Reasoning in
+`deploy/helm/README.md`.
 
 ### 10.3 Local development
 
@@ -917,3 +922,74 @@ Eight tests in `ProcessorRestartTests`:
 | An offer owed when the process died is re-issued on resume |
 | Bids arriving after a restart publish normally |
 | A stale checkpoint republishes only what it missed, not the whole auction |
+
+---
+
+## 16. Portable Helm charts
+
+The on-prem Kubernetes distribution is still unknown, and guessing wrong is
+not a small problem: a chart written for plain Kubernetes does not degrade on
+OpenShift, it is **rejected**. So the chart carries both paths behind one
+switch.
+
+```yaml
+platform: kubernetes   # or: openshift
+```
+
+### What actually differs
+
+Two things, and nothing else:
+
+| | plain Kubernetes | OpenShift |
+|---|---|---|
+| External traffic | `Ingress` | `Route` |
+| Pod UID | pinned to 10001 | assigned by the SCC |
+
+**Exposure.** OpenShift ships no Ingress controller by default; it has Routes,
+served by its own router. Plain Kubernetes has no `Route` type at all, so a
+chart shipping one is refused by the API server before anything runs.
+
+**UID.** OpenShift's `restricted-v2` SCC gives each namespace a UID range and
+admits a pod only if it does not request a UID outside it. Hard-coding
+`runAsUser` makes the pod unschedulable. So on OpenShift the chart states the
+requirement — `runAsNonRoot` — and lets the platform choose the number. Plain
+Kubernetes assigns nothing, so there the chart must pin it.
+
+Everything else is identical and equally hardened on both: no privilege
+escalation, all capabilities dropped, read-only root filesystem, RuntimeDefault
+seccomp, and `/tmp` as an emptyDir so an arbitrary assigned UID still has
+somewhere to write.
+
+### Verified
+
+`deploy/helm/test-chart.sh` lints, renders, asserts and packages:
+
+| Claim |
+|---|
+| Both platforms lint and render |
+| Ingress on Kubernetes, Route on OpenShift, neither crosses over |
+| UID pinned on Kubernetes, delegated on OpenShift |
+| Non-root, read-only rootfs, no privilege escalation, seccomp — both platforms |
+| Credentials referenced from Secrets, never templated into output |
+| Chart packages |
+
+The rendered manifests were also parsed and structurally checked: every object
+labelled, every deployment hardened, probes present, resource requests set, a
+writable `/tmp`, and the backends wired to the right services.
+
+**The test was checked to have teeth.** Removing the OpenShift UID guard —
+exactly the mistake the chart exists to prevent — makes it fail, while
+`helm lint` passes the broken chart without comment. That gap is the whole
+reason the script exists: the failure would otherwise surface on the client's
+cluster as a pod that will not schedule.
+
+### Not yet done
+
+| Gap | Note |
+|---|---|
+| **Never deployed to a real cluster** | Linted, rendered, validated and packaged, but no cluster was available. The first `helm upgrade --install` is part of the work |
+| `bidProcessor.replicas` must stay 1 | Auctions are not sharded across processor instances; a second replica would drive every auction in parallel. `NOTES.txt` warns if it is raised |
+| Reactive autoscaling only | CPU-driven pods arrive after the spike. KEDA on auction end times is the real answer (§7.4) |
+| No charts for Kafka, Postgres, Keycloak, MinIO | Strimzi and CloudNativePG have their own operators; these are dependencies to declare, not to reimplement |
+| No NetworkPolicy | `auctions.sealed` is ACL'd at the Kafka level (D-23), but pod-level isolation is not expressed |
+| No front-end charts | React apps and the mobile BFF are not built yet |

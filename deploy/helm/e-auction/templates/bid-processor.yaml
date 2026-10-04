@@ -1,0 +1,6 @@
+{{- if .Values.bidProcessor.enabled }}
+{{- $ctx := dict "root" $ "name" "bid-processor" "svc" .Values.bidProcessor }}
+{{ include "e-auction.serviceAccount" $ctx }}
+---
+{{ include "e-auction.deployment" $ctx }}
+{{- end }}

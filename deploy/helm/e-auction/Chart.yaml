@@ -1,0 +1,27 @@
+apiVersion: v2
+name: e-auction
+description: >-
+  Electronic public auction platform for government land plot sales. Portable
+  across plain Kubernetes and OpenShift via the `platform` value.
+type: application
+
+# The chart version IS the deployment version — this is what a client names
+# when they say which release they are running.
+version: 0.1.0
+
+# The image tag. Images and chart are released together, so a deployment is
+# one coordinate rather than two.
+appVersion: "0.1.0"
+
+keywords:
+  - auction
+  - kafka
+home: https://github.com/HadeerElshazly/E-auction-
+
+dependencies:
+  # Vendored under charts/ rather than pulled from a repository: it holds
+  # nothing but templates for this chart, and vendoring means `helm package`
+  # needs no network and no `helm dependency build` step in CI.
+  - name: e-auction-common
+    version: 0.1.0
+    repository: ""

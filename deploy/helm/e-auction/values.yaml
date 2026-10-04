@@ -1,0 +1,184 @@
+# ---------------------------------------------------------------------------
+# Which Kubernetes this is going on.
+#
+#   kubernetes  plain k8s, Rancher/RKE2, Tanzu  -> Ingress, explicit UID
+#   openshift   Red Hat OpenShift / OKD         -> Route, SCC-assigned UID
+#
+# Nothing else changes between them. If you do not know which you have, ask
+# the cluster team to run `oc version` — if `oc` exists at all, it is OpenShift.
+# ---------------------------------------------------------------------------
+platform: kubernetes
+
+global:
+  # Azure Container Registry. Leave empty to use bare image names.
+  imageRegistry: ""
+  imagePullSecrets: []
+
+image:
+  # Defaults to .Chart.AppVersion, so chart and images release as one.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Only read when platform is not openshift; OpenShift assigns the UID itself.
+security:
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+ingress:
+  # Ignored on OpenShift, which routes through its own router.
+  className: nginx
+
+# Configuration shared by every service. Env vars only, so Compose and Helm
+# stay one source of truth. Changing anything here rolls the pods.
+config:
+  kafka:
+    bootstrapServers: eauction-kafka-bootstrap:9092
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+
+bidCatcher:
+  enabled: true
+  image: e-auction/bid-catcher
+  replicas: 3
+  port: 8080
+
+  expose:
+    enabled: true
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  # Spread across nodes: losing one node mid-auction should not take the bid
+  # path with it.
+  spreadAcrossNodes: true
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  secretEnv: []
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    - name: Catcher__MaxBidsPerSecondPerBidder
+      value: "20"
+    - name: Catcher__CeilingGraceSeconds
+      value: "60"
+
+bidProcessor:
+  enabled: true
+  image: e-auction/bid-processor
+  # One instance: auctions are not yet sharded across processors, and two
+  # would both drive the same auction (§14 "not yet done").
+  replicas: 1
+  port: null
+
+  expose:
+    enabled: false
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: false
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  secretEnv: []
+
+  env:
+    - name: Processor__CloseGraceSeconds
+      value: "5"
+    - name: Processor__TickIntervalMs
+      value: "500"
+    - name: Processor__CheckpointEveryRecords
+      value: "100"
+    - name: Processor__CheckpointEverySeconds
+      value: "2"
+
+auctionAdmin:
+  enabled: true
+  image: e-auction/auction-admin
+  replicas: 2
+  port: 8080
+
+  # Internal by default: admin and committee traffic goes through the API
+  # gateway, not straight at the service.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  # The connection string is a secret and never appears in values. Point this
+  # at a Secret the cluster already holds — External Secrets Operator,
+  # sealed-secrets, or one created out of band.
+  secretEnv:
+    - name: ConnectionStrings__Admin
+      secretName: eauction-admin-db
+      secretKey: connection-string
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    - name: Award__ComplianceWindowDays
+      # A contract term from the كراسة الشروط, not a tuning knob (§11, C-1).
+      value: "5"

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: e-auction-common
+description: >-
+  Shared templates for the e-auction services. A library chart, so it renders
+  nothing on its own — the application chart calls into it.
+type: library
+version: 0.1.0

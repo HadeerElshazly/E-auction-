@@ -1,0 +1,44 @@
+# Per-client overlay: Jeddah Municipality, Al-Saeed plan (مخطط السعيد).
+#
+# This is the pattern for a multi-client product — one chart, one overlay per
+# client. Nothing client-specific belongs in values.yaml.
+
+global:
+  imageRegistry: eauctionacr.azurecr.io
+  imagePullSecrets:
+    - name: acr-pull
+
+config:
+  kafka:
+    bootstrapServers: eauction-kafka-bootstrap.kafka.svc.cluster.local:9092
+
+bidCatcher:
+  # 372 plots across two phases, with lots closing together: size the floor
+  # for the close, not the average.
+  replicas: 4
+  autoscaling:
+    minReplicas: 4
+    maxReplicas: 30
+  expose:
+    enabled: true
+    host: mazad.jeddah.gov.sa
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: 1k
+      nginx.ingress.kubernetes.io/enable-cors: "false"
+    tls:
+      enabled: true
+      secretName: mazad-jeddah-tls
+
+auctionAdmin:
+  replicas: 2
+  secretEnv:
+    - name: ConnectionStrings__Admin
+      secretName: eauction-admin-db
+      secretKey: connection-string
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    - name: Award__ComplianceWindowDays
+      # Must match the كراسة الشروط the bidders accepted. Confirm with legal
+      # before the first auction opens (§11, C-1).
+      value: "5"

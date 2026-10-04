@@ -1,0 +1,20 @@
+{{- if .Values.bidCatcher.enabled }}
+{{- $ctx := dict "root" $ "name" "bid-catcher" "svc" .Values.bidCatcher }}
+{{ include "e-auction.serviceAccount" $ctx }}
+---
+{{ include "e-auction.deployment" $ctx }}
+---
+{{ include "e-auction.service" $ctx }}
+{{- with (include "e-auction.hpa" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.pdb" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.expose" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}

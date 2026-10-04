@@ -19,7 +19,7 @@ src/
   EAuction.BidProcessor/  winner determination, auction supervision
   EAuction.AuctionAdmin/  auction data, workflows, transactional outbox
 deploy/
-  helm/               umbrella chart + per-service subcharts
+  helm/               portable chart (plain Kubernetes + OpenShift)
   compose/            local development stack
   debezium/           outbox connector configuration
 tools/
@@ -53,7 +53,11 @@ Architecture document is in review.
   and the transactional outbox.
 - **Bid processor wiring** — implemented and tested. The loop closes: an
   approved auction runs itself through bidding, a close, a candidate for the
-  committee, and a cascade if that candidate fails. 95 tests green overall.
+  committee, and a cascade if that candidate fails. A restart no longer
+  republishes handled bids. 103 tests green overall.
+- **Helm charts** — portable across plain Kubernetes and OpenShift behind one
+  `platform` value, with a test script that verifies the portability holds.
+  See [deploy/helm](deploy/helm/README.md).
 
 The Kafka implementations have **not** been run against a live broker, and the
 Debezium connector has not been registered against a live Connect cluster (no

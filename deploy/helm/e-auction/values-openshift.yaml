@@ -1,0 +1,21 @@
+# Overlay for Red Hat OpenShift / OKD.
+#
+#   helm upgrade --install eauction deploy/helm/e-auction \
+#     -f deploy/helm/e-auction/values-openshift.yaml
+#
+# Setting `platform` is the whole change: Routes replace Ingress, and the UID
+# is left for the SCC to assign rather than pinned in the pod spec.
+
+platform: openshift
+
+# OpenShift routes through its own router; ingressClassName is not read.
+ingress:
+  className: ""
+
+bidCatcher:
+  expose:
+    enabled: true
+    # Left empty, OpenShift generates <name>-<namespace>.<apps-domain>.
+    host: ""
+    tls:
+      enabled: true

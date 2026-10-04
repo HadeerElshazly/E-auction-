@@ -1,0 +1,46 @@
+e-auction {{ .Chart.Version }} deployed as "{{ .Release.Name }}" in {{ .Release.Namespace }}.
+
+Platform: {{ .Values.platform }}
+{{- if eq .Values.platform "openshift" }}
+  Routes are used for external traffic, and pod UIDs are assigned by the SCC.
+{{- else }}
+  Ingress ({{ .Values.ingress.className | default "default class" }}) is used for
+  external traffic, and pods run as UID {{ .Values.security.runAsUser }}.
+{{- end }}
+
+Images: {{ if .Values.global.imageRegistry }}{{ .Values.global.imageRegistry }}/{{ end }}e-auction/*:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+Services:
+{{- if .Values.bidCatcher.enabled }}
+  bid-catcher     {{ if .Values.bidCatcher.autoscaling.enabled }}{{ .Values.bidCatcher.autoscaling.minReplicas }}-{{ .Values.bidCatcher.autoscaling.maxReplicas }} replicas (autoscaled){{ else }}{{ .Values.bidCatcher.replicas }} replicas{{ end }}
+{{- end }}
+{{- if .Values.bidProcessor.enabled }}
+  bid-processor   {{ .Values.bidProcessor.replicas }} replica
+{{- end }}
+{{- if .Values.auctionAdmin.enabled }}
+  auction-admin   {{ .Values.auctionAdmin.replicas }} replicas
+{{- end }}
+
+{{- if gt (int .Values.bidProcessor.replicas) 1 }}
+
+WARNING
+  bidProcessor.replicas is {{ .Values.bidProcessor.replicas }}. Auctions are not yet sharded
+  across processor instances, so every replica would drive every auction and
+  publish duplicate winners. Set it back to 1.
+{{- end }}
+
+{{- if .Values.auctionAdmin.enabled }}
+
+Before auction-admin will start, it needs its database secret:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ (index .Values.auctionAdmin.secretEnv 0).secretName }} \
+    --from-literal={{ (index .Values.auctionAdmin.secretEnv 0).secretKey }}='Host=...;Database=...;Username=...;Password=...'
+
+and the schema applied:
+
+  dotnet ef database update --project src/EAuction.AuctionAdmin
+{{- end }}
+
+Check the rollout:
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/part-of=e-auction
