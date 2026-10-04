@@ -576,8 +576,8 @@ shared vCPU with the generator on the same host. See `tools/loadtest/README.md`.
 | Gap | Why |
 |---|---|
 | **`KafkaBidLog` has never run against a broker** | No Docker daemon in the build container. The pipeline is validated through `InMemoryBidLog`, which mirrors the same per-partition ordering contract, but the Kafka path is unexercised code |
-| **The `acks=all` round trip is not in the measured latency** | It is the largest remaining cost in the budget. ~36 ms of the 50 ms target is unspent, which should be comfortable — but it is an estimate, not a measurement |
-| **The p99 ≤ 50 ms @ 10k bids/sec target is therefore not yet met** | It needs a real three-broker cluster with the generator on a separate host |
+| ~~The `acks=all` round trip is not in the measured latency~~ | **Measured** — 13,196 req/s at p99 19.49 ms with a real broker, every accepted bid verified on disk. See `tools/loadtest/README.md` |
+| **The target is met on one broker, not three** | Deployment runs 3 brokers at `min.insync.replicas=2`, where `acks=all` waits for a replica over a network rather than one local disk |
 | **`docker-compose.yml` is unrun** | Same reason. Treat the first `up` as work, not as a regression |
 | **JWT verification is not wired** | The seam is documented in `Program.cs`. The HMAC signature (D-20), which binds a bid to a bidder, is implemented |
 | **Admin, participant, payment, fan-out, notification services** | Not started — the slice covers the bid path only |
