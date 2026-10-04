@@ -1,0 +1,22 @@
+# .NET
+bin/
+obj/
+*.user
+artifacts/
+
+# Node
+node_modules/
+dist/
+.expo/
+
+# Env
+.env
+.env.local
+
+# IDE
+.vs/
+.idea/
+*.swp
+
+# OS
+.DS_Store
