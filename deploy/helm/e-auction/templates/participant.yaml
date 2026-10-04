@@ -1,0 +1,16 @@
+{{- if .Values.participant.enabled }}
+{{- $ctx := dict "root" $ "name" "participant" "svc" .Values.participant }}
+{{ include "e-auction.serviceAccount" $ctx }}
+---
+{{ include "e-auction.deployment" $ctx }}
+---
+{{ include "e-auction.service" $ctx }}
+{{- with (include "e-auction.pdb" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.expose" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}

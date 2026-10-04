@@ -18,6 +18,8 @@ src/
   EAuction.BidCatcher/    bid ingestion HTTP endpoint
   EAuction.BidProcessor/  winner determination, auction supervision
   EAuction.AuctionAdmin/  auction data, workflows, transactional outbox
+  EAuction.Participant/   registration, subscription, deposit, eligibility
+  EAuction.Outbox/        shared transactional-outbox machinery
 deploy/
   helm/               portable chart (plain Kubernetes + OpenShift)
   compose/            local development stack
@@ -28,9 +30,9 @@ tools/
 
 ## Build and test
 
-Requires the .NET 8 SDK. The auction-admin integration tests need a
-PostgreSQL instance (`wal_level=logical`); override the connection with
-`ADMIN_TEST_DB` if yours differs from the default.
+Requires the .NET 8 SDK. The auction-admin and participant integration tests
+need a PostgreSQL instance (`wal_level=logical`); override the connections
+with `ADMIN_TEST_DB` and `PARTICIPANT_TEST_DB` if yours differ.
 
 ```bash
 dotnet build EAuction.sln
@@ -58,6 +60,9 @@ Architecture document is in review.
 - **Helm charts** — portable across plain Kubernetes and OpenShift behind one
   `platform` value, with a test script that verifies the portability holds.
   See [deploy/helm](deploy/helm/README.md).
+- **Participant service + catcher wiring** — registration through to
+  eligibility, and the catcher now fills its state from the control topics
+  rather than from nothing. 135 tests green.
 
 The Kafka implementations have **not** been run against a live broker, and the
 Debezium connector has not been registered against a live Connect cluster (no

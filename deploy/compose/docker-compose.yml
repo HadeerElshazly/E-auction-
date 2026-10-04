@@ -136,6 +136,27 @@ services:
       postgres:
         condition: service_healthy
 
+  participant:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.participant
+    container_name: eauction-participant
+    ports:
+      - "5095:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ReplicationFactor: "1"
+      # Must match the catcher's: both derive each bidder's signing key from it,
+      # and neither ever sends a derived secret to the other.
+      Participant__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   bid-catcher:
     build:
       context: ../..
@@ -147,6 +168,8 @@ services:
       ASPNETCORE_URLS: http://+:8080
       Kafka__BootstrapServers: kafka:9092
       Catcher__PodOrdinal: "0"
+      # The same master key the participant service holds.
+      Catcher__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
       DOTNET_gcServer: "1"
     depends_on:
       kafka:

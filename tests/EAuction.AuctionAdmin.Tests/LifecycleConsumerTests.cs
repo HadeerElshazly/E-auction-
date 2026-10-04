@@ -1,7 +1,9 @@
 using System.Text.Json;
 using EAuction.AuctionAdmin.Domain;
 using EAuction.AuctionAdmin.Outbox;
+using EAuction.AuctionAdmin.Persistence;
 using EAuction.Core;
+using EAuction.Outbox;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -57,8 +59,9 @@ public class LifecycleConsumerTests(PostgresFixture pg)
         var id = await SeedApprovedAuction();
         Assert.Equal(AuctionStatus.Approved, await StatusOf(id));
 
-        var relay = new OutboxRelay(
-            pg.Factory, new InMemoryTopicPublisher(), NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(
+            pg.Factory, new InMemoryTopicPublisher(), new AuctionOutboxRouter(),
+            NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         Assert.Equal(AuctionStatus.Scheduled, await StatusOf(id));
@@ -68,8 +71,9 @@ public class LifecycleConsumerTests(PostgresFixture pg)
     public async Task AuctionStarted_takes_a_scheduled_auction_live()
     {
         var id = await SeedApprovedAuction();
-        var relay = new OutboxRelay(
-            pg.Factory, new InMemoryTopicPublisher(), NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(
+            pg.Factory, new InMemoryTopicPublisher(), new AuctionOutboxRouter(),
+            NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         await Consumer().ApplyAsync(Event(id, "AuctionStarted"), CancellationToken.None);
@@ -81,8 +85,9 @@ public class LifecycleConsumerTests(PostgresFixture pg)
     public async Task AuctionClosed_moves_a_live_auction_to_eligibility_review()
     {
         var id = await SeedApprovedAuction();
-        var relay = new OutboxRelay(
-            pg.Factory, new InMemoryTopicPublisher(), NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(
+            pg.Factory, new InMemoryTopicPublisher(), new AuctionOutboxRouter(),
+            NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         var consumer = Consumer();
@@ -96,8 +101,9 @@ public class LifecycleConsumerTests(PostgresFixture pg)
     public async Task CandidateOffered_puts_the_bidder_in_front_of_the_committee()
     {
         var id = await SeedApprovedAuction();
-        var relay = new OutboxRelay(
-            pg.Factory, new InMemoryTopicPublisher(), NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(
+            pg.Factory, new InMemoryTopicPublisher(), new AuctionOutboxRouter(),
+            NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         var consumer = Consumer();
@@ -127,8 +133,9 @@ public class LifecycleConsumerTests(PostgresFixture pg)
     public async Task LadderExhausted_marks_the_auction_unsold()
     {
         var id = await SeedApprovedAuction();
-        var relay = new OutboxRelay(
-            pg.Factory, new InMemoryTopicPublisher(), NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(
+            pg.Factory, new InMemoryTopicPublisher(), new AuctionOutboxRouter(),
+            NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         var consumer = Consumer();
@@ -145,8 +152,9 @@ public class LifecycleConsumerTests(PostgresFixture pg)
         // At-least-once delivery means every one of these will arrive twice
         // sooner or later. The transition guard is what makes that safe.
         var id = await SeedApprovedAuction();
-        var relay = new OutboxRelay(
-            pg.Factory, new InMemoryTopicPublisher(), NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(
+            pg.Factory, new InMemoryTopicPublisher(), new AuctionOutboxRouter(),
+            NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         var consumer = Consumer();

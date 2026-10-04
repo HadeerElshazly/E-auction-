@@ -79,7 +79,10 @@ bidCatcher:
   nodeSelector: {}
   tolerations: []
 
-  secretEnv: []
+  secretEnv:
+    - name: Catcher__BidderMasterKeyHex
+      secretName: eauction-bidder-master-key
+      secretKey: master-key-hex
 
   env:
     - name: ASPNETCORE_URLS
@@ -130,6 +133,56 @@ bidProcessor:
       value: "100"
     - name: Processor__CheckpointEverySeconds
       value: "2"
+
+participant:
+  enabled: true
+  image: e-auction/participant
+  replicas: 2
+  port: 8080
+
+  # Internal by default: bidder traffic reaches it through the API gateway.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  secretEnv:
+    - name: ConnectionStrings__Participant
+      secretName: eauction-participant-db
+      secretKey: connection-string
+    # The same master key the catcher holds. Both derive each bidder's signing
+    # key from it, so no secret ever travels on a topic.
+    - name: Participant__BidderMasterKeyHex
+      secretName: eauction-bidder-master-key
+      secretKey: master-key-hex
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
 
 auctionAdmin:
   enabled: true

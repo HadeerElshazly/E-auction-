@@ -1,7 +1,6 @@
 using System.Text.Json;
-using EAuction.AuctionAdmin.Domain;
 
-namespace EAuction.AuctionAdmin.Persistence;
+namespace EAuction.Outbox;
 
 /// <summary>
 /// An outbox row, shaped for Debezium's EventRouter SMT so the production path
@@ -9,9 +8,8 @@ namespace EAuction.AuctionAdmin.Persistence;
 /// <see cref="AggregateType"/>, keys on <see cref="AggregateId"/> and uses
 /// <see cref="Payload"/> as the message value.
 ///
-/// The column names are the SMT's defaults on purpose (id, aggregatetype,
-/// aggregateid, type, payload) — renaming them means configuring the SMT in
-/// every environment, which is a thing to get wrong.
+/// The column names are the SMT's defaults on purpose — renaming them means
+/// configuring the SMT in every environment, which is a thing to get wrong.
 ///
 /// This is why the outbox exists at all (D-16): CDC straight off the domain
 /// tables would make the internal schema the public event contract, and every
@@ -34,11 +32,25 @@ public sealed class OutboxMessage
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public static OutboxMessage From(DomainEvent domainEvent) => new()
+    public static OutboxMessage From(IDomainEvent domainEvent) => new()
     {
         AggregateType = domainEvent.AggregateType,
         AggregateId = domainEvent.AggregateId,
-        Type = domainEvent.Type,
+        Type = domainEvent.GetType().Name,
         Payload = JsonSerializer.Serialize(domainEvent, domainEvent.GetType(), Json)
     };
+}
+
+/// <summary>
+/// Something the rest of the system needs to know about. Raised by an
+/// aggregate and turned into an outbox row inside the same transaction as the
+/// state change, so neither can exist without the other.
+/// </summary>
+public interface IDomainEvent
+{
+    /// <summary>Debezium EventRouter routes on this. A routing detail, kept out of the payload.</summary>
+    string AggregateType { get; }
+
+    /// <summary>The message key. Also a column, also not part of the payload.</summary>
+    string AggregateId { get; }
 }

@@ -24,7 +24,9 @@ public class ControlPlaneTests : IAsyncDisposable
 
     public ControlPlaneTests()
     {
-        _state = new CatcherState(_master);
+        // Screen() consumes a rate-limit token, and these tests poll it while
+        // waiting for a topic to propagate. Rate limiting has its own tests.
+        _state = new CatcherState(_master) { MaxBidsPerSecondPerBidder = 1_000_000 };
         _control = new ControlPlane(_state, _events, NullLogger<ControlPlane>.Instance);
     }
 
@@ -195,7 +197,7 @@ public class ControlPlaneTests : IAsyncDisposable
         await PublishEligibilityAsync(auctionId, bidder, eligible: true);
 
         // A different pod, started after the fact, over the same topics.
-        var cold = new CatcherState(_master);
+        var cold = new CatcherState(_master) { MaxBidsPerSecondPerBidder = 1_000_000 };
         var coldControl = new ControlPlane(cold, _events, NullLogger<ControlPlane>.Instance);
         await coldControl.StartAsync(_cts.Token);
 

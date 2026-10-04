@@ -2,6 +2,7 @@ using EAuction.AuctionAdmin.Domain;
 using EAuction.AuctionAdmin.Outbox;
 using EAuction.AuctionAdmin.Persistence;
 using EAuction.Core;
+using EAuction.Outbox;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,8 +30,9 @@ else
         sp.GetRequiredService<ILogger<KafkaTopicPublisher>>()));
 }
 
-builder.Services.AddSingleton<OutboxRelay>();
-builder.Services.AddHostedService<OutboxRelayService>();
+builder.Services.AddSingleton<IOutboxRouter, AuctionOutboxRouter>();
+builder.Services.AddSingleton<OutboxRelay<AdminDbContext>>();
+builder.Services.AddHostedService<OutboxRelayService<AdminDbContext>>();
 
 // Admin's half of the loop with the bid processor.
 builder.Services.AddSingleton<IEventStream>(sp =>

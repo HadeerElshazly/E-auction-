@@ -335,6 +335,7 @@ public class ContractDriftTests
             OpeningPriceMinorUnits = 1_000_000_00,
             MinIncrementMinorUnits = 50_000_00,
             DepositMinorUnits = 100_000_00,
+            BookletPriceMinorUnits = 1_000_00,
             QuietPeriodSeconds = 120,
             MaxExtensions = 3,
             Channel = "Online",

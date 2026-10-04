@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using EAuction.Outbox;
 
 namespace EAuction.AuctionAdmin.Domain;
 
@@ -8,7 +9,7 @@ namespace EAuction.AuctionAdmin.Domain;
 /// state change (D-16) — so the event cannot exist without the state change,
 /// and the state change cannot exist without the event.
 /// </summary>
-public abstract record DomainEvent
+public abstract record DomainEvent : IDomainEvent
 {
     /// <summary>
     /// Debezium EventRouter routes on this. It is a routing detail that lives
@@ -21,9 +22,6 @@ public abstract record DomainEvent
     /// <summary>The message key. Also a column, also not part of the payload.</summary>
     [JsonIgnore]
     public abstract string AggregateId { get; }
-
-    /// <summary>Event type name, carried as a Kafka header.</summary>
-    public string Type => GetType().Name;
 }
 
 /// <summary>
@@ -43,6 +41,7 @@ public sealed record AuctionApproved : DomainEvent
     public required long OpeningPriceMinorUnits { get; init; }
     public required long MinIncrementMinorUnits { get; init; }
     public required long DepositMinorUnits { get; init; }
+    public required long BookletPriceMinorUnits { get; init; }
     public int? QuietPeriodSeconds { get; init; }
     public required int MaxExtensions { get; init; }
     public required string Channel { get; init; }

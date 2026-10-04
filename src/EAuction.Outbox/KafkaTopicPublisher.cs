@@ -1,7 +1,8 @@
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
+using Microsoft.Extensions.Logging;
 
-namespace EAuction.AuctionAdmin.Outbox;
+namespace EAuction.Outbox;
 
 public sealed record KafkaPublisherOptions
 {
@@ -15,7 +16,7 @@ public sealed record KafkaPublisherOptions
 /// </summary>
 /// <remarks>
 /// NOT YET EXERCISED AGAINST A LIVE BROKER — no Docker daemon in the build
-/// environment. The relay's routing and ordering are tested through
+/// environment. Routing and ordering are tested through
 /// <see cref="InMemoryTopicPublisher"/>; this class must be run against a real
 /// cluster before deployment.
 /// </remarks>
@@ -50,8 +51,8 @@ public sealed class KafkaTopicPublisher : ITopicPublisher, IDisposable
                     ReplicationFactor = _options.ReplicationFactor,
                     Configs = new Dictionary<string, string>
                     {
-                        // Bids are the legal record: never compact, never age out
-                        // on a schedule shorter than the retention policy allows.
+                        // Bids are the legal record: never compact, never age
+                        // out on a schedule shorter than retention allows.
                         ["cleanup.policy"] = "delete",
                         ["min.insync.replicas"] = "2"
                     }
@@ -70,14 +71,13 @@ public sealed class KafkaTopicPublisher : ITopicPublisher, IDisposable
     public async Task PublishAsync(
         string topic, string key, string payload, string eventType, CancellationToken ct)
     {
-        var message = new Message<string, string>
+        var result = await _producer.ProduceAsync(topic, new Message<string, string>
         {
             Key = key,
             Value = payload,
             Headers = new Headers { { "eventType", System.Text.Encoding.UTF8.GetBytes(eventType) } }
-        };
+        }, ct);
 
-        var result = await _producer.ProduceAsync(topic, message, ct);
         if (result.Status != PersistenceStatus.Persisted)
             throw new InvalidOperationException(
                 $"Outbox message not persisted to {topic}: {result.Status}");
@@ -88,38 +88,5 @@ public sealed class KafkaTopicPublisher : ITopicPublisher, IDisposable
         _producer.Flush(TimeSpan.FromSeconds(10));
         _producer.Dispose();
         _admin.Dispose();
-    }
-}
-
-/// <summary>Records what was published, in order, so the relay can be tested.</summary>
-public sealed class InMemoryTopicPublisher : ITopicPublisher
-{
-    private readonly List<string> _actions = new();
-    private readonly object _gate = new();
-
-    public IReadOnlyList<string> Actions { get { lock (_gate) return _actions.ToList(); } }
-    public List<(string Topic, string Key, string Payload, string EventType)> Published { get; } = new();
-
-    /// <summary>Set to fail the next publish, to test that the row stays queued.</summary>
-    public Func<string, bool>? FailPublishFor { get; set; }
-
-    public Task EnsureTopicAsync(string topic, CancellationToken ct)
-    {
-        lock (_gate) _actions.Add($"ensure-topic:{topic}");
-        return Task.CompletedTask;
-    }
-
-    public Task PublishAsync(
-        string topic, string key, string payload, string eventType, CancellationToken ct)
-    {
-        if (FailPublishFor?.Invoke(eventType) == true)
-            throw new InvalidOperationException($"Simulated publish failure for {eventType}.");
-
-        lock (_gate)
-        {
-            _actions.Add($"publish:{topic}:{eventType}:{key}");
-            Published.Add((topic, key, payload, eventType));
-        }
-        return Task.CompletedTask;
     }
 }

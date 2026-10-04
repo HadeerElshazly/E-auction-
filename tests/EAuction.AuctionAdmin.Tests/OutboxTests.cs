@@ -1,6 +1,7 @@
 using EAuction.AuctionAdmin.Domain;
 using EAuction.AuctionAdmin.Outbox;
 using EAuction.AuctionAdmin.Persistence;
+using EAuction.Outbox;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -158,7 +159,7 @@ public class OutboxTests(PostgresFixture pg)
         }
 
         var publisher = new InMemoryTopicPublisher();
-        var relay = new OutboxRelay(pg.Factory, publisher, NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(pg.Factory, publisher, new AuctionOutboxRouter(), NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         var actions = publisher.Actions.ToList();
@@ -186,7 +187,7 @@ public class OutboxTests(PostgresFixture pg)
         }
 
         var publisher = new InMemoryTopicPublisher();
-        var relay = new OutboxRelay(pg.Factory, publisher, NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(pg.Factory, publisher, new AuctionOutboxRouter(), NullLogger<OutboxRelay<AdminDbContext>>.Instance);
         await relay.DrainOnceAsync(100, CancellationToken.None);
 
         var mine = publisher.Published.Where(p => p.Key == auction.Id.ToString()).ToList();
@@ -216,7 +217,7 @@ public class OutboxTests(PostgresFixture pg)
         }
 
         var publisher = new InMemoryTopicPublisher();
-        var relay = new OutboxRelay(pg.Factory, publisher, NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(pg.Factory, publisher, new AuctionOutboxRouter(), NullLogger<OutboxRelay<AdminDbContext>>.Instance);
 
         await relay.DrainOnceAsync(100, CancellationToken.None);
         var afterFirst = publisher.Published.Count(p => p.Key == auction.Id.ToString());
@@ -247,7 +248,7 @@ public class OutboxTests(PostgresFixture pg)
         {
             FailPublishFor = type => type == nameof(AuctionApproved)
         };
-        var relay = new OutboxRelay(pg.Factory, publisher, NullLogger<OutboxRelay>.Instance);
+        var relay = new OutboxRelay<AdminDbContext>(pg.Factory, publisher, new AuctionOutboxRouter(), NullLogger<OutboxRelay<AdminDbContext>>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => relay.DrainOnceAsync(100, CancellationToken.None));

@@ -132,7 +132,7 @@ bidding on the bundle. Total area and plot count are derived display fields.
 | **bid-catcher** | .NET 8 minimal API | Accept bids, verify, append to Kafka. No DB, no outbound calls |
 | **bid-processor** | .NET 8 worker | Order by offset, apply auction rules, determine winner, maintain the ladder and the hash-chained ledger. **Implemented** (§14) |
 | **auction-admin** | .NET 8 + Postgres + outbox | Auction CRUD, plots, documents, scheduling, preparation + award workflows. **Implemented** (§13) |
-| **participant** | .NET + Postgres | Registration, profile, booklet purchase, deposit, eligibility |
+| **participant** | .NET 8 + Postgres + outbox | Registration, profile, booklet purchase, deposit, eligibility. **Implemented** (§17) |
 | **payment** | .NET | Deposit, brokerage, refunds, settlement. PayTabs / SADAD adapters |
 | **document** | .NET + MinIO | Photos, booklets, signed award letters. AV scan |
 | **live-fanout** | .NET | SSE/WebSocket push of current price. Deliberately separate from the catcher |
@@ -162,6 +162,7 @@ signals and fail independently.
 | `auctions.sealed` | `auctionId` | yes | auction-admin | **bid-processor only** — ACL restricted |
 | `auctions.deposits` | `auctionId` | no | auction-admin | payment |
 | `auctions.participants` | `auctionId:bidderId` | yes | participant | bid-catcher |
+| `participants.payments` | `auctionId:bidderId` | no | participant | payment |
 | `bids.{auctionId}` | `auctionId` | no | bid-catcher | bid-processor |
 | `auctions.current-winner` | `auctionId` | yes | bid-processor | bid-catcher, live-fanout, query-bff |
 | `bids.rejected` | `auctionId:bidderId` | no | bid-processor | notification, query-bff |
@@ -993,3 +994,131 @@ cluster as a pod that will not schedule.
 | No charts for Kafka, Postgres, Keycloak, MinIO | Strimzi and CloudNativePG have their own operators; these are dependencies to declare, not to reimplement |
 | No NetworkPolicy | `auctions.sealed` is ACL'd at the Kafka level (D-23), but pod-level isolation is not expressed |
 | No front-end charts | React apps and the mobile BFF are not built yet |
+
+---
+
+## 17. Participant service, and the catcher's missing wiring
+
+### The gap this closed
+
+The bid catcher's state came from nowhere. `CatcherState` had `UpsertAuction`,
+`GrantEligibility` and `UpdateCurrentPrice`, and nothing called them outside
+the dev-seed endpoint and the tests — so in any real deployment the catcher
+started empty and rejected every bid as an unknown auction. It passed its
+tests because the tests injected the state directly.
+
+`auctions.participants` was not even declared in `Topics`; it existed as a
+string in a comment. Nothing produced it, because the participant service did
+not exist.
+
+Both halves are now built: `ControlPlane` fills the catcher from
+`auctions.upcoming`, `auctions.participants` and `auctions.current-winner`, and
+the participant service produces the eligibility topic.
+
+### Deriving the signing key instead of distributing it
+
+The obvious design has the participant service mint a random per-auction
+secret and publish it on `auctions.participants` for the catcher to read. That
+puts a live credential on a topic, readable by anything with topic access and
+retained in the log until compaction happens to catch up — and compaction is a
+background process with no deadline.
+
+Deriving removes the problem rather than guarding it. Both services hold the
+same master key, from the cluster's secret store and never from Kafka:
+
+```
+secret = HMAC-SHA256(master, "eauction-bid-key-v1" || auctionId || bidderId || epoch)
+```
+
+The topic then carries the eligibility fact and an epoch. Reading the whole
+topic tells you **who may bid, not how to bid as them**. A test asserts no
+payload on that topic contains a derived secret.
+
+The epoch rotates one bidder's key — a lost phone, a suspected leak — without
+touching the master or anybody else's. The catcher derives once when
+eligibility is granted and keeps the result in process memory, so the hot path
+still costs exactly one HMAC: the one that verifies the frame.
+
+### The admission path
+
+```
+Nafath assertion ──► Bidder registered (identity is never self-asserted)
+         │
+         ▼
+   CompleteProfile  (إكمال الملف الشخصي)
+         │
+         ▼
+   PurchaseBooklet  (شراء كراسة الشروط) ── non-refundable, payment ref recorded
+         │
+         ▼
+   AcceptTerms      (الموافقة على الشروط والأحكام) ── timestamped
+         │
+         ▼
+   ChooseDeposit ───► DepositRequested ──► participants.payments
+         │
+         ├─ Payment:        ConfirmDepositPayment(ref)
+         └─ BankGuarantee:  SubmitBankGuarantee → VerifyBankGuarantee(admin)
+         │
+         ▼
+      Eligible ──► ParticipantEligibilityChanged ──► auctions.participants
+                                                           │
+                                                           ▼
+                                                     bid catcher
+```
+
+Eligibility re-checks every requirement at the moment it is granted rather
+than trusting the status it arrived in — this is the point where the catcher
+starts accepting the bidder's money.
+
+**Uploading a bank guarantee is not settling one.** A guarantee is worth
+nothing until an administrator has checked it is real, and one that expires
+before the auction ends is refused outright: it would be worthless at exactly
+the moment it is needed.
+
+### Shared outbox library
+
+The relay, the Debezium-shaped `OutboxMessage` and the Kafka publisher moved
+to `EAuction.Outbox`, used by both auction-admin and participant. Duplicating
+~250 lines of at-least-once relay logic across services is exactly the kind of
+thing that drifts.
+
+Service-specific behaviour goes through `IOutboxRouter`: where a row is
+routed, what must happen before publishing it (auction-admin creates the bid
+topic before announcing the auction), and what becomes true after
+(auction-admin moves Approved to Scheduled).
+
+### Verified
+
+**135 tests.** New coverage:
+
+| Claim | Where |
+|---|---|
+| A key derived on the participant side verifies on the catcher side, with only the epoch travelling | `ControlPlaneTests`, `AdmissionPathTests` |
+| No signing secret appears anywhere on the participants topic | `AdmissionPathTests` |
+| A bidder who completes subscription can bid; one who has not cannot | `AdmissionPathTests` |
+| Revoking a subscription stops the bidder at the catcher | `AdmissionPathTests` |
+| Rotating the key invalidates the secret the bidder already had | `AdmissionPathTests` |
+| A rolled-back subscription never reaches the topic | `AdmissionPathTests` |
+| A catcher started cold rebuilds everything from the log | `ControlPlaneTests` |
+| Subscription steps cannot be taken out of order | `SubscriptionTests` |
+| An unverified identity never becomes eligible | `SubscriptionTests` |
+| A guarantee expiring before the auction ends is refused | `SubscriptionTests` |
+| Uploading a guarantee is not settling it | `SubscriptionTests` |
+| Deposit resolution is applied once however often it arrives | `SubscriptionTests` |
+
+**A latent test bug this surfaced.** `CatcherState.Screen()` consumes a
+rate-limit token, so polling it as a wait predicate drains the bucket (20/sec)
+long before a 5-second wait expires, and the condition can never become true.
+Two earlier `ControlPlaneTests` had the same pattern and passed only because
+their condition happened to be met in the first few polls. Fixed by lifting
+the limit in tests that are not about rate limiting.
+
+### Not yet done
+
+| Gap | Note |
+|---|---|
+| **Nafath is not integrated** | `POST /bidders/nafath` stands in for the callback and is open. It must be gated before any real use — identity is the one thing a bidder cannot be allowed to assert about themselves |
+| **No authentication on any endpoint** | Including the signing-key endpoint, which hands out a bidder's credential to anyone who asks |
+| Payments are references, not integrations | `DepositRequested` is published; nothing consumes it. PayTabs and SADAD adapters are not built |
+| Documents are ids only | The bank guarantee is a `Guid` validated against nothing |
+| Company bidders | Individuals only; Nafath's delegation path is a different integration |

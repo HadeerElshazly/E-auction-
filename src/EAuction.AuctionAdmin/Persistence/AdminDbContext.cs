@@ -1,5 +1,6 @@
 using EAuction.AuctionAdmin.Domain;
 using EAuction.Core;
+using EAuction.Outbox;
 using Microsoft.EntityFrameworkCore;
 
 namespace EAuction.AuctionAdmin.Persistence;
