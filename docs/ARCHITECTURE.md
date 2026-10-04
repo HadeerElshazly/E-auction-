@@ -79,6 +79,7 @@ design change, not a configuration change.
 | D-20 | **HMAC-signed bids.** Each bid carries `nonce + ts + HMAC(secret, payload)`; the secret never goes on the wire | ~200ns to verify. Gives replay protection and non-repudiation |
 | D-21 | **Hash-chained append-only bid ledger** + signed receipt to the bidder | Slide 5: منع التلاعب بسجلات العروض والمزايدات |
 | D-22 | **Leading bidder identity is masked** in public views (`مزايد #4`) | Privacy, anti-collusion, PDPL |
+| D-23 | **The reserve price travels on its own topic** (`auctions.sealed`), never inside the public auction definition | Added while building auction-admin. The catcher and the query BFF both consume `auctions.upcoming`, and the BFF feeds public APIs — so a misconfigured BFF could leak the reserve. Splitting it makes D-06 an ACL guarantee instead of a thing every developer must remember |
 
 ### Performance target
 
@@ -130,7 +131,7 @@ bidding on the bundle. Total area and plot count are derived display fields.
 |---|---|---|
 | **bid-catcher** | .NET 8 minimal API | Accept bids, verify, append to Kafka. No DB, no outbound calls |
 | **bid-processor** | .NET worker | Order by offset, apply auction rules, determine winner, maintain the ladder and the hash-chained ledger |
-| **auction-admin** | .NET + Postgres + outbox | Auction CRUD, plots, documents, scheduling, preparation + award workflows |
+| **auction-admin** | .NET 8 + Postgres + outbox | Auction CRUD, plots, documents, scheduling, preparation + award workflows. **Implemented** (§13) |
 | **participant** | .NET + Postgres | Registration, profile, booklet purchase, deposit, eligibility |
 | **payment** | .NET | Deposit, brokerage, refunds, settlement. PayTabs / SADAD adapters |
 | **document** | .NET + MinIO | Photos, booklets, signed award letters. AV scan |
@@ -158,6 +159,8 @@ signals and fail independently.
 | Topic | Key | Compacted | Producer | Consumers |
 |---|---|---|---|---|
 | `auctions.upcoming` | `auctionId` | yes | auction-admin | bid-catcher, query-bff |
+| `auctions.sealed` | `auctionId` | yes | auction-admin | **bid-processor only** — ACL restricted |
+| `auctions.deposits` | `auctionId` | no | auction-admin | payment |
 | `auctions.participants` | `auctionId:bidderId` | yes | participant | bid-catcher |
 | `bids.{auctionId}` | `auctionId` | no | bid-catcher | bid-processor |
 | `auctions.current-winner` | `auctionId` | yes | bid-processor | bid-catcher, live-fanout, query-bff |
@@ -493,11 +496,11 @@ so Compose and Helm share one source of truth.
 
 ### Environment facts — needed before charts and CI are final
 
-| # | Question | Current assumption |
+| # | Question | Status |
 |---|---|---|
-| E-1 | On-prem Kubernetes distribution | Plain k8s + OpenShift compatibility layer (§10.1) |
-| E-2 | Outbound internet: full / whitelist / air-gapped | Whitelist, behind egress proxy abstraction (§10.1) |
-| E-3 | Is ACR reachable from on-prem, or local Harbor? | Follows E-2 |
+| E-1 | On-prem Kubernetes distribution | **Still open.** Plain k8s + OpenShift compatibility layer (§10.1) |
+| E-2 | Outbound internet | **Answered: full access.** Nafath, PayTabs, SADAD and SMS are called directly. The egress abstraction is kept anyway — this is a multi-client product and the next client may be restricted |
+| E-3 | ACR reachable from on-prem | **Answered: yes.** ACR for images and charts; no local Harbor needed |
 
 ### Contract terms — needed before go-live, not before code
 
@@ -517,7 +520,7 @@ These block the كراسة الشروط, and legal review is slow. Start them no
 |---|---|---|
 | P-1 | 327 or 372 plots? Deck says 372 total but 165 + 162 = 327 | Reference data only |
 | P-2 | Report definitions for التقارير | Framework stubbed |
-| P-3 | Payment: PayTabs (cards) + SADAD (bills) — confirm merchant accounts exist | Adapter interface built either way |
+| P-3 | Confirm PayTabs and SADAD merchant accounts exist | Adapter interface built either way |
 
 ### Known risk
 
@@ -578,3 +581,121 @@ shared vCPU with the generator on the same host. See `tools/loadtest/README.md`.
 2. Wire JWT verification against cached JWKS.
 3. Auction-admin service with the outbox, and the approval workflow that
    publishes to `auctions.upcoming`.
+
+---
+
+## 13. Auction administration service
+
+Implements both workflows from slide 6: **إعداد المزاد** (prepare) and
+**الترسية** (award), with the transactional outbox.
+
+### The outbox, and why it is not CDC
+
+Domain events raised by the `Auction` aggregate are drained into outbox rows
+inside `SaveChangesAsync`, so the event and the state change share one
+transaction. The event cannot exist without the state change, and the state
+change cannot commit without the event queued.
+
+The table uses **Debezium EventRouter's default column names verbatim**
+(`id`, `aggregatetype`, `aggregateid`, `type`, `payload`), so the production
+path needs no bespoke publisher — Debezium tails the WAL and routes. See
+`deploy/debezium/`.
+
+CDC directly off the domain tables was rejected (D-16): it makes the internal
+schema the public event contract, and every column rename becomes a breaking
+change for consumers.
+
+A polling `OutboxRelay` ships alongside for local development and small
+deployments. The two are interchangeable because the contract is the table,
+not the publisher. **Run one or the other, never both** — both are
+at-least-once, so running both doubles every event.
+
+### Topic ordering guarantee
+
+The relay creates an auction's bid topic **before** publishing the auction to
+`auctions.upcoming`. Broker auto-create is off, so without that ordering the
+catcher could accept a bid for a topic that does not exist. Tested in
+`OutboxTests.The_relay_creates_the_bid_topic_before_publishing_the_auction`.
+
+### Where the reserve price goes
+
+Approval raises two events, not one:
+
+| Event | Topic | Contents |
+|---|---|---|
+| `AuctionApproved` | `auctions.upcoming` | the public definition — **no reserve field exists on the type** |
+| `AuctionReserveSet` | `auctions.sealed` | the reserve alone, ACL'd to bid-processor |
+
+`AuctionResponse`, the service's own API view, also omits the reserve — it is
+not returned to anyone through HTTP, including admins, and not after an
+auction fails to reach it. A test asserts the public event type has no
+property whose name contains "Reserve", so adding one fails the build rather
+than leaking quietly.
+
+### The award workflow is re-entrant
+
+A cascade creates a **new `Award` row**, never mutates the previous one. Each
+step is a full new ترسية — fresh committee confirmation, fresh letters, fresh
+signature — and the record of who was awarded and why it moved on survives.
+
+Order is enforced: an award letter must exist before a signed one can be
+uploaded, and the winner cannot be notified before the signed letter is back.
+Telling a winner before the letter is executed announces a decision that is
+not yet binding.
+
+`DepositsReleasable` is emitted **only** on settlement or unsold — never when
+bidding closes. While the cascade can still reach a losing bidder, their
+deposit is held through the compliance window of everyone above them (§8.3).
+
+### Editing stops at approval
+
+Edits are confined to `Draft` and `Rejected`. Once approved, the auction is
+public and bidders have relied on its terms; changing the dates or the deposit
+underneath them is not an edit, it is a different auction.
+
+### Verified
+
+**33 tests pass** against a real PostgreSQL instance — not an in-memory
+provider, because the outbox's entire claim is transactional and an in-memory
+provider has no transactions worth testing.
+
+| Claim | Where |
+|---|---|
+| Approval writes the state change and both events in one commit | `OutboxTests` |
+| A rolled-back transaction leaves neither the state change nor the event | `OutboxTests` |
+| The public payload contains no reserve price; the sealed one does | `OutboxTests` |
+| The bid topic is created before the auction is published | `OutboxTests` |
+| Each aggregate type routes to its own topic, keyed by auctionId | `OutboxTests` |
+| A relayed message is not published twice | `OutboxTests` |
+| A failed publish leaves the message queued for retry | `OutboxTests` |
+| Incomplete auctions report every problem at once and cannot be submitted | `PreparationWorkflowTests` |
+| A reserve below the opening price, or a past start date, is refused | `PreparationWorkflowTests` |
+| Editing is refused once approved | `PreparationWorkflowTests` |
+| The committee confirms the award; the system only offers a candidate | `AwardWorkflowTests` |
+| The winner is notified only after the signed letter returns | `AwardWorkflowTests` |
+| A cascade creates a fresh award and preserves the previous one | `AwardWorkflowTests` |
+| Deposits are not releasable until the award is final | `AwardWorkflowTests` |
+| Lifecycle transitions cannot be skipped | `AwardWorkflowTests` |
+
+### A bug this work surfaced
+
+EF Core treats a pre-assigned Guid primary key on an entity discovered through
+a navigation as proof the row already exists, and emits an `UPDATE` instead of
+an `INSERT`. The update affects zero rows and throws
+`DbUpdateConcurrencyException`.
+
+It did not show when saving a new aggregate — an explicit `Add` cascades
+`Added` to everything reachable — only when adding an `Award` to an
+already-tracked `Auction`, which is exactly the cascade path. Fixed with
+`ValueGeneratedNever()` on every domain-assigned key, which is also simply
+accurate: these identities come from the domain, not the store.
+
+### Not yet done
+
+| Gap | Note |
+|---|---|
+| `KafkaTopicPublisher` has never run against a broker | Same constraint as `KafkaBidLog`: no Docker daemon. Routing and ordering are tested through the in-memory publisher |
+| The Debezium connector is unrun | Config is written against EventRouter's documented defaults and the table matches them, but it has not been registered against a live Connect cluster |
+| No authentication or authorisation | Every endpoint is open. Committee actions in particular must be role-gated before any real use |
+| Documents are referenced by id only | The document service does not exist yet; `BookletDocumentId` and the letter ids are not validated against anything |
+| Lifecycle transitions are manual | `MarkLive`, `MarkClosing` and `OfferCandidate` are endpoints. They should be driven by `auctions.lifecycle` from the processor |

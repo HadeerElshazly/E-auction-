@@ -1,0 +1,40 @@
+{
+  "name": "auction-admin-outbox",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "plugin.name": "pgoutput",
+
+    "database.hostname": "${env:ADMIN_DB_HOST}",
+    "database.port": "5432",
+    "database.user": "${env:ADMIN_DB_USER}",
+    "database.password": "${env:ADMIN_DB_PASSWORD}",
+    "database.dbname": "${env:ADMIN_DB_NAME}",
+    "topic.prefix": "eauction",
+
+    "_comment_table": "Only the outbox. The domain tables are never streamed: CDC straight off them would make the internal schema the public event contract (D-16).",
+    "table.include.list": "public.outbox",
+
+    "_comment_slot": "One replication slot per connector. Postgres needs wal_level=logical and a slot budget that covers it.",
+    "slot.name": "eauction_admin_outbox",
+    "publication.name": "eauction_admin_outbox_pub",
+    "publication.autocreate.mode": "filtered",
+
+    "_comment_router": "The EventRouter SMT reads the default column names, which is why the table uses them verbatim.",
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.table.field.event.id": "id",
+    "transforms.outbox.table.field.event.key": "aggregateid",
+    "transforms.outbox.table.field.event.type": "type",
+    "transforms.outbox.table.field.event.payload": "payload",
+    "transforms.outbox.table.field.event.timestamp": "created_at",
+
+    "_comment_topics": "aggregatetype selects the destination. Each destination has its own aggregate type so auctions.sealed, which carries the reserve price, is a separate topic with its own ACL (D-06).",
+    "transforms.outbox.route.by.field": "aggregatetype",
+    "transforms.outbox.route.topic.replacement": "auctions.${routedByValue}",
+    "transforms.outbox.table.fields.additional.placement": "type:header:eventType",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}

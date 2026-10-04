@@ -93,6 +93,49 @@ services:
       timeout: 10s
       retries: 10
 
+  # Kafka Connect with Debezium, for the auction-admin outbox. The service can
+  # also run its own polling relay instead — run one or the other, never both.
+  kafka-connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: eauction-connect
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: eauction-connect
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      ADMIN_DB_HOST: postgres
+      ADMIN_DB_USER: eauction
+      ADMIN_DB_PASSWORD: eauction
+      ADMIN_DB_NAME: eauction
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  auction-admin:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.auctionadmin
+    container_name: eauction-auction-admin
+    ports:
+      - "5090:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=eauction"
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ReplicationFactor: "1"
+      Kafka__BidTopicPartitions: "6"
+      Award__ComplianceWindowDays: "5"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   bid-catcher:
     build:
       context: ../..
