@@ -73,5 +73,11 @@ public sealed class InMemoryBidLog : IBidLog
         }
     }
 
+    public ValueTask<long> GetEndOffsetAsync(Guid auctionId, CancellationToken ct)
+    {
+        var stream = _streams.GetOrAdd(auctionId, _ => new Stream());
+        lock (stream.Gate) return ValueTask.FromResult((long)stream.Records.Count);
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

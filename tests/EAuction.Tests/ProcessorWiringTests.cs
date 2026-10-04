@@ -32,13 +32,13 @@ public class ProcessorWiringTests
         var d = Define(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(30));
 
         await h.PublishApprovalAsync(d);
-        await h.DrainControlAsync();
+        await h.RecoverAsync();
 
         Assert.False(h.Registry.TryGet(d.AuctionId, out _));
         Assert.Contains(d.AuctionId, h.Registry.AwaitingReserve);
 
         await h.PublishReserveAsync(d);
-        await h.DrainControlAsync();
+        await h.RecoverAsync();
 
         Assert.True(h.Registry.TryGet(d.AuctionId, out var ready));
         Assert.Equal(1_500_000_00, ready.ReservePriceMinorUnits);
@@ -53,13 +53,13 @@ public class ProcessorWiringTests
         var d = Define(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(30));
 
         await h.PublishReserveAsync(d);
-        await h.DrainControlAsync();
+        await h.RecoverAsync();
 
         Assert.False(h.Registry.TryGet(d.AuctionId, out _));
         Assert.Contains(d.AuctionId, h.Registry.AwaitingDefinition);
 
         await h.PublishApprovalAsync(d);
-        await h.DrainControlAsync();
+        await h.RecoverAsync();
 
         Assert.True(h.Registry.TryGet(d.AuctionId, out _));
     }
@@ -75,7 +75,7 @@ public class ProcessorWiringTests
 
         await h.PublishApprovalAsync(d);
         await h.PublishReserveAsync(d);
-        await h.DrainControlAsync();
+        await h.RecoverAsync();
         return (h, d);
     }
 

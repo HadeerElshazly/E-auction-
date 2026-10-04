@@ -165,6 +165,7 @@ signals and fail independently.
 | `bids.{auctionId}` | `auctionId` | no | bid-catcher | bid-processor |
 | `auctions.current-winner` | `auctionId` | yes | bid-processor | bid-catcher, live-fanout, query-bff |
 | `bids.rejected` | `auctionId:bidderId` | no | bid-processor | notification, query-bff |
+| `processor.checkpoints` | `auctionId` | yes | bid-processor | bid-processor (own recovery) |
 | `auctions.lifecycle` | `auctionId` | no | bid-processor, auction-admin | all |
 
 ### Topic lifecycle
@@ -825,6 +826,94 @@ instead of production going quiet.
 | Gap | Note |
 |---|---|
 | `KafkaEventStream` and `KafkaBidLog` have never run against a broker | Still no Docker daemon. Both are validated through in-memory implementations mirroring the same ordering contract |
-| Processor state is not durable across restarts | It replays the compacted control topics, but consumed bid-log offsets are not committed, so a restart reprocesses an auction from offset 0. Correct — the engine is deterministic — but it republishes current-winner and rejections. Needs offset commits before deployment |
+| ~~Processor state is not durable across restarts~~ | **Fixed** — see §15 |
 | One pump per auction, all in one process | Fine at this scale. Sharding auctions across processor instances by consumer group is not done |
 | No supervisor backpressure | A very hot auction's pump publishes to `current-winner` on every accepted bid. Should coalesce |
+
+---
+
+## 15. Processor restart
+
+A restart used to replay every bid from offset 0 and republish as it went —
+deterministic, so the result was right, but it re-sent an outbid notification
+for every bid the auction ever had.
+
+### The split that fixes it
+
+Two different questions were being conflated:
+
+| Question | Answer |
+|---|---|
+| What is the auction's state? | Replay **every** bid from offset 0. Deterministic, reproduces exactly, needs no stored state |
+| What have consumers already seen? | A **checkpoint**: the highest bid offset whose side effects were published |
+
+So the replay still runs in full — that is what rebuilds the price, leader,
+ladder, extension count and ledger — but the supervisor stays **silent** over
+every offset at or below the checkpoint. Nothing is recomputed from a snapshot,
+and nothing is re-announced.
+
+The checkpoint lives on a compacted topic, `processor.checkpoints`, keyed by
+auction, because the processor must be restartable on any node.
+
+### Why checkpoints are periodic
+
+Committing on every bid would double the write load on the hot path. Delivery
+is at-least-once either way, so the only cost of a stale checkpoint is
+republishing the tail since the last commit — bounded by the commit interval
+(default: 100 records or 2 seconds), not by the length of the auction. A test
+pins that bound.
+
+The one place it commits unconditionally is immediately before announcing a
+close, so everything the close implies is durable before anyone is told.
+
+### Recovery before action
+
+Startup has two phases, and the order matters:
+
+1. **Recover.** Replay `processor.checkpoints`, `auctions.upcoming`,
+   `auctions.sealed`, then `auctions.lifecycle` — to a quiet point. The
+   supervisor records only; it takes no action.
+2. **Resume.** Start the bid pumps. From here it acts on what it consumes.
+
+Acting during phase 1 would re-announce auctions, re-close them, and re-offer
+candidates the committee has already seen.
+
+**The processor's own published events are its recovery log.** Replaying
+`auctions.lifecycle` tells it which auctions it already announced, which it
+already closed, how many candidate offers it already made, and who has been
+disqualified. Cascade position is the number of disqualifications, which is
+exactly how it is incremented in the first place — so there is nothing extra
+to persist.
+
+### Re-issuing an owed offer
+
+One window needs explicit repair: the processor dies after a disqualification
+reaches the topic but before the next candidate is published. Nothing would
+ever offer it, and the committee would wait forever.
+
+Resume reconciles it. One offer is owed per close, plus one per
+disqualification; if fewer were published, the missing one is issued.
+
+**A bug this surfaced.** The first version reconciled immediately after
+launching the pumps — before the replay had rebuilt the ladder. It read an
+empty engine and published `LadderExhausted` on an auction with a perfectly
+good next bidder: an auction wrongly declared unsold, from a restart.
+
+The fix needed the log to say where it ends, so `IBidLog.GetEndOffsetAsync`
+was added (Kafka watermarks; record count in memory). Resume now waits for the
+replay to reach the end of the log before reading the rebuilt ladder.
+
+### Verified
+
+Eight tests in `ProcessorRestartTests`:
+
+| Claim |
+|---|
+| A restart republishes nothing for bids already handled |
+| A restart rebuilds price, leader and ledger head exactly |
+| A restart does not resend rejections |
+| A restart after a close does not close, announce or offer again |
+| A restart restores the cascade position and the disqualified set |
+| An offer owed when the process died is re-issued on resume |
+| Bids arriving after a restart publish normally |
+| A stale checkpoint republishes only what it missed, not the whole auction |

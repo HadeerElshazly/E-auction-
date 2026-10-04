@@ -22,6 +22,16 @@ public interface IBidLog : IAsyncDisposable
 
     /// <summary>Reads the stream for an auction from <paramref name="fromOffset"/>.</summary>
     IAsyncEnumerable<LoggedBid> ReadAsync(Guid auctionId, long fromOffset, CancellationToken ct);
+
+    /// <summary>
+    /// The offset one past the last record, so a reader can tell when it has
+    /// caught up. Returns 0 for an auction with no bids.
+    ///
+    /// Needed on restart: the engine is rebuilt by replay, and anything that
+    /// reads the rebuilt state — the candidate the cascade owes, for one —
+    /// has to wait for that replay rather than read a half-built ladder.
+    /// </summary>
+    ValueTask<long> GetEndOffsetAsync(Guid auctionId, CancellationToken ct);
 }
 
 public readonly record struct LoggedBid(long Offset, ReadOnlyMemory<byte> Frame);

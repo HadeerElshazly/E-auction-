@@ -112,6 +112,21 @@ public sealed class KafkaBidLog : IBidLog
         }
     }
 
+    public ValueTask<long> GetEndOffsetAsync(Guid auctionId, CancellationToken ct)
+    {
+        using var consumer = new ConsumerBuilder<byte[], byte[]>(new ConsumerConfig
+        {
+            BootstrapServers = _options.BootstrapServers,
+            GroupId = $"{_options.ConsumerGroup}-watermark"
+        }).Build();
+
+        var watermarks = consumer.QueryWatermarkOffsets(
+            new TopicPartition(TopicFor(auctionId), new Partition(0)),
+            TimeSpan.FromSeconds(10));
+
+        return ValueTask.FromResult(watermarks.High.Value);
+    }
+
     public ValueTask DisposeAsync()
     {
         _producer.Flush(TimeSpan.FromSeconds(10));

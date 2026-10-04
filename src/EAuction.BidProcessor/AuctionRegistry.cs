@@ -43,7 +43,7 @@ public sealed class AuctionRegistry(ILogger<AuctionRegistry> logger)
     {
         switch (record.Topic)
         {
-            case Topics.Upcoming when record.EventType == "AuctionApproved":
+            case Topics.Upcoming when record.EventType == InboundEvents.AuctionApproved:
             {
                 var payload = JsonSerializer.Deserialize<AuctionApprovedPayload>(record.Payload, Json);
                 if (payload is null) return;
@@ -52,7 +52,7 @@ public sealed class AuctionRegistry(ILogger<AuctionRegistry> logger)
                 break;
             }
 
-            case Topics.Sealed when record.EventType == "AuctionReserveSet":
+            case Topics.Sealed when record.EventType == InboundEvents.AuctionReserveSet:
             {
                 var payload = JsonSerializer.Deserialize<AuctionReserveSetPayload>(record.Payload, Json);
                 if (payload is null) return;

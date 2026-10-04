@@ -8,33 +8,55 @@ namespace EAuction.Tests;
 /// <summary>
 /// Wires a registry and supervisor over in-memory transports and drives the
 /// clock by hand, so close timing is tested without sleeping through it.
+///
+/// The transports can be handed to a second harness to simulate a restart:
+/// the Kafka topics survive a process dying, so the test keeps them and throws
+/// away everything else.
 /// </summary>
 internal sealed class ProcessorHarness : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly CancellationTokenSource _cts = new();
 
-    public InMemoryBidLog BidLog { get; } = new();
-    public InMemoryEventStream Events { get; } = new();
+    public InMemoryBidLog BidLog { get; }
+    public InMemoryEventStream Events { get; }
     public AuctionRegistry Registry { get; }
     public AuctionSupervisor Supervisor { get; }
+    public CheckpointStore Checkpoints { get; }
 
-    public ProcessorHarness(TimeSpan? closeGrace = null)
+    public ProcessorHarness(
+        TimeSpan? closeGrace = null,
+        CheckpointPolicy? checkpointPolicy = null,
+        InMemoryBidLog? bidLog = null,
+        InMemoryEventStream? events = null)
     {
+        BidLog = bidLog ?? new InMemoryBidLog();
+        Events = events ?? new InMemoryEventStream();
+        Checkpoints = new CheckpointStore(Events);
+
         Registry = new AuctionRegistry(NullLogger<AuctionRegistry>.Instance);
         Supervisor = new AuctionSupervisor(
-            BidLog, Events,
-            new SupervisorOptions { CloseGrace = closeGrace ?? TimeSpan.FromSeconds(5) },
+            BidLog, Events, Checkpoints,
+            new SupervisorOptions
+            {
+                CloseGrace = closeGrace ?? TimeSpan.FromSeconds(5),
+                // Commit on every published record unless a test says otherwise,
+                // so restart behaviour is exercised deterministically.
+                Checkpoint = checkpointPolicy
+                    ?? new CheckpointPolicy { EveryRecords = 1, EveryInterval = TimeSpan.Zero }
+            },
             NullLogger<AuctionSupervisor>.Instance);
 
         Registry.AuctionReady += definition => Supervisor.Start(definition, _cts.Token);
     }
 
+    /// <summary>A fresh processor over the same topics — i.e. a restart.</summary>
+    public ProcessorHarness Restart(TimeSpan? closeGrace = null) =>
+        new(closeGrace, bidLog: BidLog, events: Events);
+
     public CancellationToken Token => _cts.Token;
 
-    /// <summary>Publishes what auction-admin's outbox relay would publish.</summary>
-    public async Task PublishApprovalAsync(AuctionDefinition d)
-    {
+    public async Task PublishApprovalAsync(AuctionDefinition d) =>
         await Events.PublishAsync(Topics.Upcoming, d.AuctionId.ToString(),
             JsonSerializer.Serialize(new
             {
@@ -48,8 +70,7 @@ internal sealed class ProcessorHarness : IAsyncDisposable
                 maxExtensions = d.MaxExtensions,
                 channel = d.Channel.ToString()
             }, Json),
-            "AuctionApproved", Token);
-    }
+            InboundEvents.AuctionApproved, Token);
 
     public Task PublishReserveAsync(AuctionDefinition d) =>
         Events.PublishAsync(Topics.Sealed, d.AuctionId.ToString(),
@@ -58,19 +79,15 @@ internal sealed class ProcessorHarness : IAsyncDisposable
                 auctionId = d.AuctionId,
                 reservePriceMinorUnits = d.ReservePriceMinorUnits
             }, Json),
-            "AuctionReserveSet", Token);
+            InboundEvents.AuctionReserveSet, Token);
 
     public Task PublishDisqualificationAsync(Guid auctionId, Guid bidderId) =>
         Events.PublishAsync(Topics.Lifecycle, auctionId.ToString(),
-            JsonSerializer.Serialize(new
-            {
-                auctionId, bidderId, reason = "لم يسدد"
-            }, Json),
-            "WinnerDisqualified", Token);
+            JsonSerializer.Serialize(new { auctionId, bidderId, reason = "لم يسدد" }, Json),
+            InboundEvents.WinnerDisqualified, Token);
 
     /// <summary>Appends a bid exactly as the catcher would, then waits for the pump.</summary>
-    public async Task BidAsync(
-        AuctionDefinition d, Guid bidder, long amount, DateTimeOffset at)
+    public async Task BidAsync(AuctionDefinition d, Guid bidder, long amount, DateTimeOffset at)
     {
         var running = Running(d.AuctionId);
         var before = running.ProcessedBidCount;
@@ -88,30 +105,32 @@ internal sealed class ProcessorHarness : IAsyncDisposable
         return running!;
     }
 
-    /// <summary>Feeds the registry by draining the control topics once.</summary>
-    public async Task DrainControlAsync()
+    /// <summary>
+    /// The startup sequence: replay the control topics in the order
+    /// ProcessorService uses, then resume. Recovering before acting is what
+    /// keeps a restart from re-announcing and re-offering.
+    /// </summary>
+    public async Task RecoverAsync()
     {
-        foreach (var topic in new[] { Topics.Upcoming, Topics.Sealed })
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-            cts.CancelAfter(TimeSpan.FromMilliseconds(200));
-            try
-            {
-                await foreach (var record in Events.ReadAsync(topic, cts.Token))
-                    Registry.Apply(record);
-            }
-            catch (OperationCanceledException) { }
-        }
+        await DrainAsync(Topics.Checkpoints, r => { Supervisor.ApplyCheckpoint(r); return Task.CompletedTask; });
+        await DrainAsync(Topics.Upcoming, r => { Registry.Apply(r); return Task.CompletedTask; });
+        await DrainAsync(Topics.Sealed, r => { Registry.Apply(r); return Task.CompletedTask; });
+        await DrainAsync(Topics.Lifecycle, r => Supervisor.ApplyLifecycleAsync(r, Token));
+        await Supervisor.ResumeAsync(Token);
     }
 
-    public async Task DrainLifecycleAsync()
+    /// <summary>Applies new lifecycle records after recovery, so they are acted on.</summary>
+    public Task DrainLifecycleAsync() =>
+        DrainAsync(Topics.Lifecycle, r => Supervisor.ApplyLifecycleAsync(r, Token));
+
+    private async Task DrainAsync(string topic, Func<StreamEvent, Task> handle)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
+        cts.CancelAfter(TimeSpan.FromMilliseconds(250));
         try
         {
-            await foreach (var record in Events.ReadAsync(Topics.Lifecycle, cts.Token))
-                await Supervisor.ApplyLifecycleAsync(record, Token);
+            await foreach (var record in Events.ReadAsync(topic, cts.Token))
+                await handle(record);
         }
         catch (OperationCanceledException) { }
     }
@@ -119,37 +138,34 @@ internal sealed class ProcessorHarness : IAsyncDisposable
     public async Task<List<(string EventType, string Payload)>> LifecycleAsync()
     {
         var found = new List<(string, string)>();
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
-        try
-        {
-            await foreach (var record in Events.ReadAsync(Topics.Lifecycle, cts.Token))
-                found.Add((record.EventType, record.Payload));
-        }
-        catch (OperationCanceledException) { }
+        await DrainAsync(Topics.Lifecycle, r => { found.Add((r.EventType, r.Payload)); return Task.CompletedTask; });
         return found;
     }
 
-    public async Task<List<T>> LifecycleOfAsync<T>(string eventType)
-    {
-        var all = await LifecycleAsync();
-        return all.Where(e => e.EventType == eventType)
-                  .Select(e => JsonSerializer.Deserialize<T>(e.Payload, Json)!)
-                  .ToList();
-    }
+    public async Task<List<T>> LifecycleOfAsync<T>(string eventType) =>
+        (await LifecycleAsync())
+            .Where(e => e.EventType == eventType)
+            .Select(e => JsonSerializer.Deserialize<T>(e.Payload, Json)!)
+            .ToList();
 
     public async Task<List<T>> OnTopicAsync<T>(string topic)
     {
         var found = new List<T>();
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
-        try
+        await DrainAsync(topic, r =>
         {
-            await foreach (var record in Events.ReadAsync(topic, cts.Token))
-                found.Add(JsonSerializer.Deserialize<T>(record.Payload, Json)!);
-        }
-        catch (OperationCanceledException) { }
+            found.Add(JsonSerializer.Deserialize<T>(r.Payload, Json)!);
+            return Task.CompletedTask;
+        });
         return found;
+    }
+
+    public Task<int> CountOnAsync(string topic) => CountAsync(topic);
+
+    private async Task<int> CountAsync(string topic)
+    {
+        var count = 0;
+        await DrainAsync(topic, _ => { count++; return Task.CompletedTask; });
+        return count;
     }
 
     private static async Task WaitFor(Func<bool> condition, string message)
@@ -163,9 +179,28 @@ internal sealed class ProcessorHarness : IAsyncDisposable
         throw new TimeoutException(message);
     }
 
-    public async ValueTask DisposeAsync()
+    /// <summary>
+    /// Stops the pumps and waits for them, so a restart test does not end up
+    /// with two processors consuming the same bid log.
+    /// </summary>
+    public async Task StopAsync()
     {
         await _cts.CancelAsync();
+
+        var pumps = Supervisor.Running
+            .Select(r => r.Task)
+            .Where(t => t is not null)
+            .Cast<Task>()
+            .ToArray();
+
+        try { await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (OperationCanceledException) { }
+        catch (TimeoutException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!_cts.IsCancellationRequested) await _cts.CancelAsync();
         _cts.Dispose();
     }
 }

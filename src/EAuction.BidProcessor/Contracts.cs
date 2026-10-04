@@ -26,6 +26,18 @@ public sealed record AuctionReserveSetPayload
     public long ReservePriceMinorUnits { get; init; }
 }
 
+/// <summary>
+/// Event type names produced by auction-admin. Declared as constants because
+/// the producing types live in that service and are not referenced here — the
+/// dependency points the other way, so these cannot come from `nameof`.
+/// </summary>
+public static class InboundEvents
+{
+    public const string AuctionApproved = "AuctionApproved";
+    public const string AuctionReserveSet = "AuctionReserveSet";
+    public const string WinnerDisqualified = "WinnerDisqualified";
+}
+
 public sealed record WinnerDisqualifiedPayload
 {
     public Guid AuctionId { get; init; }

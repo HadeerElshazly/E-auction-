@@ -27,14 +27,26 @@ else
 builder.Services.AddSingleton(new SupervisorOptions
 {
     CloseGrace = TimeSpan.FromSeconds(
-        builder.Configuration.GetValue("Processor:CloseGraceSeconds", 5))
+        builder.Configuration.GetValue("Processor:CloseGraceSeconds", 5)),
+    Checkpoint = new CheckpointPolicy
+    {
+        EveryRecords = builder.Configuration.GetValue("Processor:CheckpointEveryRecords", 100),
+        EveryInterval = TimeSpan.FromSeconds(
+            builder.Configuration.GetValue("Processor:CheckpointEverySeconds", 2))
+    }
 });
 
 builder.Services.AddSingleton(new ProcessorServiceOptions
 {
     TickInterval = TimeSpan.FromMilliseconds(
-        builder.Configuration.GetValue("Processor:TickIntervalMs", 500))
+        builder.Configuration.GetValue("Processor:TickIntervalMs", 500)),
+    RecoveryQuietPeriod = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("Processor:RecoveryQuietSeconds", 2)),
+    RecoveryTimeout = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("Processor:RecoveryTimeoutSeconds", 120))
 });
+
+builder.Services.AddSingleton<CheckpointStore>();
 
 builder.Services.AddSingleton<AuctionRegistry>();
 builder.Services.AddSingleton<AuctionSupervisor>();

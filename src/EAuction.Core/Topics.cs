@@ -25,6 +25,12 @@ public static class Topics
 
     public const string BidsRejected = "bids.rejected";
 
+    /// <summary>
+    /// Compacted. How far the processor has published side effects for each
+    /// auction, so a restart does not re-announce work consumers already saw.
+    /// </summary>
+    public const string Checkpoints = "processor.checkpoints";
+
     public const string BidTopicPrefix = "bids.";
 
     public static string BidTopicFor(Guid auctionId) => BidTopicPrefix + auctionId.ToString("N");

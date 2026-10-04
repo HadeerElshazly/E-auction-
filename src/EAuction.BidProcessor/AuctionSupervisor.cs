@@ -14,15 +14,26 @@ public sealed record SupervisorOptions
     /// rejected on the record rather than vanish.
     /// </summary>
     public TimeSpan CloseGrace { get; init; } = TimeSpan.FromSeconds(5);
+
+    public CheckpointPolicy Checkpoint { get; init; } = new();
+
+    /// <summary>
+    /// How long resume waits for a replay to rebuild an auction's ladder
+    /// before giving up on re-issuing that auction's owed candidate offer.
+    /// </summary>
+    public TimeSpan ReplayTimeout { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 /// <summary>
 /// Runs every live auction and closes the loop with auction-admin.
 ///
-/// Inbound:  auctions.upcoming + auctions.sealed (definitions), and
-///           auctions.lifecycle (WinnerDisqualified, to drive the cascade).
-/// Outbound: auctions.current-winner, bids.rejected, and auctions.lifecycle
-///           (AuctionStarted, AuctionClosed, CandidateOffered, LadderExhausted).
+/// Startup has two phases. During <b>recovery</b> the supervisor replays its
+/// own published events and the checkpoints to work out where it left off, and
+/// takes no action. <see cref="ResumeAsync"/> then starts the bid pumps, and
+/// from that point the supervisor acts on what it consumes.
+///
+/// The phases matter: without them a restart would re-announce auctions,
+/// re-close them, and re-offer candidates the committee has already seen.
 ///
 /// The committee still awards (D-08). This service only ever says who
 /// qualifies; it never decides that anyone has won.
@@ -30,39 +41,135 @@ public sealed record SupervisorOptions
 public sealed class AuctionSupervisor(
     IBidLog bidLog,
     IEventStream events,
+    CheckpointStore checkpoints,
     SupervisorOptions options,
     ILogger<AuctionSupervisor> logger)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly ConcurrentDictionary<Guid, RunningAuction> _running = new();
+    private readonly ConcurrentDictionary<Guid, RecoveredState> _recovered = new();
+    private volatile bool _resumed;
 
+    public bool Resumed => _resumed;
     public IReadOnlyCollection<RunningAuction> Running => _running.Values.ToList();
 
     public bool TryGet(Guid auctionId, out RunningAuction auction) =>
         _running.TryGetValue(auctionId, out auction!);
 
-    /// <summary>Begins consuming an auction's bid stream. Idempotent.</summary>
+    /// <summary>
+    /// Registers an auction. The pump starts immediately once recovery is
+    /// complete, and is held until <see cref="ResumeAsync"/> before that.
+    /// </summary>
     public RunningAuction Start(AuctionDefinition definition, CancellationToken ct)
     {
-        return _running.GetOrAdd(definition.AuctionId, _ =>
+        var running = _running.GetOrAdd(definition.AuctionId, _ =>
         {
-            var running = new RunningAuction(definition);
+            var created = new RunningAuction(definition);
 
-            running.Pump = new AuctionPump(
-                definition, bidLog,
-                async (verdict, token) => await OnVerdictAsync(running, verdict, token),
-                (_, _, _) => ValueTask.CompletedTask);
+            if (_recovered.TryGetValue(definition.AuctionId, out var state))
+                state.ApplyTo(created);
 
-            running.Task = Task.Run(() => running.Pump.RunAsync(0, ct), ct);
-            return running;
+            created.PublishedThrough = checkpoints.PublishedThrough(definition.AuctionId);
+            return created;
         });
+
+        if (_resumed) Launch(running, ct);
+        return running;
+    }
+
+    private void Launch(RunningAuction running, CancellationToken ct)
+    {
+        if (running.Pump is not null) return;
+
+        running.Pump = new AuctionPump(
+            running.Definition, bidLog,
+            async (verdict, token) => await OnVerdictAsync(running, verdict, token),
+            (_, _, _) => ValueTask.CompletedTask);
+
+        // Always from offset 0: the engine's price, ladder, extensions and
+        // ledger are rebuilt by replaying every bid, which is deterministic.
+        // The checkpoint only decides which of those replayed bids stay silent.
+        running.Task = Task.Run(() => running.Pump.RunAsync(0, ct), ct);
+    }
+
+    /// <summary>
+    /// Ends the recovery phase: starts every pump and re-issues any candidate
+    /// offer that was owed but never published.
+    /// </summary>
+    public async Task ResumeAsync(CancellationToken ct)
+    {
+        if (_resumed) return;
+        _resumed = true;
+
+        foreach (var running in _running.Values)
+        {
+            Launch(running, ct);
+
+            if (running.PublishedThrough >= 0)
+                logger.LogInformation(
+                    "Auction {AuctionId} resumes with offsets through {Offset} already published.",
+                    running.Definition.AuctionId, running.PublishedThrough);
+        }
+
+        // A crash between recording a disqualification and publishing the next
+        // offer would otherwise leave the committee waiting forever. One offer
+        // is owed per close, plus one per disqualification.
+        foreach (var running in _running.Values.Where(r => r.Closed))
+        {
+            var owed = 1 + running.CascadeStep;
+            if (running.OffersPublished >= owed) continue;
+
+            // The candidate comes from the ladder, which the replay is still
+            // rebuilding. Reading it now would see an empty engine and report
+            // the ladder exhausted on an auction that has a perfectly good
+            // next bidder.
+            if (!await WaitForReplayAsync(running, ct))
+            {
+                logger.LogError(
+                    "Auction {AuctionId}: replay did not catch up; not re-issuing its owed offer.",
+                    running.Definition.AuctionId);
+                continue;
+            }
+
+            logger.LogWarning(
+                "Auction {AuctionId} owes {Count} candidate offer(s) after restart; re-issuing.",
+                running.Definition.AuctionId, owed - running.OffersPublished);
+
+            await OfferNextCandidateAsync(running, ct);
+        }
+    }
+
+    /// <summary>
+    /// Blocks until the pump has consumed every record currently in the log,
+    /// so the engine's ladder is whole before anything reads it.
+    /// </summary>
+    private async Task<bool> WaitForReplayAsync(RunningAuction running, CancellationToken ct)
+    {
+        var endOffset = await bidLog.GetEndOffsetAsync(running.Definition.AuctionId, ct);
+        if (endOffset == 0) return true;
+
+        var target = endOffset - 1;
+        var deadline = DateTimeOffset.UtcNow + options.ReplayTimeout;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (running.LastProcessedOffset >= target) return true;
+            await Task.Delay(20, ct);
+        }
+
+        return running.LastProcessedOffset >= target;
     }
 
     private async ValueTask OnVerdictAsync(
         RunningAuction running, BidVerdict verdict, CancellationToken ct)
     {
-        running.RecordProcessed();
+        running.RecordProcessed(verdict.Offset);
+
+        // Replay over ground already covered: rebuild the engine, publish
+        // nothing. Without this a restart re-sends an outbid notification for
+        // every bid the auction ever had.
+        if (verdict.Offset <= running.PublishedThrough) return;
 
         if (verdict.Accepted)
         {
@@ -91,6 +198,18 @@ public sealed class AuctionSupervisor(
                 }, Json),
                 nameof(BidRejected), ct);
         }
+
+        running.MarkPublished(verdict.Offset);
+        await MaybeCheckpointAsync(running, ct);
+    }
+
+    private async Task MaybeCheckpointAsync(RunningAuction running, CancellationToken ct)
+    {
+        if (!running.CheckpointDue(options.Checkpoint, DateTimeOffset.UtcNow)) return;
+
+        await checkpoints.CommitAsync(
+            running.Definition.AuctionId, running.PublishedThrough, ct);
+        running.CheckpointWritten(DateTimeOffset.UtcNow);
     }
 
     /// <summary>
@@ -101,8 +220,12 @@ public sealed class AuctionSupervisor(
     /// </summary>
     public async Task TickAsync(DateTimeOffset now, CancellationToken ct)
     {
+        if (!_resumed) return;
+
         foreach (var running in _running.Values)
         {
+            if (running.Pump is null) continue;
+
             if (!running.Announced && now >= running.Definition.StartsAt)
             {
                 running.Announced = true;
@@ -119,8 +242,7 @@ public sealed class AuctionSupervisor(
 
             // The engine moves EffectiveEndsAt as quiet-period extensions land,
             // so this is re-read every tick rather than scheduled once.
-            var effectiveEnd = running.Pump!.Engine.EffectiveEndsAt;
-            if (now < effectiveEnd + options.CloseGrace) continue;
+            if (now < running.Pump.Engine.EffectiveEndsAt + options.CloseGrace) continue;
 
             await CloseAsync(running, now, ct);
         }
@@ -134,6 +256,12 @@ public sealed class AuctionSupervisor(
         logger.LogInformation(
             "Auction {AuctionId} closed at {Now:o} after {Extensions} extension(s); {Bids} bids processed.",
             running.Definition.AuctionId, now, engine.ExtensionsUsed, running.ProcessedBidCount);
+
+        // Everything published for this auction is durable before the close is
+        // announced, so a crash here cannot lose a verdict the close implies.
+        await checkpoints.CommitAsync(
+            running.Definition.AuctionId, running.PublishedThrough, ct);
+        running.CheckpointWritten(now);
 
         await events.PublishAsync(Topics.Lifecycle, running.Definition.AuctionId.ToString(),
             JsonSerializer.Serialize(new AuctionClosed
@@ -158,8 +286,8 @@ public sealed class AuctionSupervisor(
     {
         var engine = running.Pump!.Engine;
         var candidate = engine.CascadeCandidates(running.Disqualified).FirstOrDefault();
-
         var auctionId = running.Definition.AuctionId;
+
         if (candidate.BidderId == Guid.Empty)
         {
             logger.LogInformation(
@@ -173,18 +301,21 @@ public sealed class AuctionSupervisor(
                     CascadeStep = running.CascadeStep
                 }, Json),
                 nameof(LadderExhausted), ct);
-            return;
+        }
+        else
+        {
+            await events.PublishAsync(Topics.Lifecycle, auctionId.ToString(),
+                JsonSerializer.Serialize(new CandidateOffered
+                {
+                    AuctionId = auctionId,
+                    BidderId = candidate.BidderId,
+                    AmountMinorUnits = candidate.AmountMinorUnits,
+                    CascadeStep = running.CascadeStep
+                }, Json),
+                nameof(CandidateOffered), ct);
         }
 
-        await events.PublishAsync(Topics.Lifecycle, auctionId.ToString(),
-            JsonSerializer.Serialize(new CandidateOffered
-            {
-                AuctionId = auctionId,
-                BidderId = candidate.BidderId,
-                AmountMinorUnits = candidate.AmountMinorUnits,
-                CascadeStep = running.CascadeStep
-            }, Json),
-            nameof(CandidateOffered), ct);
+        running.OffersPublished++;
     }
 
     /// <summary>
@@ -215,12 +346,80 @@ public sealed class AuctionSupervisor(
         await OfferNextCandidateAsync(running, ct);
     }
 
+    /// <summary>
+    /// Handles the lifecycle topic. During recovery this only records state —
+    /// the processor's own past events are how it learns where it left off.
+    /// After <see cref="ResumeAsync"/> it acts.
+    /// </summary>
     public Task ApplyLifecycleAsync(StreamEvent record, CancellationToken ct)
     {
-        if (record.EventType != "WinnerDisqualified") return Task.CompletedTask;
+        if (!Guid.TryParse(record.Key, out var auctionId)) return Task.CompletedTask;
+
+        if (!_resumed)
+        {
+            RecordDuringRecovery(auctionId, record);
+            return Task.CompletedTask;
+        }
+
+        if (record.EventType != InboundEvents.WinnerDisqualified) return Task.CompletedTask;
 
         var payload = JsonSerializer.Deserialize<WinnerDisqualifiedPayload>(record.Payload, Json);
         return payload is null ? Task.CompletedTask : OnWinnerDisqualifiedAsync(payload, ct);
+    }
+
+    private void RecordDuringRecovery(Guid auctionId, StreamEvent record)
+    {
+        var state = _recovered.GetOrAdd(auctionId, _ => new RecoveredState());
+
+        switch (record.EventType)
+        {
+            case nameof(AuctionStarted):
+                state.Announced = true;
+                break;
+
+            case nameof(AuctionClosed):
+                state.Closed = true;
+                break;
+
+            case nameof(CandidateOffered):
+            case nameof(LadderExhausted):
+                state.OffersPublished++;
+                break;
+
+            case InboundEvents.WinnerDisqualified:
+            {
+                var payload = JsonSerializer.Deserialize<WinnerDisqualifiedPayload>(
+                    record.Payload, Json);
+                if (payload is not null) state.Disqualified.Add(payload.BidderId);
+                break;
+            }
+        }
+
+        // An auction may already be registered when its history replays.
+        if (_running.TryGetValue(auctionId, out var running)) state.ApplyTo(running);
+    }
+
+    public void ApplyCheckpoint(StreamEvent record) => checkpoints.Apply(record);
+
+    /// <summary>What the processor's own event history says about an auction.</summary>
+    private sealed class RecoveredState
+    {
+        public bool Announced;
+        public bool Closed;
+        public int OffersPublished;
+        public readonly HashSet<Guid> Disqualified = new();
+
+        public void ApplyTo(RunningAuction running)
+        {
+            running.Announced |= Announced;
+            running.Closed |= Closed;
+            running.OffersPublished = Math.Max(running.OffersPublished, OffersPublished);
+            foreach (var bidder in Disqualified) running.Disqualified.Add(bidder);
+
+            // Cascade step is the number of disqualifications, which is exactly
+            // how it is incremented in the first place.
+            running.CascadeStep = running.Disqualified.Count;
+        }
     }
 }
 
@@ -228,6 +427,10 @@ public sealed class AuctionSupervisor(
 public sealed class RunningAuction(AuctionDefinition definition)
 {
     private int _processed;
+    private long _lastProcessedOffset = -1;
+    private long _publishedThrough = -1;
+    private int _sinceCheckpoint;
+    private DateTimeOffset _lastCheckpoint = DateTimeOffset.UtcNow;
 
     public AuctionDefinition Definition { get; } = definition;
     public AuctionPump? Pump { get; internal set; }
@@ -237,10 +440,43 @@ public sealed class RunningAuction(AuctionDefinition definition)
     public bool Closed { get; internal set; }
     public int CascadeStep { get; internal set; }
 
+    /// <summary>Candidate offers and exhaustion notices already published.</summary>
+    public int OffersPublished { get; internal set; }
+
     /// <summary>Bidders auction-admin has disqualified, skipped by the cascade.</summary>
     public HashSet<Guid> Disqualified { get; } = new();
 
+    /// <summary>Highest bid offset whose side effects are published. -1 if none.</summary>
+    public long PublishedThrough
+    {
+        get => Interlocked.Read(ref _publishedThrough);
+        internal set => Interlocked.Exchange(ref _publishedThrough, value);
+    }
+
     public int ProcessedBidCount => Volatile.Read(ref _processed);
 
-    internal void RecordProcessed() => Interlocked.Increment(ref _processed);
+    /// <summary>Highest bid offset the engine has consumed. -1 before the first.</summary>
+    public long LastProcessedOffset => Interlocked.Read(ref _lastProcessedOffset);
+
+    internal void RecordProcessed(long offset)
+    {
+        Interlocked.Increment(ref _processed);
+        Interlocked.Exchange(ref _lastProcessedOffset, offset);
+    }
+
+    internal void MarkPublished(long offset)
+    {
+        PublishedThrough = offset;
+        Interlocked.Increment(ref _sinceCheckpoint);
+    }
+
+    internal bool CheckpointDue(CheckpointPolicy policy, DateTimeOffset now) =>
+        Volatile.Read(ref _sinceCheckpoint) >= policy.EveryRecords
+        || now - _lastCheckpoint >= policy.EveryInterval;
+
+    internal void CheckpointWritten(DateTimeOffset at)
+    {
+        Interlocked.Exchange(ref _sinceCheckpoint, 0);
+        _lastCheckpoint = at;
+    }
 }
