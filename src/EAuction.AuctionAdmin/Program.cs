@@ -32,6 +32,18 @@ else
 builder.Services.AddSingleton<OutboxRelay>();
 builder.Services.AddHostedService<OutboxRelayService>();
 
+// Admin's half of the loop with the bid processor.
+builder.Services.AddSingleton<IEventStream>(sp =>
+    string.IsNullOrWhiteSpace(bootstrap)
+        ? new InMemoryEventStream()
+        : new KafkaEventStream(new KafkaEventStreamOptions
+        {
+            BootstrapServers = bootstrap,
+            ConsumerGroup = "auction-admin"
+        }));
+builder.Services.AddSingleton<LifecycleConsumer>();
+builder.Services.AddHostedService<LifecycleConsumerService>();
+
 // Compliance window before a winner is disqualified and the award cascades.
 // A contract term, not a tuning knob: it has to match the كراسة الشروط, which
 // bidders accept (§11, C-1).
@@ -190,7 +202,9 @@ static async Task<IResult> Mutate(
     }
 }
 
-public partial class Program;
+// Deliberately not `public partial class Program;` — making it public would
+// collide with the bid-catcher's Program in any test assembly referencing both.
+// Nothing here needs WebApplicationFactory.
 
 // --- contracts -------------------------------------------------------------
 

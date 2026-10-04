@@ -16,7 +16,7 @@ docs/                 architecture and design documents
 src/
   EAuction.Core/          bid frame, bid log, auction engine, ledger
   EAuction.BidCatcher/    bid ingestion HTTP endpoint
-  EAuction.BidProcessor/  winner determination
+  EAuction.BidProcessor/  winner determination, auction supervision
   EAuction.AuctionAdmin/  auction data, workflows, transactional outbox
 deploy/
   helm/               umbrella chart + per-service subcharts
@@ -48,9 +48,12 @@ Architecture document is in review.
 
 - **Bid path** — implemented and tested. 37 tests green, 31.5k req/s at
   p99 13.8 ms on four shared cores.
-- **Auction administration + outbox** — implemented and tested. 33 tests green
+- **Auction administration + outbox** — implemented and tested. 41 tests green
   against real PostgreSQL, covering both workflows, the reserve-price cascade
   and the transactional outbox.
+- **Bid processor wiring** — implemented and tested. The loop closes: an
+  approved auction runs itself through bidding, a close, a candidate for the
+  committee, and a cascade if that candidate fails. 95 tests green overall.
 
 The Kafka implementations have **not** been run against a live broker, and the
 Debezium connector has not been registered against a live Connect cluster (no

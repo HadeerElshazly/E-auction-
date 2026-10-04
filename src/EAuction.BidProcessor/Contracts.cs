@@ -1,0 +1,98 @@
+namespace EAuction.BidProcessor;
+
+// Inbound payloads. These are the processor's own view of the auction-admin
+// contract, deliberately redeclared rather than shared: a consumer owning its
+// own view is what lets the producer add fields without recompiling everyone,
+// and it keeps the dependency pointing the right way.
+
+public sealed record AuctionApprovedPayload
+{
+    public Guid AuctionId { get; init; }
+    public string NameAr { get; init; } = "";
+    public string NameEn { get; init; } = "";
+    public DateTimeOffset StartsAt { get; init; }
+    public DateTimeOffset EndsAt { get; init; }
+    public long OpeningPriceMinorUnits { get; init; }
+    public long MinIncrementMinorUnits { get; init; }
+    public long DepositMinorUnits { get; init; }
+    public int? QuietPeriodSeconds { get; init; }
+    public int MaxExtensions { get; init; }
+    public string Channel { get; init; } = "Online";
+}
+
+public sealed record AuctionReserveSetPayload
+{
+    public Guid AuctionId { get; init; }
+    public long ReservePriceMinorUnits { get; init; }
+}
+
+public sealed record WinnerDisqualifiedPayload
+{
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public string Reason { get; init; } = "";
+}
+
+// Outbound events, onto auctions.lifecycle.
+
+public sealed record AuctionStarted
+{
+    public Guid AuctionId { get; init; }
+    public DateTimeOffset At { get; init; }
+}
+
+public sealed record AuctionClosed
+{
+    public Guid AuctionId { get; init; }
+    public DateTimeOffset At { get; init; }
+
+    /// <summary>The end time after any quiet-period extensions.</summary>
+    public DateTimeOffset EffectiveEndsAt { get; init; }
+
+    public int ExtensionsUsed { get; init; }
+    public int BidCount { get; init; }
+}
+
+/// <summary>
+/// The highest remaining bidder that clears the reserve, offered to the
+/// committee. Carries no reserve price — it says someone qualifies, not what
+/// they had to beat (D-06).
+/// </summary>
+public sealed record CandidateOffered
+{
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public long AmountMinorUnits { get; init; }
+    public int CascadeStep { get; init; }
+}
+
+/// <summary>
+/// Nobody is left who clears the reserve. The auction is unsold — the reason
+/// is not disclosed, for the same reason the reserve is not.
+/// </summary>
+public sealed record LadderExhausted
+{
+    public Guid AuctionId { get; init; }
+    public int CascadeStep { get; init; }
+}
+
+public sealed record CurrentWinner
+{
+    public Guid AuctionId { get; init; }
+    public long PriceMinorUnits { get; init; }
+
+    /// <summary>Masked in public views (D-22); the raw id stays on this restricted topic.</summary>
+    public Guid? LeaderBidderId { get; init; }
+
+    public DateTimeOffset EffectiveEndsAt { get; init; }
+    public int ExtensionsUsed { get; init; }
+}
+
+public sealed record BidRejected
+{
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public Guid ClientBidId { get; init; }
+    public string Reason { get; init; } = "";
+    public long CurrentPriceMinorUnits { get; init; }
+}

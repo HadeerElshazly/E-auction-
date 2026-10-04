@@ -152,6 +152,20 @@ services:
       kafka:
         condition: service_healthy
 
+  bid-processor:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.bidprocessor
+    container_name: eauction-bid-processor
+    environment:
+      Kafka__BootstrapServers: kafka:9092
+      Processor__CloseGraceSeconds: "5"
+      Processor__TickIntervalMs: "500"
+      DOTNET_gcServer: "1"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   minio-data:

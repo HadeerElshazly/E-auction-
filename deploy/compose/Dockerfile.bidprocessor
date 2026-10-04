@@ -1,0 +1,23 @@
+# Bid processor image.
+#
+# Runs as a non-root user with an explicit UID: the on-prem Kubernetes
+# distribution is not yet known, and OpenShift refuses root containers
+# (docs/ARCHITECTURE.md §10.1). Costs nothing here, avoids a rewrite there.
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY src/EAuction.Core/EAuction.Core.csproj src/EAuction.Core/
+COPY src/EAuction.BidProcessor/EAuction.BidProcessor.csproj src/EAuction.BidProcessor/
+RUN dotnet restore src/EAuction.BidProcessor/EAuction.BidProcessor.csproj
+COPY src/ src/
+RUN dotnet publish src/EAuction.BidProcessor/EAuction.BidProcessor.csproj \
+      -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:8.0
+WORKDIR /app
+COPY --from=build /app .
+
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eauction
+USER 10001
+
+ENTRYPOINT ["./EAuction.BidProcessor"]

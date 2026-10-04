@@ -130,7 +130,7 @@ bidding on the bundle. Total area and plot count are derived display fields.
 | Service | Stack | Responsibility |
 |---|---|---|
 | **bid-catcher** | .NET 8 minimal API | Accept bids, verify, append to Kafka. No DB, no outbound calls |
-| **bid-processor** | .NET worker | Order by offset, apply auction rules, determine winner, maintain the ladder and the hash-chained ledger |
+| **bid-processor** | .NET 8 worker | Order by offset, apply auction rules, determine winner, maintain the ladder and the hash-chained ledger. **Implemented** (§14) |
 | **auction-admin** | .NET 8 + Postgres + outbox | Auction CRUD, plots, documents, scheduling, preparation + award workflows. **Implemented** (§13) |
 | **participant** | .NET + Postgres | Registration, profile, booklet purchase, deposit, eligibility |
 | **payment** | .NET | Deposit, brokerage, refunds, settlement. PayTabs / SADAD adapters |
@@ -699,3 +699,132 @@ accurate: these identities come from the domain, not the store.
 | No authentication or authorisation | Every endpoint is open. Committee actions in particular must be role-gated before any real use |
 | Documents are referenced by id only | The document service does not exist yet; `BookletDocumentId` and the letter ids are not validated against anything |
 | Lifecycle transitions are manual | `MarkLive`, `MarkClosing` and `OfferCandidate` are endpoints. They should be driven by `auctions.lifecycle` from the processor |
+
+---
+
+## 14. Bid processor wiring
+
+The processor is now wired end to end, and with auction-admin's lifecycle
+consumer the loop closes: an approved auction runs itself through bidding, a
+close, a candidate for the committee, and a cascade if that candidate fails.
+
+### The loop
+
+```
+auction-admin                          bid-processor
+─────────────                          ─────────────
+Approve
+  ├─ AuctionApproved ──► auctions.upcoming ─┐
+  └─ AuctionReserveSet ─► auctions.sealed ──┤
+                                            ▼
+                                     AuctionRegistry
+                                   (waits for both halves)
+                                            │
+relay publishes                             ▼
+  └─ Approved → Scheduled            AuctionSupervisor
+                                            │
+   ◄── AuctionStarted ──────────────────────┤
+Live                                        │
+                                       bids processed
+                                       ├─► auctions.current-winner
+                                       └─► bids.rejected
+                                            │
+   ◄── AuctionClosed ───────────────────────┤  at effectiveEnd + grace
+PendingEligibilityReview                    │
+   ◄── CandidateOffered ────────────────────┘
+PendingAward
+   │
+   ├─ committee confirms ──► Awarded
+   │
+   └─ DisqualifyWinner
+        └─ WinnerDisqualified ──► auctions.lifecycle
+                                            │
+   ◄── CandidateOffered (step n+1) ─────────┤  next bidder ≥ reserve
+   ◄── LadderExhausted ─────────────────────┘  or nobody qualifies
+Unsold
+```
+
+### Who decides what
+
+The processor says what happened to the bidding. **It never awards anything.**
+The most it does is put a candidate in front of the committee (D-08), and
+`CandidateOffered` carries no reserve price — the committee learns that
+someone qualifies, not what they had to beat (D-06). A test asserts no payload
+on `auctions.lifecycle` contains the reserve.
+
+### Two halves of a definition
+
+The public definition and the reserve arrive on separate topics because the
+reserve is ACL-restricted (D-23). Either can land first, so `AuctionRegistry`
+holds a partial auction until both are present.
+
+They are written in one transaction by auction-admin and relayed in order, so
+the gap is normally microseconds. A persistent gap means the sealed topic is
+misconfigured, which the registry reports through `AwaitingReserve` rather than
+papering over by running an auction with no reserve — a loud failure beats a
+silently wrong one.
+
+### Closing, and why it is not a scheduled timer
+
+A quiet-period bid moves `EffectiveEndsAt`, so a deadline computed once would
+close the auction while bidding was still legitimately open. The supervisor
+re-reads the engine's current end on every tick instead.
+
+Close fires at `effectiveEnd + CloseGrace` (default 5s). The grace exists
+because the catcher accepts up to the hard ceiling: bids can still be in
+flight when the clock passes the end, and the grace lets them land and be
+rejected **on the record** rather than vanish.
+
+Tick interval bounds how late a close can be, not how accurate the result is —
+the log decides that, and a replay reproduces it exactly.
+
+### At-least-once everywhere
+
+Both directions redeliver, and both sides are built for it:
+
+- A redelivered `WinnerDisqualified` must not advance the cascade twice and
+  silently skip a qualifying bidder. The supervisor keeps a disqualified set
+  and ignores a repeat.
+- A redelivered `AuctionStarted` or `AuctionClosed` finds the auction already
+  past that transition. The aggregate's transition guard throws, and the
+  consumer logs and moves on — that is the expected path, not a failure.
+- Admin's own events come back on `auctions.lifecycle` and are ignored.
+
+### Contract drift
+
+The processor declares its own view of admin's events rather than sharing the
+types, so the dependency points the right way and admin can add fields without
+recompiling consumers. That only works if the shapes line up, so
+`ContractDriftTests` serialises the **real producer types** and deserialises
+them as the processor's payloads. If admin renames a field, the test fails
+instead of production going quiet.
+
+### Verified
+
+**54 tests** in `EAuction.Tests` (37 bid path + 17 wiring and contract) and
+**41** in `EAuction.AuctionAdmin.Tests`. New coverage:
+
+| Claim | Where |
+|---|---|
+| An auction runs only once both halves of its definition arrive, in either order | `ProcessorWiringTests` |
+| An accepted bid publishes the new current winner; a rejected one publishes its reason | `ProcessorWiringTests` |
+| An auction does not close before its end time | `ProcessorWiringTests` |
+| Closing offers the highest bidder clearing the reserve, or reports the ladder exhausted | `ProcessorWiringTests` |
+| A quiet-period bid pushes the close out | `ProcessorWiringTests` |
+| Closing happens once however many ticks follow | `ProcessorWiringTests` |
+| The reserve never appears on the lifecycle topic | `ProcessorWiringTests` |
+| A disqualification offers the next qualifying bidder; a redelivered one does not skip anyone | `ProcessorWiringTests` |
+| The processor reads every field of real admin event types | `ContractDriftTests` |
+| The relay moves an auction to Scheduled when it actually publishes | `LifecycleConsumerTests` |
+| Started / Closed / CandidateOffered / LadderExhausted advance the workflow | `LifecycleConsumerTests` |
+| Offering a candidate is not awarding one | `LifecycleConsumerTests` |
+| Redelivered events are ignored rather than failing | `LifecycleConsumerTests` |
+
+### Not yet done
+
+| Gap | Note |
+|---|---|
+| `KafkaEventStream` and `KafkaBidLog` have never run against a broker | Still no Docker daemon. Both are validated through in-memory implementations mirroring the same ordering contract |
+| Processor state is not durable across restarts | It replays the compacted control topics, but consumed bid-log offsets are not committed, so a restart reprocesses an auction from offset 0. Correct — the engine is deterministic — but it republishes current-winner and rejections. Needs offset commits before deployment |
+| One pump per auction, all in one process | Fine at this scale. Sharding auctions across processor instances by consumer group is not done |
+| No supervisor backpressure | A very hot auction's pump publishes to `current-winner` on every accepted bid. Should coalesce |

@@ -15,5 +15,6 @@
     <ProjectReference Include="../../src/EAuction.Core/EAuction.Core.csproj" />
     <ProjectReference Include="../../src/EAuction.BidCatcher/EAuction.BidCatcher.csproj" />
     <ProjectReference Include="../../src/EAuction.BidProcessor/EAuction.BidProcessor.csproj" />
+    <ProjectReference Include="..\..\src\EAuction.AuctionAdmin\EAuction.AuctionAdmin.csproj" />
   </ItemGroup>
 </Project>

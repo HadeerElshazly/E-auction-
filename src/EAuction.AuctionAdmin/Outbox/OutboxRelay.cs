@@ -59,6 +59,19 @@ public sealed class OutboxRelay(
 
             message.RelayedAt = DateTimeOffset.UtcNow;
             published++;
+
+            // Publication is what makes an auction visible to bidders, so the
+            // relay is the only thing that knows when Approved becomes
+            // Scheduled. Saved in the same transaction as the relayed marker.
+            if (message.Type == nameof(Domain.AuctionApproved)
+                && Guid.TryParse(message.AggregateId, out var publishedAuctionId))
+            {
+                var auction = await db.Auctions
+                    .FirstOrDefaultAsync(a => a.Id == publishedAuctionId, ct);
+
+                if (auction?.Status == Domain.AuctionStatus.Approved)
+                    auction.MarkScheduled();
+            }
         }
 
         if (published > 0) await db.SaveChangesAsync(ct);
