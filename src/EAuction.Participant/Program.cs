@@ -61,6 +61,7 @@ builder.Services.AddHostedService<OutboxRelayService<ParticipantDbContext>>();
 builder.Services.AddHostedService<CatalogConsumer>();
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+builder.Services.AddEAuctionCors(builder.Configuration);
 
 // Enums as names, both ways. Responses already hand back "Online" and "Eligible" as
 // strings, so without this a portal cannot PUT back what it just read: the request
@@ -72,6 +73,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 var app = builder.Build();
 
+app.UseEAuctionCors();
 app.UseAuthentication();
 app.UseAuthorization();
 

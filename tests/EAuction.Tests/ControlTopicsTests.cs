@@ -40,8 +40,8 @@ public class ControlTopicsTests
     [Fact]
     public void No_topic_is_provisioned_twice_or_with_an_empty_name()
     {
-        Assert.Empty(ControlTopics.All.Where(t => string.IsNullOrWhiteSpace(t.Name)));
-        Assert.Empty(ControlTopics.All.GroupBy(t => t.Name).Where(g => g.Count() > 1));
+        Assert.DoesNotContain(ControlTopics.All, t => string.IsNullOrWhiteSpace(t.Name));
+        Assert.DoesNotContain(ControlTopics.All.GroupBy(t => t.Name), g => g.Count() > 1);
     }
 
     [Fact]

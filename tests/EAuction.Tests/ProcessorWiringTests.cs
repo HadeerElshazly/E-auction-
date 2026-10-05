@@ -340,7 +340,14 @@ public class ContractDriftTests
             MaxExtensions = 3,
             Channel = "Online",
             PlotCount = 2,
-            TotalAreaSqm = 1350.5m
+            TotalAreaSqm = 1350.5m,
+            Plots =
+            [
+                new AuctionAdmin.Domain.PublicPlot(
+                    Guid.NewGuid(), "1010/5", 600.25m, "21.5433", "39.1728", "قطعة", "Plot"),
+                new AuctionAdmin.Domain.PublicPlot(
+                    Guid.NewGuid(), "1010/6", 750.25m, null, null, null, null)
+            ]
         };
 
         var consumed = JsonSerializer.Deserialize<AuctionApprovedPayload>(
@@ -354,6 +361,60 @@ public class ContractDriftTests
         Assert.Equal(produced.QuietPeriodSeconds, consumed.QuietPeriodSeconds);
         Assert.Equal(produced.MaxExtensions, consumed.MaxExtensions);
         Assert.Equal(produced.Channel, consumed.Channel);
+    }
+
+    [Fact]
+    public void AuctionApproved_carries_the_plots_the_public_catalogue_needs()
+    {
+        // The query BFF builds the bidder-facing catalogue from this event alone. A
+        // bidder deciding whether to put down a deposit needs the deed numbers and
+        // areas, so PlotCount on its own is not enough.
+        var produced = new AuctionAdmin.Domain.AuctionApproved
+        {
+            AuctionId = Guid.NewGuid(),
+            NameAr = "أ", NameEn = "A",
+            StartsAt = DateTimeOffset.UtcNow.AddDays(1),
+            EndsAt = DateTimeOffset.UtcNow.AddDays(2),
+            OpeningPriceMinorUnits = 1, MinIncrementMinorUnits = 1,
+            DepositMinorUnits = 1, BookletPriceMinorUnits = 1,
+            MaxExtensions = 0, Channel = "Online",
+            PlotCount = 1, TotalAreaSqm = 600.25m,
+            Plots = [new AuctionAdmin.Domain.PublicPlot(
+                Guid.NewGuid(), "1010/5", 600.25m, "21.5433", "39.1728", "قطعة", "Plot")]
+        };
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(produced, Json));
+        var plot = doc.RootElement.GetProperty("plots")[0];
+
+        Assert.Equal("1010/5", plot.GetProperty("deedNumber").GetString());
+        Assert.Equal(600.25m, plot.GetProperty("areaSqm").GetDecimal());
+        Assert.Equal("21.5433", plot.GetProperty("latitude").GetString());
+        Assert.Equal("قطعة", plot.GetProperty("descriptionAr").GetString());
+    }
+
+    [Fact]
+    public void AuctionApproved_carries_nothing_named_like_a_reserve_price()
+    {
+        // D-23 as a test rather than a convention. The public topic feeds the query
+        // BFF, which feeds anonymous callers, so a reserve field added to this event
+        // by someone who had not read the decision would publish the one number the
+        // whole auction turns on. Checked against the serialised JSON, because that
+        // is what actually reaches the topic.
+        var produced = new AuctionAdmin.Domain.AuctionApproved
+        {
+            AuctionId = Guid.NewGuid(),
+            NameAr = "أ", NameEn = "A",
+            StartsAt = DateTimeOffset.UtcNow, EndsAt = DateTimeOffset.UtcNow.AddHours(1),
+            OpeningPriceMinorUnits = 1_000_000_00, MinIncrementMinorUnits = 50_000_00,
+            DepositMinorUnits = 1, BookletPriceMinorUnits = 1,
+            MaxExtensions = 0, Channel = "Online",
+            PlotCount = 0, TotalAreaSqm = 0m, Plots = []
+        };
+
+        var json = JsonSerializer.Serialize(produced, Json);
+
+        Assert.DoesNotContain("reserve", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sealed", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

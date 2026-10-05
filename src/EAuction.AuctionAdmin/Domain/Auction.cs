@@ -97,7 +97,7 @@ public sealed class Auction
     public void UpdateDetails(
         string nameAr, string nameEn, BidChannel channel,
         DateTimeOffset startsAt, DateTimeOffset endsAt,
-        long openingPriceMinorUnits, long reservePriceMinorUnits,
+        long openingPriceMinorUnits, long? reservePriceMinorUnits,
         long minIncrementMinorUnits, long depositMinorUnits,
         decimal brokerageFeePercent, long bookletPriceMinorUnits,
         int? quietPeriodSeconds, int maxExtensions, string? phase = null)
@@ -110,7 +110,17 @@ public sealed class Auction
         StartsAt = startsAt;
         EndsAt = endsAt;
         OpeningPriceMinorUnits = openingPriceMinorUnits;
-        ReservePriceMinorUnits = reservePriceMinorUnits;
+
+        // Null means "leave it as it is", not "set it to nothing".
+        //
+        // The reserve is the one field no read path ever returns — it lives on its
+        // own restricted topic and is deliberately absent from AuctionResponse
+        // (D-23). So an editor cannot show the current value, and a required field
+        // would force whoever corrects a typo in the auction's name to retype the
+        // reserve from a piece of paper, with a wrong figure silently replacing the
+        // real one. Write-only, and optional on a write.
+        if (reservePriceMinorUnits is not null)
+            ReservePriceMinorUnits = reservePriceMinorUnits.Value;
         MinIncrementMinorUnits = minIncrementMinorUnits;
         DepositMinorUnits = depositMinorUnits;
         BrokerageFeePercent = brokerageFeePercent;
@@ -234,7 +244,13 @@ public sealed class Auction
             MaxExtensions = MaxExtensions,
             Channel = Channel.ToString(),
             PlotCount = _plots.Count,
-            TotalAreaSqm = TotalAreaSqm
+            TotalAreaSqm = TotalAreaSqm,
+            Plots = _plots
+                .OrderBy(p => p.DeedNumber, StringComparer.Ordinal)
+                .Select(p => new PublicPlot(
+                    p.Id, p.DeedNumber, p.AreaSqm,
+                    p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn))
+                .ToArray()
         });
 
         _events.Add(new AuctionReserveSet

@@ -39,8 +39,21 @@ public sealed class ControlPlane(
     /// Readiness. A catcher that reports ready before its state is loaded would
     /// be sent traffic it can only reject, so the probe waits for a first pass.
     /// </summary>
+    /// <summary>
+    /// How long to wait before a stable state is allowed to count as a replayed one.
+    ///
+    /// Without a floor, "the count stopped changing" is indistinguishable from "the
+    /// count has not started changing yet": a Kafka consumer takes seconds to join
+    /// its group and begin delivering, so a fresh pod declared itself warm with an
+    /// empty state and then rejected every bid as UnknownAuction while the probe
+    /// said it was healthy. Found when a portal asked the query BFF for the
+    /// catalogue a moment after it came up and was told there were no auctions.
+    /// </summary>
+    public TimeSpan MinimumWarmUp { get; init; } = TimeSpan.FromSeconds(8);
+
     private async Task MarkWarmAsync(CancellationToken ct)
     {
+        var startedAt = DateTimeOffset.UtcNow;
         var lastSeen = -1;
         var stableFor = 0;
 
@@ -50,7 +63,7 @@ public sealed class ControlPlane(
             stableFor = seen == lastSeen ? stableFor + 1 : 0;
             lastSeen = seen;
 
-            if (stableFor >= 4)
+            if (stableFor >= 4 && DateTimeOffset.UtcNow - startedAt >= MinimumWarmUp)
             {
                 Warm = true;
                 logger.LogInformation(

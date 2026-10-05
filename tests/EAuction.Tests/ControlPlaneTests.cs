@@ -27,7 +27,12 @@ public class ControlPlaneTests : IAsyncDisposable
         // Screen() consumes a rate-limit token, and these tests poll it while
         // waiting for a topic to propagate. Rate limiting has its own tests.
         _state = new CatcherState(_master) { MaxBidsPerSecondPerBidder = 1_000_000 };
-        _control = new ControlPlane(_state, _events, NullLogger<ControlPlane>.Instance);
+        // No warm-up floor: the floor exists to outlast a Kafka consumer group join,
+        // and the in-memory stream has no group to join.
+        _control = new ControlPlane(_state, _events, NullLogger<ControlPlane>.Instance)
+        {
+            MinimumWarmUp = TimeSpan.Zero
+        };
     }
 
     private Task StartAsync() => _control.StartAsync(_cts.Token);
@@ -201,7 +206,10 @@ public class ControlPlaneTests : IAsyncDisposable
 
         // A different pod, started after the fact, over the same topics.
         var cold = new CatcherState(_master) { MaxBidsPerSecondPerBidder = 1_000_000 };
-        var coldControl = new ControlPlane(cold, _events, NullLogger<ControlPlane>.Instance);
+        var coldControl = new ControlPlane(cold, _events, NullLogger<ControlPlane>.Instance)
+        {
+            MinimumWarmUp = TimeSpan.Zero
+        };
         await coldControl.StartAsync(_cts.Token);
 
         await WaitFor(() => cold.AuctionCount == 1 && cold.EligibilityCount == 1,

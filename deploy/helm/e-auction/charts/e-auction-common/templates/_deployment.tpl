@@ -122,6 +122,10 @@ one source of truth.
   value: {{ .root.Values.config.jwt.authority | quote }}
 - name: Jwt__Audience
   value: {{ .root.Values.config.jwt.audience | quote }}
+{{- with .root.Values.config.cors.allowedOrigins }}
+- name: Cors__AllowedOrigins
+  value: {{ join "," . | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "e-auction.serviceAccount" -}}

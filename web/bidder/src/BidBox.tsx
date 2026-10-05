@@ -1,0 +1,239 @@
+import { useEffect, useState } from 'react'
+import {
+  ApiError,
+  api,
+  buildBidFrame,
+  config,
+  newClientBidId,
+  newNonce,
+  parseRiyals,
+  riyals,
+  sar,
+  type Api,
+  type Session,
+} from '@eauction/shared'
+import type { AuctionDetail, BidReceipt, LivePrice } from './types'
+import { useSigningKey } from './useSigningKey'
+
+interface Props {
+  auction: AuctionDetail
+  session: Session
+  price: LivePrice | null
+  participant: Api
+  onBid: () => void
+}
+
+interface Submitted {
+  clientBidId: string
+  amount: number
+  offset: number
+  at: Date
+}
+
+/** What the services call a rejection, in Arabic a bidder can act on. */
+const reasons: Record<string, string> = {
+  BelowOpeningPrice: 'المبلغ أقل من سعر الافتتاح.',
+  BelowMinimumIncrement: 'المبلغ أقل من أقل مزايدة مقبولة — ارتفع السعر قبل إرسال مزايدتك.',
+  OutsideWindow: 'المزاد غير مفتوح للمزايدة الآن.',
+  NotEligible: 'اشتراكك غير مؤهّل للمزايدة في هذا المزاد.',
+  RateLimited: 'مزايدات كثيرة في وقت قصير — أعد المحاولة بعد لحظة.',
+  BadSignature: 'تعذّر التحقق من توقيع المزايدة. أعد تحميل الصفحة.',
+  BidderMismatch: 'المزايدة مُسجَّلة باسم مزايد آخر.',
+  UnknownAuction: 'المزاد غير معروف لخدمة المزايدة بعد.',
+  SelfOutbid: 'أنت الأعلى بالفعل.',
+  DuplicateBidId: 'أُرسلت هذه المزايدة مسبقاً.',
+  MalformedFrame: 'المزايدة غير مكتملة. أعد تحميل الصفحة.',
+}
+
+/**
+ * What the authoritative price says about one submitted bid.
+ *
+ * Inference, not a verdict: the processor publishes its ruling to bids.rejected and
+ * nothing delivers that to a browser yet (docs/ARCHITECTURE.md §7.2). Comparing
+ * against the price the BFF reports is enough to stop a refused bid sitting on
+ * screen as "recorded" indefinitely, and the wording stays honest about which of
+ * the two it is.
+ */
+function outcome(bid: Submitted, price: LivePrice | null) {
+  if (!price || price.priceMinorUnits === null) {
+    return <span className="pill done">مُسجَّلة</span>
+  }
+
+  if (price.leaderIsYou && price.priceMinorUnits === bid.amount) {
+    return <span className="pill live">الأعلى</span>
+  }
+
+  if (price.priceMinorUnits >= bid.amount) {
+    return <span className="pill done">تجاوزها غيرك</span>
+  }
+
+  return <span className="pill done">مُسجَّلة</span>
+}
+
+
+export function BidBox({ auction, session, price, participant, onBid }: Props) {
+  const key = useSigningKey(participant, auction.id, session.subject)
+  const catcher = api({ baseUrl: config.catcherApi, session })
+
+  const minimum = price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [submitted, setSubmitted] = useState<Submitted[]>([])
+
+  // Keep the box prefilled with the cheapest winning bid, but never overwrite what
+  // the bidder is typing — the price moves during a war and a box that resets
+  // mid-keystroke costs them the auction.
+  useEffect(() => {
+    setText((current) => (current === '' ? riyals(minimum) : current))
+  }, [minimum])
+
+  const amount = parseRiyals(text)
+  const tooLow = amount !== null && amount < minimum
+  const closed = price !== null && price.status !== 'Live'
+
+  // B-04: the engine rejects a leader raising their own bid — it is almost always a
+  // double-click and it costs the bidder money for nothing. The portal knows it is
+  // leading (the BFF tells it, without naming anyone else), so this is refused here
+  // rather than accepted with a 202 and discarded silently by the processor, which
+  // is what happened before: the bid sat on screen marked "recorded" for ever.
+  const alreadyLeading = price?.leaderIsYou === true
+
+  const submit = async () => {
+    if (amount === null) {
+      setProblem('أدخل مبلغاً صحيحاً.')
+      return
+    }
+
+    setBusy(true)
+    setProblem(null)
+
+    try {
+      // Fetched on first use, held in memory only. See useSigningKey.
+      const secretHex = await key.get()
+
+      const clientBidId = newClientBidId()
+      const frame = await buildBidFrame({
+        auctionId: auction.id,
+        // The bidder id in the frame must be this caller's own subject: the catcher
+        // compares the two and refuses a mismatch with 403.
+        bidderId: session.subject,
+        amountMinorUnits: amount,
+        clientBidId,
+        clientTimestampMs: Date.now(),
+        nonce: newNonce(),
+        signingSecretHex: secretHex,
+      })
+
+      const receipt = await catcher.postFrame<BidReceipt>('/bids', frame)
+
+      // 202, not 200: recorded, not yet judged. The processor's verdict arrives
+      // separately, which is why this says "recorded" and not "you are winning".
+      setSubmitted((prior) => [
+        { clientBidId, amount, offset: receipt.offset, at: new Date() },
+        ...prior.slice(0, 4),
+      ])
+      setText('')
+      onBid()
+    } catch (e) {
+      if (e instanceof ApiError && e.reason) {
+        setProblem(reasons[e.reason] ?? `رُفضت المزايدة: ${e.reason}`)
+      } else {
+        setProblem(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>المزايدة</h2>
+
+      {closed ? (
+        <div className="notice info">أُغلق المزاد — لا تُقبل مزايدات جديدة.</div>
+      ) : (
+        <>
+          {problem && <div className="notice error">{problem}</div>}
+
+          <div className="row" style={{ alignItems: 'flex-end' }}>
+            <label style={{ flex: '1 1 240px', marginBottom: 0 }}>
+              <span>
+                المبلغ (ر.س) — أقل مزايدة{' '}
+                <span className="num">{sar(minimum, 'ar')}</span>
+              </span>
+              <input
+                className="ltr num"
+                inputMode="decimal"
+                value={text}
+                aria-label="مبلغ المزايدة"
+                onChange={(e) => {
+                  setText(e.target.value)
+                  setProblem(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !busy && amount !== null && !tooLow) void submit()
+                }}
+              />
+            </label>
+
+            <button
+              className="primary big"
+              disabled={busy || amount === null || tooLow || alreadyLeading}
+              onClick={() => void submit()}
+            >
+              {busy ? 'جارٍ الإرسال…' : 'إرسال المزايدة'}
+            </button>
+          </div>
+
+          {tooLow && (
+            <div className="small" style={{ color: 'var(--danger)', marginTop: 8 }}>
+              أقل من أقل مزايدة مقبولة.
+            </div>
+          )}
+
+          {alreadyLeading && !tooLow && (
+            <div className="small muted" style={{ marginTop: 8 }}>
+              أنت الأعلى بالفعل — لا حاجة للمزايدة حتى يتجاوزك غيرك.
+            </div>
+          )}
+
+          <p className="muted small" style={{ marginTop: 14 }}>
+            تُوقَّع المزايدة في متصفحك بمفتاحك الخاص قبل إرسالها، فلا يستطيع أحد — ولا
+            النظام نفسه — إرسال مزايدة باسمك.
+          </p>
+        </>
+      )}
+
+      {submitted.length > 0 && (
+        <>
+          <h3>مزايداتك في هذه الجلسة</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>المبلغ</th>
+                <th>الوقت</th>
+                <th>الترتيب في السجل</th>
+                <th>الحالة</th>
+              </tr>
+            </thead>
+            <tbody>
+              {submitted.map((b) => (
+                <tr key={b.clientBidId}>
+                  <td className="num">{sar(b.amount, 'ar')}</td>
+                  <td className="num small">{b.at.toLocaleTimeString('ar-SA')}</td>
+                  <td className="num small">{b.offset}</td>
+                  <td className="small">{outcome(b, price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted small">
+            «مُسجَّلة» تعني أن المزايدة حُفظت في السجل ولم يصدر حكمها بعد. الحكم من
+            خدمة المعالجة بترتيب السجل، لا بوقت جهازك.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}

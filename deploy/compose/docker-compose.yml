@@ -178,6 +178,8 @@ services:
       Jwt__Authority: http://keycloak:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
+      # The two portals run on :3000 and :3001. Default is no origins at all.
+      Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ReplicationFactor: "1"
       Award__ComplianceWindowDays: "5"
@@ -202,6 +204,8 @@ services:
       Jwt__Authority: http://keycloak:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
+      # The two portals run on :3000 and :3001. Default is no origins at all.
+      Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ReplicationFactor: "1"
       # Must match the catcher's: both derive each bidder's signing key from it,
@@ -228,6 +232,8 @@ services:
       Jwt__Authority: http://keycloak:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
+      # The two portals run on :3000 and :3001. Default is no origins at all.
+      Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
       Catcher__PodOrdinal: "0"
       # The same master key the participant service holds.
       Catcher__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
@@ -236,6 +242,32 @@ services:
       provision-migrate:
         condition: service_completed_successfully
       kafka:
+        condition: service_healthy
+
+  # Public read model. No database: it rebuilds from the compacted control topics,
+  # and it deliberately does not consume auctions.sealed, so the reserve price is
+  # unreachable from the public read path by ACL rather than by care (D-23).
+  query-bff:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.querybff
+    container_name: eauction-query-bff
+    ports:
+      - "5094:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ReplicationFactor: "1"
+      Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
+    depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
 
   bid-processor:

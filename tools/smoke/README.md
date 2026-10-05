@@ -86,3 +86,41 @@ same — and one national ID is one bidder (D-25). A participant database carrie
 from a previous run therefore answers registration with a correct `409`. The identity
 store and the participant store are coupled: they are reset together, or `--keep-data`
 keeps both and you accept that the walk-through stops there.
+
+## The browser walk-through
+
+`tools/smoke/run-portals.sh` drives the same auction through the two portals'
+interfaces with Playwright — a real Keycloak login form for four actors, real
+services, and a bid whose frame the browser builds and signs itself. One test with
+steps rather than several sharing state: Playwright restarts its worker after a
+failure, so module state does not survive one, and an auction cannot be bid on
+before it is approved.
+
+Everything found by running it is listed in `docs/ARCHITECTURE.md` §23. The ones
+worth repeating here:
+
+- **React StrictMode runs every effect twice**, so the PKCE callback redeemed its
+  authorization code twice. The second attempt fails — a code is single-use and the
+  verifier is consumed with it — and reported "the login response did not match this
+  tab", throwing away a login that had succeeded.
+- **Neither portal refreshed.** Both fetched once on mount, so an auction going
+  live, a price moving, and the candidate the processor offers after a close were all
+  invisible until the user reloaded.
+- **Both the bid catcher and the query BFF reported ready before reading anything.**
+  "The state stopped changing" is indistinguishable from "the state has not started
+  loading" while a Kafka consumer is still joining its group.
+- **Nafath supplies identity, not contact details**, and the bidder portal had no
+  step to collect them — so the deposit was refused with "the bidder's profile is
+  incomplete" and the bidder could not proceed.
+- **The engine refuses a leader raising their own bid** (B-04) and publishes that to
+  `bids.rejected`, which no browser reads. A refused bid sat on screen marked
+  "recorded" for ever.
+
+Two mistakes in the test itself are worth naming, because both were silent:
+
+- The D-23 leak check looked for `1,200,000` on a page that renders Arabic-Indic
+  digits, so it could never have failed whether the reserve leaked or not. Assertions
+  about rendered money now go through the same formatter the portals use.
+- `datetime-local` has minute precision, so a start and end a few seconds apart
+  arrive identical and validation rejects them. That sets the floor on how short the
+  test's auction can be, and the test takes about three minutes because of it.

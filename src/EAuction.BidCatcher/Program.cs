@@ -57,13 +57,22 @@ IEventStream eventStream = string.IsNullOrWhiteSpace(bootstrap)
     });
 
 builder.Services.AddSingleton(eventStream);
-builder.Services.AddSingleton<ControlPlane>();
+builder.Services.AddSingleton(sp => new ControlPlane(
+    sp.GetRequiredService<CatcherState>(),
+    sp.GetRequiredService<IEventStream>(),
+    sp.GetRequiredService<ILogger<ControlPlane>>())
+{
+    MinimumWarmUp = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("Catcher:MinimumWarmUpSeconds", 8))
+});
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ControlPlane>());
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+builder.Services.AddEAuctionCors(builder.Configuration);
 
 var app = builder.Build();
 
+app.UseEAuctionCors();
 app.UseAuthentication();
 app.UseAuthorization();
 

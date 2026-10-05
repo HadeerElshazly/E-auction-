@@ -45,7 +45,13 @@ public sealed class Caller(HttpClient http, string baseUrl, string token, string
     private HttpRequestMessage Request(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, baseUrl.TrimEnd('/') + path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // An empty token means genuinely anonymous. Sending "Bearer " with nothing
+        // after it is not the same request a citizen's browser makes before login,
+        // and the public catalogue has to answer that one.
+        if (token.Length > 0)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
         return request;
     }
 

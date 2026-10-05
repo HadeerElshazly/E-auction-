@@ -1,0 +1,122 @@
+/*
+ * One stylesheet for both portals. Arabic-first: the realm's default locale is ar,
+ * the documents are Arabic, and the award letters are issued in Arabic, so RTL is
+ * the default direction and LTR is the exception rather than the other way round.
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #d8dce3;
+  --text: #15181d;
+  --muted: #5c6472;
+  --accent: #0f5c3f;        /* the green of Saudi government services */
+  --accent-weak: #e7f1ec;
+  --danger: #a3242b;
+  --danger-weak: #fbeceb;
+  --warn: #8a5a00;
+  --warn-weak: #fdf3e0;
+  --radius: 8px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+/* Numbers read left-to-right even inside Arabic text, and a price that reverses
+   its digit groups is a price that gets misread. */
+.ltr, input[type="number"], .num, code, .mono {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.mono, code { font-family: var(--mono); }
+
+.app { max-width: 1120px; margin: 0 auto; padding: 0 20px 64px; }
+
+header.bar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 20px; margin-bottom: 24px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+header.bar h1 { font-size: 17px; margin: 0; font-weight: 650; }
+header.bar .grow { flex: 1; }
+header.bar .who { color: var(--muted); font-size: 13px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px; margin-bottom: 16px;
+}
+.card h2 { font-size: 15px; margin: 0 0 14px; font-weight: 650; }
+.card h3 { font-size: 13px; margin: 18px 0 8px; color: var(--muted); font-weight: 650; }
+
+button {
+  font: inherit; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover:not(:disabled) { filter: brightness(1.1); }
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.big { padding: 12px 20px; font-size: 16px; font-weight: 650; }
+
+label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+label > span { display: block; margin-bottom: 4px; }
+input, select, textarea {
+  font: inherit; width: 100%; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  color: var(--text);
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: start; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-size: 12px; font-weight: 650; }
+tbody tr:hover { background: var(--bg); }
+
+.pill {
+  display: inline-block; padding: 2px 9px; border-radius: 99px;
+  font-size: 12px; font-weight: 650; border: 1px solid transparent;
+}
+.pill.live { background: var(--accent-weak); color: var(--accent); }
+.pill.wait { background: var(--warn-weak); color: var(--warn); }
+.pill.done { background: var(--bg); color: var(--muted); border-color: var(--border); }
+.pill.bad  { background: var(--danger-weak); color: var(--danger); }
+
+.notice { padding: 11px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 14px; }
+.notice.error { background: var(--danger-weak); color: var(--danger); }
+.notice.ok { background: var(--accent-weak); color: var(--accent); }
+.notice.info { background: var(--warn-weak); color: var(--warn); }
+.notice ul { margin: 6px 0 0; padding-inline-start: 20px; }
+
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.big-number { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
+.steps { list-style: none; padding: 0; margin: 0; }
+.steps li { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; }
+.steps .tick { width: 18px; text-align: center; }
+.steps .done { color: var(--accent); }
+.steps .todo { color: var(--border); }
+
+.centre { max-width: 420px; margin: 72px auto; text-align: center; }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a; --surface: #1c1f25; --border: #30353e;
+    --text: #e9ecf1; --muted: #949cab;
+    --accent: #3faa7d; --accent-weak: #16271f;
+    --danger: #e4797f; --danger-weak: #2a1719;
+    --warn: #d9a441; --warn-weak: #2a2214;
+  }
+  header.bar { background: var(--surface); }
+}

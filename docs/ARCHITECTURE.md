@@ -1635,3 +1635,149 @@ than the default, because `pg_isready` answers before the init scripts have run.
   sequence they encode, by `tools/smoke/run-smoke.sh`.
 - No Docker daemon was available either. `docker compose config` validates, and
   the Dockerfile follows the four that exist, but no image here was built.
+
+## 23. The two portals, and the read path they needed
+
+The portals were the next slice. Building them needed a read surface that did not
+exist, and driving them in a real browser found eleven defects — eight in the
+platform, three in the portals themselves.
+
+### The read path
+
+Nothing could be read. There was no list endpoint anywhere, so the admin portal
+could not open on anything. `AuctionApproved` carried `PlotCount` but not the
+plots, so a bidder could not see which land was in the package they were being
+asked to put a deposit on. And no HTTP endpoint anywhere returned the current
+price.
+
+- **`GET /auctions`** on auction-admin: the staff list, including drafts and
+  rejections, bounded server-side.
+- **Plots on the public event**: deed number, area, coordinates and descriptions.
+  D-23 restricts the reserve and nothing else, so this belongs on the public topic.
+- **`EAuction.QueryBff`**: a new service with no database, serving the public
+  catalogue and the live price from the compacted control topics.
+
+### D-29: the public read model is its own service
+
+Not the participant service, which holds national IDs and deposit records — giving
+that a public read path would put one careless `Include` between a bidder's file
+and the internet. Not the bid catcher either, for the opposite reason: the catcher
+is the hot path, and a read API sharing its process competes with bidding for CPU
+in the last thirty seconds of a hot lot, which is when both matter most.
+
+The BFF consumes three topics and deliberately not a fourth: it never reads
+`auctions.sealed`, so the reserve is unreachable from the public read path by ACL
+rather than by care. The leading bidder's id is held privately and no response type
+has a field for it, so D-22 is a property of the shape rather than a line of code
+someone must remember — `MaskingTests` asserts both by reflection.
+
+Aliases are numbered **per auction**, assigned in the order bidders first lead. A
+global sequence would be worse than none: the same alias appearing in two auctions
+would tell a watcher the two leaders are the same person, which is exactly the
+collusion signal the masking exists to remove.
+
+### D-30: the bid frame has a second implementation, pinned by a shared vector
+
+The bidder portal builds and signs the 104-byte frame in the browser with Web
+Crypto. That is a deliberate duplication of `BidFrame.cs`: the signing key is the
+bidder's own, and a server signing on their behalf would destroy the evidential
+value of a signed bid — nobody could later distinguish a bid the bidder made from
+one the platform made for them.
+
+Two implementations of a wire format drift silently, so both assert against one
+committed vector, `web/shared/src/__fixtures__/bid-frame-vector.json`. The trap it
+exists for: `Guid.TryWriteBytes` writes .NET's **mixed-endian** layout — first three
+groups little-endian, last eight in order — which is not RFC 4122 byte order. Get it
+wrong and the catcher reads a different auction and a different bidder, refuses the
+bid as `UnknownAuction`, and nothing in either codebase looks wrong. The vector's
+GUIDs are chosen so no group equals its own reverse, and a test asserts that
+property so nobody replaces them with palindromic ones that would pass either way.
+
+Verified both directions, and verified the vector discriminates: inverting the byte
+order in the TypeScript fails three of its six tests.
+
+### What the browser found
+
+Eight platform defects:
+
+1. **The PKCE callback redeemed its code twice.** React StrictMode runs every effect
+   twice, and an authorization code is single-use with the verifier consumed
+   alongside it. The second attempt reported "the login response did not match this
+   tab" and discarded a login that had in fact succeeded. One in-flight promise per
+   code now.
+2. **A page refresh logged the user out.** The access token is in memory only, by
+   design — a token in storage outlives the tab and is readable by any script on the
+   page, and here it can award land. The cost is that a refresh loses it, which
+   dumped the user on a sign-in button while Keycloak still held their session. A
+   cold load now tries `prompt=none` once, marked in sessionStorage so a refusal
+   cannot loop.
+3. **The bid catcher and the query BFF both reported ready before reading
+   anything.** "The count stopped changing" is indistinguishable from "the count has
+   not started changing yet" while a Kafka consumer joins its group, so a fresh pod
+   declared itself warm with empty state. The catcher would have rejected every bid
+   as `UnknownAuction` behind a passing probe. Both now require a settling floor,
+   default 8 seconds, as well as stability.
+4. **Nafath supplies identity, not contact details.** The deposit cannot be
+   confirmed without somewhere to send an award letter, and the bidder portal had no
+   step to collect one — so qualification stopped dead at "the bidder's profile is
+   incomplete".
+5. **The reserve had to be retyped on every edit.** No read path returns it, so the
+   editor cannot prefill it, and a required field meant correcting a typo in an
+   auction's name obliged a clerk to retype the reserve from paper — with a wrong
+   figure silently replacing the number the whole auction turns on. Null now means
+   "leave it", covered by `ReserveUpdateTests`.
+6. **Request and response enums disagreed** (found earlier, in §21) and the
+   **pending candidate's amount was missing from the API**, which would have asked
+   the committee to approve a sum it could not see.
+7. **No service had CORS**, so neither portal could call anything from a browser.
+   It defaults to no origins, with no wildcard option: a wildcard origin on a
+   bearer-token API lets any page on the internet spend a signed-in bidder's session.
+8. **A refused bid looked accepted for ever.** The engine rejects a leader raising
+   their own bid (B-04) and publishes that to `bids.rejected`, which no browser
+   reads. The portal now refuses the raise itself — it knows it leads, because the
+   BFF tells it so without naming anyone else — and marks a bid the price has moved
+   past as superseded rather than leaving it "recorded".
+
+Three in the portals:
+
+9. **Neither portal refreshed.** Both fetched once on mount, so an auction going
+   live, a price moving, and the candidate the processor offers after a close were
+   invisible until a reload. Both now poll, the bidder's catalogue backing off in a
+   hidden tab and the admin editor only while the auction is in a state the
+   processor owns.
+10. **The editor's form reseeded on every sibling action**, so adding a plot wiped
+    unsaved dates and prices — and a save that raced a refresh sent the reseeded
+    defaults, producing an auction whose end preceded its start. Keyed on the
+    auction id now, not the auction object.
+11. **The plot form cleared asynchronously after each POST**, so a fast typist lost
+    the next plot's input.
+
+### Two silent mistakes in the test itself
+
+Worth recording because both would have passed for ever:
+
+- The D-23 leak check looked for `1,200,000` on a page that renders Arabic-Indic
+  digits. It could not have failed whether the reserve leaked or not. Assertions
+  about rendered money now go through the same formatter the portals use.
+- The API smoke test's winner wait filtered on price but not auction id. The control
+  topics are compacted and long-lived, so it matched a verdict from an auction held
+  minutes earlier and reported the wrong winner as this run's. The auction id is now
+  a required argument on `TopicWatcher.WaitForAsync`, so a caller cannot omit it.
+
+### Still not verified
+
+- **No push channel.** The portals poll. This remains the largest functional gap:
+  §7.2's design has the processor's verdict reaching the bidder over a push channel,
+  and `bids.rejected` reaches no browser at all, so a bidder learns a bid was
+  refused only by inference from the price.
+- **No payment gateway and no document service.** The booklet, the deposit and
+  every award letter are a reference string or a `Guid` the portals generate. The
+  portals say so on screen rather than implying money moved.
+- **The `acr` step-up is still unimplemented** at KYC, deposit and award acceptance —
+  unchanged from §20, and now the largest security gap.
+- **One browser, one viewport.** Chromium headless at desktop size. No Safari, no
+  Firefox, no phone, and the mobile app does not exist.
+- **No accessibility audit.** The portals use real labels and roles, which is what
+  let the walk-through address them by name, but nothing has been checked against
+  WCAG or a screen reader.
+- **No CSP.** The argument in `web/README.md` for one is not yet acted on.

@@ -31,6 +31,16 @@ public abstract record DomainEvent : IDomainEvent
 /// consume this topic, and the BFF feeds public APIs — so a misconfigured BFF
 /// cannot leak the reserve, because it never receives it (D-06).
 /// </summary>
+/// <summary>
+/// A plot as the public catalogue sees it. A separate shape from the Plot entity on
+/// purpose: an event that serialised the entity would carry whatever is added to it
+/// later, which is how internal fields end up on a public topic by accident.
+/// </summary>
+public sealed record PublicPlot(
+    Guid Id, string DeedNumber, decimal AreaSqm,
+    string? Latitude, string? Longitude,
+    string? DescriptionAr, string? DescriptionEn);
+
 public sealed record AuctionApproved : DomainEvent
 {
     public required Guid AuctionId { get; init; }
@@ -47,6 +57,14 @@ public sealed record AuctionApproved : DomainEvent
     public required string Channel { get; init; }
     public required int PlotCount { get; init; }
     public required decimal TotalAreaSqm { get; init; }
+
+    /// <summary>
+    /// The plots themselves, not just the count. A bidder deciding whether to put
+    /// down a deposit needs to know which land is in the package — deed numbers,
+    /// areas and where it is. D-23 restricts the reserve price and nothing else, so
+    /// this belongs on the public topic.
+    /// </summary>
+    public required IReadOnlyList<PublicPlot> Plots { get; init; }
 
     public override string AggregateType => "auction-upcoming";
     public override string AggregateId => AuctionId.ToString();

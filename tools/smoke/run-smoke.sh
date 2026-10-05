@@ -25,6 +25,8 @@ mkdir -p "$RUN"
 PIDS=()
 
 cleanup() {
+  # With --services-only the caller owns the services' lifetime, so leave them.
+  [ "${SERVICES_ONLY:-0}" = 1 ] && return
   for pid in "${PIDS[@]:-}"; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
   done
@@ -38,8 +40,36 @@ die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 # --- dependencies ----------------------------------------------------------
 
 if [ "$WITH_DEPS" = 1 ]; then
-  say "Starting Keycloak…"
-  "$REPO/deploy/keycloak/run-local.sh" || die "Keycloak did not start"
+  # Each is started only if it is not already answering, so --with-deps is safe to
+  # pass every time. Starting Keycloak is not idempotent in the way the other two
+  # are -- run-local.sh wipes its database to make the realm import take effect --
+  # so it is skipped when the realm is already up, and the databases are then left
+  # alone too (see the note on why they are coupled, below).
+  if ! curl -fsS --noproxy '*' -o /dev/null "$ISSUER/.well-known/openid-configuration" 2>/dev/null; then
+    say "Starting Keycloak…"
+    "$REPO/deploy/keycloak/run-local.sh" || die "Keycloak did not start"
+  else
+    echo "  Keycloak already up"
+  fi
+
+  if ! (exec 3<>/dev/tcp/${KAFKA%%:*}/${KAFKA##*:}) 2>/dev/null; then
+    say "Starting Kafka…"
+    "$REPO/tools/kafka/run-local-broker.sh" start || die "Kafka did not start"
+  else
+    echo "  Kafka already up"
+  fi
+
+  if ! pg_isready -q 2>/dev/null; then
+    say "Starting Postgres…"
+    # Whichever of these the host provides.
+    pg_ctlcluster 16 main start 2>/dev/null \
+      || service postgresql start >/dev/null 2>&1 \
+      || true
+    for _ in $(seq 1 30); do pg_isready -q && break; sleep 1; done
+    pg_isready -q || die "Postgres did not start"
+  else
+    echo "  Postgres already up"
+  fi
 fi
 
 say "Checking dependencies…"
@@ -66,6 +96,11 @@ echo "  Kafka      $KAFKA"
 # coupled; they are reset together or not at all.
 KEEP_DATA=0
 for a in "$@"; do [ "$a" = "--keep-data" ] && KEEP_DATA=1; done
+
+# run-portals.sh uses this: bring everything up, then stop short of the API
+# walk-through and leave the services running for the browser to drive.
+SERVICES_ONLY=0
+for a in "$@"; do [ "$a" = "--services-only" ] && SERVICES_ONLY=1; done
 
 PSQL="postgresql://eauction:eauction@localhost/postgres"
 for db in eauction_admin eauction_participant; do
@@ -117,30 +152,40 @@ start() {
     Jwt__RequireHttpsMetadata=false \
     Kafka__BootstrapServers="$KAFKA" \
     Kafka__ReplicationFactor=1 \
-    dotnet "$REPO/src/$project/bin/Release/net8.0/$project.dll" \
-      >"$RUN/$name.log" 2>&1 &
+    setsid dotnet "$REPO/src/$project/bin/Release/net8.0/$project.dll" \
+      >"$RUN/$name.log" 2>&1 < /dev/null &
   PIDS+=($!)
 }
 
+# The portals run on :3000 and :3001 and call these from a browser, so every
+# service they talk to needs those origins. Default is no origins at all.
+PORTAL_ORIGINS="http://localhost:3000,http://localhost:3001"
+
 start auction-admin EAuction.AuctionAdmin 5101 \
-  ConnectionStrings__Admin="$PG;Database=eauction_admin"
+  ConnectionStrings__Admin="$PG;Database=eauction_admin" \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 start participant EAuction.Participant 5102 \
   ConnectionStrings__Participant="$PG;Database=eauction_participant" \
-  Participant__BidderMasterKeyHex="$MASTER_KEY"
+  Participant__BidderMasterKeyHex="$MASTER_KEY" \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 start bid-catcher EAuction.BidCatcher 5103 \
   Catcher__BidderMasterKeyHex="$MASTER_KEY" \
-  Catcher__CeilingGraceSeconds=120
+  Catcher__CeilingGraceSeconds=120 \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 start bid-processor EAuction.BidProcessor 5104 \
   Processor__CloseGraceSeconds=5 \
   Processor__TickIntervalMs=250 \
   Processor__RecoveryQuietSeconds=2
 
+start query-bff EAuction.QueryBff 5105 \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
+
 # --- wait for health -------------------------------------------------------
 
-for probe in "auction-admin 5101" "participant 5102"; do
+for probe in "auction-admin 5101" "participant 5102" "query-bff 5105"; do
   set -- $probe
   for _ in $(seq 1 60); do
     curl -fsS --noproxy "*" -o /dev/null "http://127.0.0.1:$2/health/ready" 2>/dev/null && break
@@ -151,6 +196,11 @@ for probe in "auction-admin 5101" "participant 5102"; do
 done
 say "Services are up. Logs in $RUN/"
 
+if [ "$SERVICES_ONLY" = 1 ]; then
+  # setsid so the services outlive this script; the caller stops them.
+  exit 0
+fi
+
 # --- the walk-through ------------------------------------------------------
 
 echo
@@ -159,6 +209,7 @@ SMOKE_KAFKA="$KAFKA" \
 SMOKE_ADMIN_URL=http://127.0.0.1:5101 \
 SMOKE_PARTICIPANT_URL=http://127.0.0.1:5102 \
 SMOKE_CATCHER_URL=http://127.0.0.1:5103 \
+SMOKE_BFF_URL=http://127.0.0.1:5105 \
 NO_PROXY='*' no_proxy='*' \
   dotnet "$REPO/tools/smoke/bin/Release/net8.0/EAuction.Smoke.dll"
 RESULT=$?

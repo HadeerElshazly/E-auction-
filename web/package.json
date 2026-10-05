@@ -1,0 +1,19 @@
+{
+  "name": "e-auction-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The two portals. A workspace rather than two separate projects, because the OIDC login, the money formatting and the API client are the same code and a drift between them is a bug in one of them.",
+  "workspaces": [
+    "shared",
+    "admin",
+    "bidder",
+    "e2e"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:admin": "npm run dev --workspace admin",
+    "dev:bidder": "npm run dev --workspace bidder",
+    "e2e": "npm run test --workspace e2e"
+  }
+}

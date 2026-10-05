@@ -1,0 +1,11 @@
+{
+  "_comment": "Pinned from both sides: tests/EAuction.Tests/FrameVectorTests.cs and web/shared/src/bidFrame.test.ts. The GUIDs are deliberately not palindromic, so .NET's mixed-endian Guid layout cannot be confused with RFC 4122 byte order without this vector failing.",
+  "auctionId": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+  "bidderId": "aabbccdd-eeff-0102-0304-05060708090a",
+  "clientBidId": "deadbeef-cafe-4abe-900d-0123456789ab",
+  "amountMinorUnits": 120000000,
+  "clientTimestampMs": 1700000000123,
+  "nonce": "72623859790382856",
+  "signingSecretHex": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+  "frameHex": "3D2C1B0A5F4E71608293A4B5C6D7E8F9DDCCBBAAFFEE0201030405060708090A000E2707000000007B68E5CF8B010000EFBEADDEFECABE4A900D0123456789AB080706050403020113FB81F89411A67701ACB14EE8DE23D53513CFEE5B496F66434CB26BA1F12282"
+}

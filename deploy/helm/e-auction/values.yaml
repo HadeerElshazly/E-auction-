@@ -42,6 +42,15 @@ config:
     authority: https://id.example.sa/realms/eauction
     audience: eauction
 
+  # Origins the two portals are served from. Empty means no cross-origin access at
+  # all, which is the default and the right one for a service no browser calls —
+  # there is no wildcard option, because a wildcard origin on a bearer-token API
+  # lets any page on the internet spend a signed-in bidder's session.
+  cors:
+    allowedOrigins: []
+      # - https://mazad.jeddah.gov.sa
+      # - https://mazad-admin.jeddah.gov.sa
+
 # ---------------------------------------------------------------------------
 # Provisioning: the steps that run once, before any pod rolls
 #
@@ -226,6 +235,57 @@ participant:
     - name: Participant__BidderMasterKeyHex
       secretName: eauction-bidder-master-key
       secretKey: master-key-hex
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+
+# Public read model. No database and no reserve price: it rebuilds from the
+# compacted control topics and does not consume auctions.sealed (D-23).
+#
+# Scales out freely — every replica keeps its own full copy of a small read model,
+# and nothing it serves is a write.
+queryBff:
+  enabled: true
+  image: e-auction/query-bff
+  replicas: 2
+  port: 8080
+
+  # The public catalogue is the one thing citizens reach before they log in, so
+  # this is the service that faces the internet.
+  expose:
+    enabled: true
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  spreadAcrossNodes: true
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  secretEnv: []
 
   env:
     - name: ASPNETCORE_URLS

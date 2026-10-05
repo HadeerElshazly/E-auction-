@@ -20,6 +20,7 @@ var issuer = Env("SMOKE_ISSUER", "http://localhost:8080/realms/eauction");
 var adminUrl = Env("SMOKE_ADMIN_URL", "http://localhost:5101");
 var participantUrl = Env("SMOKE_PARTICIPANT_URL", "http://localhost:5102");
 var catcherUrl = Env("SMOKE_CATCHER_URL", "http://localhost:5103");
+var bffUrl = Env("SMOKE_BFF_URL", "http://localhost:5105");
 var bootstrap = Env("SMOKE_KAFKA", "127.0.0.1:9092");
 var password = Env("SMOKE_PASSWORD", "dev-only-password");
 
@@ -144,8 +145,7 @@ try
     n.Step("approved by the award committee");
 
     // Debezium or the in-process relay carries the outbox to Kafka.
-    var upcoming = await watcher.WaitForAsync(Topics.Upcoming, "AuctionApproved",
-        p => p.Contains(auctionId.ToString()));
+    var upcoming = await watcher.WaitForAsync(Topics.Upcoming, "AuctionApproved", auctionId);
     n.Step($"AuctionApproved on {Topics.Upcoming}", "via the transactional outbox");
 
     if (!upcoming.Contains("eserve", StringComparison.OrdinalIgnoreCase))
@@ -154,8 +154,7 @@ try
         n.Fail("the reserve price is NOT on the public topic",
             "AuctionApproved carries the reserve — it must only be on auctions.sealed");
 
-    var sealedPayload = await watcher.WaitForAsync(Topics.Sealed, "AuctionReserveSet",
-        p => p.Contains(auctionId.ToString()));
+    var sealedPayload = await watcher.WaitForAsync(Topics.Sealed, "AuctionReserveSet", auctionId);
     if (sealedPayload.Contains(reserve.ToString()))
         n.Step($"AuctionReserveSet on {Topics.Sealed}", $"{reserve / 100:N0} SAR, ACL-restricted");
     else
@@ -192,11 +191,43 @@ try
         else n.Fail($"{who.Who} is eligible to bid", $"stage is {stage}");
     }
 
-    await watcher.WaitForAsync(Topics.Participants, "", p => p.Contains(sara.ToString()));
+    await watcher.WaitForAsync(
+        Topics.Participants, "", auctionId, p => p.Contains(sara.ToString()));
     n.Step($"eligibility published to {Topics.Participants}", "this is how the catcher learns");
 
     // -----------------------------------------------------------------------
-    n.Section("5. Signing keys — derived, never distributed");
+    n.Section("5. The public catalogue — what a citizen may see");
+    // -----------------------------------------------------------------------
+
+    // Anonymous: a land auction is published before anyone registers, which is how
+    // a citizen decides whether to buy the booklet at all.
+    var anon = new Caller(http, bffUrl, "", "anonymous");
+
+    var listed = await WaitForCatalogueAsync(anon, auctionId);
+    if (listed.GetProperty("plotCount").GetInt32() == 3
+        && listed.GetProperty("openingPriceMinorUnits").GetInt64() == opening)
+        n.Step("the auction is in the public catalogue", "anonymous, no token");
+    else
+        n.Fail("the auction is in the public catalogue", listed.ToString());
+
+    var detail = await anon.GetAsync($"/auctions/{auctionId}");
+    var deeds = detail.GetProperty("plots").EnumerateArray()
+        .Select(x => x.GetProperty("deedNumber").GetString()).ToArray();
+    if (deeds.Length == 3 && deeds.Contains("1010/6"))
+        n.Step("the plots are visible to a bidder", string.Join(", ", deeds));
+    else
+        n.Fail("the plots are visible to a bidder", $"got [{string.Join(", ", deeds)}]");
+
+    // D-23 at the HTTP boundary, not just on the topic.
+    var detailRaw = detail.ToString();
+    if (!detailRaw.Contains("eserve", StringComparison.OrdinalIgnoreCase)
+        && !detailRaw.Contains(reserve.ToString()))
+        n.Step("the reserve price is not on the public read path", "D-23 holds end to end");
+    else
+        n.Fail("the reserve price is not on the public read path", "the detail response leaked it");
+
+    // -----------------------------------------------------------------------
+    n.Section("6. Signing keys — derived, never distributed");
     // -----------------------------------------------------------------------
 
     var saraKey = await saraParticipant.GetAsync(
@@ -220,7 +251,7 @@ try
         n.Fail("khalid cannot touch sara's key", $"got {(int)keyStatus}, wanted 403");
 
     // -----------------------------------------------------------------------
-    n.Section("6. Bidding — binary frames on the hot path");
+    n.Section("7. Bidding — binary frames on the hot path");
     // -----------------------------------------------------------------------
 
     await WaitForReady(http, catcherUrl, n);
@@ -304,7 +335,8 @@ try
     else if (staleStatus == System.Net.HttpStatusCode.Accepted)
     {
         // Accepted into the log, then judged. The verdict is the processor's.
-        await watcher.WaitForAsync(Topics.BidsRejected, "BidRejected",
+        await watcher.WaitForAsync(
+            Topics.BidsRejected, "BidRejected", auctionId,
             p => p.Contains(staleBidId.ToString()));
         n.Step("a bid below the current price is refused", "202 at the catcher, BidRejected by the processor");
         n.Note("the catcher screens on an eventually-consistent price; the processor decides");
@@ -315,13 +347,14 @@ try
     }
 
     // -----------------------------------------------------------------------
-    n.Section("7. The processor decides");
+    n.Section("8. The processor decides");
     // -----------------------------------------------------------------------
 
-    await watcher.WaitForAsync(Topics.Lifecycle, "AuctionStarted", p => p.Contains(auctionId.ToString()));
+    await watcher.WaitForAsync(Topics.Lifecycle, "AuctionStarted", auctionId);
     n.Step("AuctionStarted", "the processor opened it, not a clock in the portal");
 
-    var winnerPayload = await watcher.WaitForAsync(Topics.CurrentWinner, "CurrentWinner",
+    var winnerPayload = await watcher.WaitForAsync(
+        Topics.CurrentWinner, "CurrentWinner", auctionId,
         p => p.Contains((opening + 4 * increment).ToString()));
     var winner = JsonDocument.Parse(winnerPayload).RootElement;
     var leader = winner.GetProperty("leaderBidderId").GetGuid();
@@ -335,12 +368,37 @@ try
 
     n.Note("the order came from Kafka partition offsets, not client timestamps (D-03)");
 
+    // The same verdict, as each party is allowed to see it.
+    var saraPrice = await WaitForPriceAsync(
+        new Caller(http, bffUrl, saraToken, "sara"), auctionId, opening + 4 * increment);
+    if (saraPrice.GetProperty("leaderIsYou").GetBoolean())
+        n.Step("sara is told she is leading", $"alias {saraPrice.GetProperty("leaderAlias").GetString()}");
+    else
+        n.Fail("sara is told she is leading", saraPrice.ToString());
+
+    var khalidPrice = await new Caller(http, bffUrl, khalidToken, "khalid")
+        .GetAsync($"/auctions/{auctionId}/price");
+    var khalidSeesLeader = khalidPrice.GetProperty("leaderIsYou").GetBoolean();
+    var alias = khalidPrice.GetProperty("leaderAlias").GetString();
+
+    if (!khalidSeesLeader && alias is not null
+        && !khalidPrice.ToString().Contains(sara.ToString()))
+        n.Step("khalid sees the price but not who leads", $"leader is {alias} — D-22");
+    else
+        n.Fail("khalid sees the price but not who leads", khalidPrice.ToString());
+
+    var anonPrice = await anon.GetAsync($"/auctions/{auctionId}/price");
+    if (!anonPrice.GetProperty("leaderIsYou").GetBoolean()
+        && anonPrice.GetProperty("priceMinorUnits").GetInt64() == opening + 4 * increment)
+        n.Step("an anonymous watcher sees the price", "open auction, masked identity");
+    else
+        n.Fail("an anonymous watcher sees the price", anonPrice.ToString());
+
     await WaitUntil(endsAt.AddSeconds(8), "the auction to close");
-    await watcher.WaitForAsync(Topics.Lifecycle, "AuctionClosed", p => p.Contains(auctionId.ToString()));
+    await watcher.WaitForAsync(Topics.Lifecycle, "AuctionClosed", auctionId);
     n.Step("AuctionClosed", "at EndsAt + close grace");
 
-    var offered = await watcher.WaitForAsync(Topics.Lifecycle, "CandidateOffered",
-        p => p.Contains(auctionId.ToString()));
+    var offered = await watcher.WaitForAsync(Topics.Lifecycle, "CandidateOffered", auctionId);
     var candidate = JsonDocument.Parse(offered).RootElement.GetProperty("bidderId").GetGuid();
     if (candidate == sara)
         n.Step("sara offered to the committee as the candidate", "above the reserve");
@@ -348,7 +406,7 @@ try
         n.Fail("sara offered to the committee as the candidate", $"got {candidate}");
 
     // -----------------------------------------------------------------------
-    n.Section("8. Award (workflow 2)");
+    n.Section("9. Award (workflow 2)");
     // -----------------------------------------------------------------------
 
     // The processor's CandidateOffered reached auction-admin over auctions.lifecycle,
@@ -447,6 +505,38 @@ static async Task WaitForReady(HttpClient http, string catcherUrl, Narrator n)
         await Task.Delay(500);
     }
     throw new SmokeException("the bid catcher never became ready");
+}
+
+static async Task<JsonElement> WaitForCatalogueAsync(Caller anon, Guid auctionId)
+{
+    // The BFF rebuilds from the compacted topics, so it is behind the approval by
+    // however long the relay and the replay take.
+    for (var i = 0; i < 90; i++)
+    {
+        var listing = await anon.GetAsync("/auctions");
+        foreach (var item in listing.GetProperty("items").EnumerateArray())
+            if (item.GetProperty("id").GetGuid() == auctionId)
+                return item.Clone();
+        await Task.Delay(500);
+    }
+    throw new SmokeException(
+        "the auction never reached the public catalogue; is the query BFF consuming "
+        + "auctions.upcoming?");
+}
+
+static async Task<JsonElement> WaitForPriceAsync(Caller who, Guid auctionId, long expected)
+{
+    for (var i = 0; i < 90; i++)
+    {
+        var price = await who.GetAsync($"/auctions/{auctionId}/price");
+        if (price.TryGetProperty("priceMinorUnits", out var p)
+            && p.ValueKind == JsonValueKind.Number && p.GetInt64() == expected)
+            return price.Clone();
+        await Task.Delay(500);
+    }
+    throw new SmokeException(
+        $"the public price never reached {expected / 100:N0} SAR; is the query BFF "
+        + "consuming auctions.current-winner?");
 }
 
 static async Task<(Guid Bidder, long Amount)> WaitForCandidateAsync(Caller committee, Guid auctionId)

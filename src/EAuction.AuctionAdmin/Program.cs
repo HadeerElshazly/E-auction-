@@ -56,6 +56,7 @@ var complianceWindow = TimeSpan.FromDays(
     builder.Configuration.GetValue("Award:ComplianceWindowDays", 5));
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+builder.Services.AddEAuctionCors(builder.Configuration);
 
 // Enums as names, both ways. Responses already hand back "Online" and "Eligible" as
 // strings, so without this a portal cannot PUT back what it just read: the request
@@ -67,6 +68,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 var app = builder.Build();
 
+app.UseEAuctionCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -191,6 +193,52 @@ app.MapPost("/auctions/{id:guid}/settle", (Guid id, IDbContextFactory<AdminDbCon
     Mutate(f, id, ct, a => a.Settle(DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AwardCommittee);
 
+// The list the portal opens on. Staff-only: it carries every auction including
+// drafts and rejections, which is a different thing entirely from the public
+// catalogue the query BFF serves.
+app.MapGet("/auctions", async (
+    string? status, int? skip, int? take,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    AuctionStatus? filter = null;
+    if (!string.IsNullOrWhiteSpace(status))
+    {
+        if (!Enum.TryParse<AuctionStatus>(status, ignoreCase: true, out var parsed))
+            return Results.BadRequest(new
+            {
+                problems = new[] { $"Unknown status '{status}'." },
+                allowed = Enum.GetNames<AuctionStatus>()
+            });
+        filter = parsed;
+    }
+
+    // Bounded, and bounded here rather than trusted from the query string: a
+    // portal bug should not be able to ask for every auction ever held.
+    var page = Math.Clamp(take ?? 50, 1, 200);
+    var offset = Math.Max(0, skip ?? 0);
+
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var query = db.Auctions.AsNoTracking();
+    if (filter is not null) query = query.Where(a => a.Status == filter);
+
+    var total = await query.CountAsync(ct);
+
+    // Newest first, with the id as a tiebreak so paging cannot skip or repeat a
+    // row when two auctions share a creation instant.
+    var rows = await query
+        .OrderByDescending(a => a.CreatedAt).ThenBy(a => a.Id)
+        .Skip(offset).Take(page)
+        .Select(a => new AuctionListItem(
+            a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
+            a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.DepositMinorUnits,
+            a.Plots.Count, a.CreatedAt))
+        .ToListAsync(ct);
+
+    return Results.Ok(new { total, skip = offset, take = page, items = rows });
+})
+    .RequireAuthorization();
+
 app.MapGet("/auctions/{id:guid}", async (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
@@ -251,7 +299,9 @@ public sealed record CreateAuctionRequest(Guid CreatedByUserId, string NameAr, s
 public sealed record UpdateAuctionRequest(
     string NameAr, string NameEn, BidChannel Channel,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt,
-    long OpeningPriceMinorUnits, long ReservePriceMinorUnits,
+    long OpeningPriceMinorUnits,
+    /// <summary>Omit or null to leave the reserve unchanged; it is never readable back.</summary>
+    long? ReservePriceMinorUnits,
     long MinIncrementMinorUnits, long DepositMinorUnits,
     decimal BrokerageFeePercent, long BookletPriceMinorUnits,
     int? QuietPeriodSeconds, int MaxExtensions, string? Phase);
@@ -274,6 +324,16 @@ public sealed record DisqualifyRequest(string Reason, bool ForfeitDeposit);
 /// admin through this endpoint, and not after the auction fails to reach it.
 /// It leaves the service only on the restricted auctions.sealed topic.
 /// </summary>
+/// <summary>
+/// Deliberately smaller than <see cref="AuctionResponse"/>: a list of fifty
+/// auctions does not need every award and plot on each one.
+/// </summary>
+public sealed record AuctionListItem(
+    Guid Id, string Status, string NameAr, string NameEn, string Channel,
+    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
+    long OpeningPriceMinorUnits, long DepositMinorUnits,
+    int PlotCount, DateTimeOffset CreatedAt);
+
 public sealed record AuctionResponse(
     Guid Id, string Status, string NameAr, string NameEn, string Channel, string? Phase,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,

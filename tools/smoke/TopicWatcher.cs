@@ -52,11 +52,21 @@ public sealed class TopicWatcher : IDisposable
         }
     }
 
-    /// <summary>Waits for a matching event and returns its payload.</summary>
+    /// <summary>
+    /// Waits for one auction's event on a topic and returns its payload.
+    ///
+    /// The auction id is a required argument rather than something the caller folds
+    /// into <paramref name="where"/>, because the control topics are compacted and
+    /// long-lived: every previous run's auctions are still on them. A filter that
+    /// matched only on a price accepted a verdict from an auction held minutes
+    /// earlier and reported the wrong winner as this run's.
+    /// </summary>
     public async Task<string> WaitForAsync(
-        string topic, string eventType, Func<string, bool>? where = null,
+        string topic, string eventType, Guid auctionId, Func<string, bool>? where = null,
         TimeSpan? timeout = null)
     {
+        var id = auctionId.ToString();
+
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(45));
         while (DateTime.UtcNow < deadline)
         {
@@ -64,6 +74,7 @@ public sealed class TopicWatcher : IDisposable
             {
                 foreach (var e in _seen)
                     if (e.Topic == topic && (eventType.Length == 0 || e.Type == eventType)
+                        && e.Payload.Contains(id, StringComparison.OrdinalIgnoreCase)
                         && (where is null || where(e.Payload)))
                         return e.Payload;
             }
@@ -74,7 +85,8 @@ public sealed class TopicWatcher : IDisposable
         {
             var onTopic = _seen.Where(e => e.Topic == topic).Select(e => e.Type).Distinct();
             throw new SmokeException(
-                $"No {eventType} on {topic} within {(timeout ?? TimeSpan.FromSeconds(45)).TotalSeconds:0}s. "
+                $"No {eventType} for {auctionId} on {topic} within "
+                + $"{(timeout ?? TimeSpan.FromSeconds(45)).TotalSeconds:0}s. "
                 + $"Saw on that topic: [{string.Join(", ", onTopic)}]");
         }
     }
