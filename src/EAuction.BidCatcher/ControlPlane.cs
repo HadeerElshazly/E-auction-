@@ -59,7 +59,7 @@ public sealed class ControlPlane(
 
         while (!ct.IsCancellationRequested && !Warm)
         {
-            var seen = state.AuctionCount + state.EligibilityCount;
+            var seen = state.AuctionCount + state.EligibilityCount + state.ClerkCount;
             stableFor = seen == lastSeen ? stableFor + 1 : 0;
             lastSeen = seen;
 
@@ -67,8 +67,9 @@ public sealed class ControlPlane(
             {
                 Warm = true;
                 logger.LogInformation(
-                    "Control plane warm: {Auctions} auction(s), {Eligibility} eligibility row(s).",
-                    state.AuctionCount, state.EligibilityCount);
+                    "Control plane warm: {Auctions} auction(s), {Eligibility} eligibility row(s), "
+                    + "{Clerks} clerk assignment(s).",
+                    state.AuctionCount, state.EligibilityCount, state.ClerkCount);
                 return;
             }
 
@@ -97,21 +98,52 @@ public sealed class ControlPlane(
             QuietPeriod = payload.QuietPeriodSeconds is { } seconds
                 ? TimeSpan.FromSeconds(seconds)
                 : null,
-            MaxExtensions = payload.MaxExtensions
+            MaxExtensions = payload.MaxExtensions,
+
+            // Which channel this auction runs on decides who may post a frame for
+            // it at all (§29). Anything unrecognised is Online, which is the
+            // channel with the stricter caller rule — a hall auction misread as
+            // online refuses the clerk rather than letting a bidder in.
+            Channel = Enum.TryParse<BidChannel>(payload.Channel, ignoreCase: true, out var channel)
+                ? channel
+                : BidChannel.Online
         });
     }
 
     private void ApplyParticipant(StreamEvent record)
     {
-        if (record.EventType != "ParticipantEligibilityChanged") return;
+        switch (record.EventType)
+        {
+            case "ParticipantEligibilityChanged":
+            {
+                var payload = JsonSerializer.Deserialize<ParticipantEligibilityPayload>(
+                    record.Payload, Json);
+                if (payload is null) return;
 
-        var payload = JsonSerializer.Deserialize<ParticipantEligibilityPayload>(record.Payload, Json);
-        if (payload is null) return;
+                if (payload.Eligible)
+                    state.GrantEligibility(payload.AuctionId, payload.BidderId, payload.KeyEpoch);
+                else
+                    state.RevokeEligibility(payload.AuctionId, payload.BidderId);
+                return;
+            }
 
-        if (payload.Eligible)
-            state.GrantEligibility(payload.AuctionId, payload.BidderId, payload.KeyEpoch);
-        else
-            state.RevokeEligibility(payload.AuctionId, payload.BidderId);
+            // Who may enter bids from the hall (§29). It rides this topic rather
+            // than a new one because it answers the same question — whose key
+            // signs a frame for this auction — and the catcher rebuilds both from
+            // the same replay.
+            case "AuctionClerkAssigned":
+            {
+                var payload = JsonSerializer.Deserialize<ClerkAssignmentPayload>(
+                    record.Payload, Json);
+                if (payload is null) return;
+
+                if (payload.Assigned)
+                    state.AssignClerk(payload.AuctionId, payload.ClerkUserId, payload.KeyEpoch);
+                else
+                    state.UnassignClerk(payload.AuctionId, payload.ClerkUserId);
+                return;
+            }
+        }
     }
 
     private void ApplyPrice(StreamEvent record)
@@ -159,6 +191,7 @@ internal sealed record AuctionApprovedPayload
     public long MinIncrementMinorUnits { get; init; }
     public int? QuietPeriodSeconds { get; init; }
     public int MaxExtensions { get; init; }
+    public string? Channel { get; init; }
 }
 
 internal sealed record ParticipantEligibilityPayload
@@ -166,6 +199,14 @@ internal sealed record ParticipantEligibilityPayload
     public Guid AuctionId { get; init; }
     public Guid BidderId { get; init; }
     public bool Eligible { get; init; }
+    public int KeyEpoch { get; init; }
+}
+
+internal sealed record ClerkAssignmentPayload
+{
+    public Guid AuctionId { get; init; }
+    public Guid ClerkUserId { get; init; }
+    public bool Assigned { get; init; }
     public int KeyEpoch { get; init; }
 }
 

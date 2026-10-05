@@ -17,6 +17,7 @@ public static class TopicMap
     public const string Sealed = Topics.Sealed;
     public const string Lifecycle = Topics.Lifecycle;
     public const string Deposits = Topics.Deposits;
+    public const string Participants = Topics.Participants;
 
     public static string BidTopicFor(Guid auctionId) => Topics.BidTopicFor(auctionId);
 
@@ -26,6 +27,11 @@ public static class TopicMap
         "auction-sealed" => Sealed,
         "auction-lifecycle" => Lifecycle,
         "auction-deposits" => Deposits,
+
+        // The clerk assignment answers the participants topic's own question —
+        // whose key signs a frame for this auction — so it goes there rather than
+        // onto a topic of its own.
+        "auction-clerk" => Participants,
         _ => null
     };
 }

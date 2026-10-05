@@ -35,6 +35,19 @@ public sealed class Auction
     /// </summary>
     public BidderVisibility BidderVisibility { get; private set; } = BidderVisibility.Masked;
 
+    /// <summary>
+    /// The clerk who runs this auction from the hall (§29). Null for an online
+    /// auction, and null for an onsite one until somebody is put on the floor.
+    /// </summary>
+    public Guid? ClerkUserId { get; private set; }
+
+    /// <summary>
+    /// Which derivation of the clerk's signing key is current. Rotated the same way
+    /// a bidder's is, and for the same reasons — a terminal left logged in, a clerk
+    /// replaced mid-auction.
+    /// </summary>
+    public int ClerkKeyEpoch { get; private set; }
+
     public DateTimeOffset? StartsAt { get; private set; }
     public DateTimeOffset? EndsAt { get; private set; }
 
@@ -310,6 +323,114 @@ public sealed class Auction
         if (Status != AuctionStatus.Closing)
             throw new InvalidAuctionTransitionException(Status, "send to eligibility review");
         Status = AuctionStatus.PendingEligibilityReview;
+    }
+
+    // -- قاعة المزاد: the clerk on the floor (§29) --------------------------
+
+    /// <summary>
+    /// Puts a clerk on the floor of a hall auction.
+    ///
+    /// Operational rather than a term of sale, so unlike the dates and the deposit
+    /// it is settable after approval — a clerk falls ill, a shift changes, and the
+    /// auction cannot be re-approved to deal with it. It is refused once the hall
+    /// has finished: an auction already closed has nobody left to enter bids for.
+    /// </summary>
+    public void AssignClerk(Guid clerkUserId)
+    {
+        if (Channel != BidChannel.Onsite)
+            throw new AuctionValidationException(
+                new[] { "Only an onsite auction has a clerk on the floor." });
+
+        if (clerkUserId == Guid.Empty)
+            throw new AuctionValidationException(new[] { "A clerk must be identified." });
+
+        if (Status is not (AuctionStatus.Draft or AuctionStatus.Rejected
+            or AuctionStatus.PendingReview or AuctionStatus.Approved
+            or AuctionStatus.Scheduled or AuctionStatus.Live))
+            throw new InvalidAuctionTransitionException(Status, "assign a clerk to");
+
+        // A different person means a different key, or the outgoing clerk's
+        // terminal could keep entering bids after they have been replaced.
+        if (ClerkUserId is not null && ClerkUserId != clerkUserId) ClerkKeyEpoch++;
+
+        ClerkUserId = clerkUserId;
+        PublishClerkAssignment(assigned: true, clerkUserId);
+    }
+
+    /// <summary>Takes the clerk off the floor; their key stops verifying at once.</summary>
+    public void UnassignClerk()
+    {
+        if (ClerkUserId is not { } outgoing) return;
+
+        ClerkUserId = null;
+        ClerkKeyEpoch++;
+        PublishClerkAssignment(assigned: false, outgoing);
+    }
+
+    private void PublishClerkAssignment(bool assigned, Guid clerkUserId) =>
+        _events.Add(new AuctionClerkAssigned
+        {
+            AuctionId = Id,
+            ClerkUserId = clerkUserId,
+            Assigned = assigned,
+            KeyEpoch = ClerkKeyEpoch
+        });
+
+    /// <summary>
+    /// The clerk moves the end time, because in the hall the auctioneer decides
+    /// when bidding has stopped rather than a clock (§29).
+    ///
+    /// The cap itself lives in the engine, which holds the live extension count;
+    /// this service does not and must not duplicate it. What is enforced here is
+    /// only who may ask and in what state.
+    /// </summary>
+    public void ExtendByClerk(Guid clerkUserId, int seconds)
+    {
+        RequireClerkOnTheFloor(clerkUserId, "extend");
+
+        if (seconds <= 0)
+            throw new AuctionValidationException(
+                new[] { "An extension must be a positive number of seconds." });
+
+        _events.Add(new AuctionExtendedByClerk
+        {
+            AuctionId = Id,
+            ClerkUserId = clerkUserId,
+            ExtendBySeconds = seconds
+        });
+    }
+
+    /// <summary>
+    /// The hammer. The only way a hall auction ends — nothing in the processor
+    /// closes one on a clock, because the room is still bidding until the
+    /// auctioneer says otherwise.
+    /// </summary>
+    public void CloseByClerk(Guid clerkUserId)
+    {
+        RequireClerkOnTheFloor(clerkUserId, "close");
+
+        _events.Add(new AuctionClosedByClerk
+        {
+            AuctionId = Id,
+            ClerkUserId = clerkUserId
+        });
+    }
+
+    private void RequireClerkOnTheFloor(Guid clerkUserId, string action)
+    {
+        if (Channel != BidChannel.Onsite)
+            throw new AuctionValidationException(
+                new[] { $"Only an onsite auction's clerk can {action} it." });
+
+        // Not merely "a clerk": this auction's clerk. A clerk running the hall next
+        // door has a valid token and the operator role, and neither entitles them
+        // to bring somebody else's hammer down.
+        if (ClerkUserId is null || ClerkUserId != clerkUserId)
+            throw new AuctionValidationException(
+                new[] { "Only the clerk assigned to this auction can do that." });
+
+        if (Status is not (AuctionStatus.Scheduled or AuctionStatus.Live))
+            throw new InvalidAuctionTransitionException(Status, action);
     }
 
     // -- الترسية -----------------------------------------------------------

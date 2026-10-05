@@ -163,3 +163,53 @@ public sealed record DepositsReleasable : DomainEvent
     public override string AggregateType => "auction-deposits";
     public override string AggregateId => AuctionId.ToString();
 }
+
+
+/// <summary>
+/// A clerk moving their own auction, on <c>auctions.lifecycle</c> (§29).
+///
+/// Two records rather than one with a verb field, because the outbox names an
+/// event after its type and the processor matches on that name. A single type
+/// would have had to smuggle the verb past the serialiser, which is a lot of
+/// cleverness to avoid writing a second record.
+/// </summary>
+public sealed record AuctionExtendedByClerk : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid ClerkUserId { get; init; }
+    public required int ExtendBySeconds { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>The hammer. The only thing that ends a hall auction.</summary>
+public sealed record AuctionClosedByClerk : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid ClerkUserId { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>
+/// Who may enter bids from the floor of a hall auction, on
+/// <c>auctions.participants</c> (§29).
+///
+/// It rides the participants topic rather than a new one because it answers that
+/// topic's question — whose key signs a frame for this auction — and the catcher
+/// rebuilds clerks and bidders from the same replay. Like eligibility it carries an
+/// epoch and never a key: the catcher derives one from a master it already holds,
+/// so reading this topic says who is on the floor, not how to sign as them.
+/// </summary>
+public sealed record AuctionClerkAssigned : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid ClerkUserId { get; init; }
+    public required bool Assigned { get; init; }
+    public required int KeyEpoch { get; init; }
+
+    public override string AggregateType => "auction-clerk";
+    public override string AggregateId => $"{AuctionId}:{ClerkUserId}";
+}

@@ -67,6 +67,7 @@ design change, not a configuration change.
 | D-13 | **Gateway split.** Envoy/NGINX ingress on the bid path, WSO2 APIM for everything else | APIM's Synapse mediation adds tens of ms at the tail under burst — exactly when auctions are busiest. It earns its place on the governed APIs |
 | D-14 | **Keycloak** as IdP, federating Nafath via OIDC redirect | Lighter than WSO2 IS, strong k8s operator |
 | D-15 | **Nafath 2-digit step-up** at KYC, deposit payment and award acceptance — never on the bid path | Takes seconds and needs phone interaction |
+| D-36 | **An onsite bid is signed by the clerk, and the frame names both them and the bidder** (§29) | A bidder in the hall has a paddle, not a keyboard. An onsite record that looked identical to an online one would overstate what it proves |
 | D-16 | **Debezium for the transactional outbox only**, never raw table CDC | Raw CDC leaks internal schema into the public event contract |
 | D-17 | **Event-driven domain; WSO2 MI only at integration edges** (payment, SADAD, municipality systems) | MI is an ESB, not a human-workflow engine. Workflows are state machines in the owning service |
 | D-18 | **React (web) + React Native/Expo (mobile)**, shared TypeScript contracts | |
@@ -2417,3 +2418,144 @@ not, because nothing else in the suite would have noticed either failure.
 - **Nothing verifies a certificate from the printed paper alone.** The reference
   is quotable and staff can check the signature, but there is no endpoint that
   takes a reference string; it is auction id plus offset.
+
+## 29. قاعة المزاد — the hall, where a clerk enters the bids
+
+The client's description of an onsite auction: the administrator creates it and
+bidders register for it as usual; when it starts a clerk enters the bids for the
+people in the room; the clerk can extend it and can close it; and it does not go
+through the processing service, because we already know who wins — but all the
+data is still needed, so that a winner disqualified by لجنة الترسية can cascade to
+the next bidder.
+
+Two of those sentences pull against each other, and resolving them is most of the
+design.
+
+### The processor records, and stops judging
+
+"It does not go through the processing service" cannot be taken literally,
+because the ladder and the cascade live there: `CascadeCandidates` is what the
+committee's disqualification walks down, and a hall auction needs it as much as
+an online one. Reimplementing it elsewhere would mean two versions of the single
+most consequential piece of logic in the system.
+
+What the sentence is really about is authority. Online, the processor decides
+when the auction ends and whether a late bid counts. In a hall there is an
+auctioneer doing both, and a clock that closed an auction while the room was
+still bidding would record a winner nobody in it had heard. So for an onsite
+auction the processor gives up exactly two things:
+
+- **No clock close.** `TickAsync` skips the end-time check entirely. The only
+  thing that ends a hall auction is the clerk.
+- **No quiet-period extension.** Anti-sniping is a remedy for not having a person
+  in charge; moving an end time the auctioneer has just announced to the room is
+  worse than useless.
+
+Everything else is unchanged, which is the point: the ladder is built, the
+current winner is published, the candidate is offered on close, and the cascade
+walks on disqualification. The committee's الترسية workflow cannot tell which
+channel sold the land.
+
+### D-36: the clerk signs, and the frame names both of them
+
+The bidder has a paddle, not a keyboard, so D-20's claim — *this bid was signed
+by the bidder's own key and nobody else could have made it* — is not available
+onsite. Pretending otherwise would be the worst outcome: an onsite record that
+looked exactly like an online one would overstate what it proves.
+
+So the clerk signs with the clerk's own derived key, and the frame carries both
+parties: `bidderId` says whose bid it is, `enteredByUserId` says who typed it.
+Both of those fields have been in the frame layout since §5 for precisely this.
+The claim an onsite bid makes is *clerk X recorded this bid for bidder Y at time
+T*, with the hall itself — the auctioneer, the attendance, the room — as the
+evidence that the paddle went up. That is how it works on paper, and the
+certificate (§28) says `Onsite` and names the clerk rather than reading the same
+as an online one.
+
+The clerk's key is derived exactly as a bidder's is (D-20): `auctions.participants`
+carries an epoch and never a secret, the auction-admin service hands the clerk
+their key on request, and the catcher derives the same one from the master it
+already holds. Replacing a clerk rotates the epoch, so the outgoing terminal
+stops working the moment they leave the floor.
+
+Both the channel and the clerk id are **written by the server**. A client that
+could choose its own channel could claim a hall bid was online; one that could
+stamp `enteredByUserId` could put another clerk's name on its own work.
+
+### Who may post a frame
+
+The two channels have opposite caller rules, and each exists to stop the other's
+failure mode:
+
+| | Online | Onsite |
+|---|---|---|
+| Caller | the bidder, and only themselves | the auction's assigned clerk |
+| Signature | the bidder's key | the clerk's key |
+| If the other tries | `BidderMismatch` | `NotTheClerk` |
+
+A bidder cannot bid directly in a hall auction — otherwise they could bid from
+their phone while standing in the room and the auctioneer would be calling a
+price nobody in front of them had offered. A clerk cannot enter a bid in an
+online auction, which is what stops a clerk bidding for somebody who never asked
+them to. And an auction the catcher has not replayed yet is refused outright
+rather than assumed online, because assuming would let an unknown auction take
+the path whose only check is that the caller matches the frame.
+
+The window differs too. A hall auction has no upper bound at the catcher: the end
+time is the clerk's to move and the catcher does not follow the lifecycle topic,
+so the authoritative cutoff is the engine's. That is the same arrangement the
+price floor has had since §6.3 — advisory at the edge, decided by the processor.
+
+### The clerk's two verbs
+
+`POST /auctions/{id}/extend` and `POST /auctions/{id}/close` go to auction-admin,
+which owns the human workflow, and ride its outbox onto `auctions.lifecycle`
+where the processor already listens for the committee's disqualifications. No new
+topic and no new transport.
+
+The auction-admin service enforces *who* may ask: this auction's clerk, not
+merely somebody holding the operator role, because a clerk running the hall next
+door has a valid token and no business bringing another auction's hammer down.
+The engine enforces *how much*: `MaxExtensions` is a term of the auction that
+bidders read before paying a deposit, so the auctioneer decides when to extend
+but not how many times the published terms allow.
+
+A clerk extension is also the one piece of engine state that is not rebuilt from
+the bid log, so the processor replays it from the lifecycle topic on recovery —
+one call per extension granted rather than one for the total, or a restart would
+restore the right end time while handing the clerk back extensions they had
+already spent.
+
+### Two bugs this found
+
+- **The catcher never read the channel.** `AuctionDefinition` has carried a
+  `Channel` since the first commit and the control plane simply never populated it
+  from `AuctionApproved`, so every auction the catcher knew about was `Online`
+  whatever the administrator had chosen. Nothing noticed for five sections,
+  because until the hall existed nothing asked the question. Found by the smoke
+  test, where a bidder bid directly in a hall auction and was accepted.
+- **The smoke test's push-channel assertion depended on a race.** It waited for a
+  `BidRejected` for a bid that the catcher *may* refuse at the edge by design —
+  so whenever the catcher's eventually-consistent price view had caught up, the
+  processor never saw the bid, never published a verdict, and the test failed. It
+  now uses a repeated `clientBidId`, which the catcher does not dedupe and the
+  processor refuses before it looks at the amount: deterministic, and it exercises
+  the idempotency rule as well.
+
+### Still not verified
+
+- **There is no clerk terminal.** The whole channel is reachable only over HTTP:
+  the admin portal has no screen for entering bids, extending or closing, so a
+  real clerk could not run an auction from it today. The pipeline underneath is
+  proven end to end by the smoke test's hall walk-through.
+- **One clerk per auction.** A long sale with a shift change means reassigning,
+  which rotates the key and interrupts the terminal. A second clerk, or a
+  handover, is not modelled.
+- **The smoke test does not reset Kafka.** It recreates both databases every run
+  but leaves the broker's topics, so auctions accumulate across runs — and a hall
+  auction, which nothing closes on a clock, accumulates as a *running* one. That
+  is what a long series of local runs eventually trips over, and it is the
+  databases-and-identity-store argument from §21 applied to one more store.
+- **Nothing reconciles the room with the record.** If the clerk mistypes an
+  amount there is no correction path: the ledger is append-only by design, and a
+  wrong bid can only be beaten by a right one or disqualified afterwards.

@@ -36,6 +36,26 @@ public static class InboundEvents
     public const string AuctionApproved = "AuctionApproved";
     public const string AuctionReserveSet = "AuctionReserveSet";
     public const string WinnerDisqualified = "WinnerDisqualified";
+
+    /// <summary>The clerk running a hall auction moved its end time (§29).</summary>
+    public const string AuctionExtendedByClerk = "AuctionExtendedByClerk";
+
+    /// <summary>The clerk brought the hammer down. The only way an onsite auction ends.</summary>
+    public const string AuctionClosedByClerk = "AuctionClosedByClerk";
+}
+
+/// <summary>
+/// A clerk's command from the hall. Both carry who issued it, because an onsite
+/// auction's record has to say which person ended it and which person extended it —
+/// in an online auction a clock did, and nobody has to be named.
+/// </summary>
+public sealed record ClerkCommandPayload
+{
+    public Guid AuctionId { get; init; }
+    public Guid ClerkUserId { get; init; }
+
+    /// <summary>Extension only. Ignored on a close.</summary>
+    public int ExtendBySeconds { get; init; }
 }
 
 public sealed record WinnerDisqualifiedPayload

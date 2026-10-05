@@ -342,6 +342,11 @@ auctionAdmin:
     - name: ConnectionStrings__Admin
       secretName: eauction-admin-db
       secretKey: connection-string
+    # The same master key the catcher and the participant service hold. This
+    # service derives a hall clerk's signing key from it (§29) and nothing else.
+    - name: Admin__BidderMasterKeyHex
+      secretName: eauction-bidder-master-key
+      secretKey: master-key-hex
 
   env:
     - name: ASPNETCORE_URLS

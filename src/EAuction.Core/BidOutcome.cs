@@ -21,6 +21,13 @@ public enum RejectionReason
     /// there is no current price to raise, there is a floor they are under.
     /// </summary>
     BelowOpeningPrice,
+
+    /// <summary>
+    /// An onsite frame from somebody who is not this auction's assigned clerk
+    /// (§29). Distinct from a bidder mismatch: the caller may be a perfectly
+    /// legitimate clerk, just not of this auction.
+    /// </summary>
+    NotTheClerk,
     SelfOutbid,
     DuplicateBidId,
     AuctionClosed

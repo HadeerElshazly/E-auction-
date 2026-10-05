@@ -106,8 +106,37 @@ public sealed class AuctionEngine
     /// A bid inside the last Q extends the end by Q, up to MaxExtensions (D-04).
     /// Anti-sniping: it removes most last-second timing disputes.
     /// </summary>
+    /// <summary>
+    /// The clerk extends a hall auction (§29).
+    ///
+    /// The automatic quiet-period extension exists because an online bidder cannot
+    /// be asked anything at the moment of the gavel. In a hall the auctioneer is
+    /// standing there, so the decision is theirs — but the published terms still
+    /// bind: <c>MaxExtensions</c> is a term of the auction the administrator set and
+    /// bidders read, so a clerk who has used them up has to close rather than carry
+    /// on indefinitely.
+    ///
+    /// Returns false when the cap is reached, so the caller can say so instead of
+    /// appearing to succeed.
+    /// </summary>
+    public bool ExtendByClerk(TimeSpan by)
+    {
+        if (_auction.Channel != BidChannel.Onsite) return false;
+        if (by <= TimeSpan.Zero) return false;
+        if (ExtensionsUsed >= _auction.MaxExtensions) return false;
+
+        EffectiveEndsAt += by;
+        ExtensionsUsed++;
+        return true;
+    }
+
     private void ApplyQuietPeriodExtension(DateTimeOffset bidTime)
     {
+        // An onsite auction has a person running it. Anti-sniping is a remedy for
+        // not having one, and an automatic extension on top of the clerk's own
+        // would move an end time the auctioneer has just announced to the room.
+        if (_auction.Channel == BidChannel.Onsite) return;
+
         if (_auction.QuietPeriod is not { } quiet) return;
         if (ExtensionsUsed >= _auction.MaxExtensions) return;
         if (bidTime < EffectiveEndsAt - quiet) return;

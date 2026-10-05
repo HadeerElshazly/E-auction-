@@ -87,6 +87,13 @@ public sealed class AuctionSupervisor(
             async (verdict, token) => await OnVerdictAsync(running, verdict, token),
             (_, _, _) => ValueTask.CompletedTask);
 
+        // Replayed clerk extensions, one call per extension the clerk actually made,
+        // so the engine's MaxExtensions cap governs the replay exactly as it governed
+        // the originals. Replaying the total as a single call would restore the right
+        // end time while leaving the clerk extensions they had already spent.
+        foreach (var seconds in running.ClerkExtensions)
+            running.Pump.Engine.ExtendByClerk(TimeSpan.FromSeconds(seconds));
+
         // Always from offset 0: the engine's price, ladder, extensions and
         // ledger are rebuilt by replaying every bid, which is deterministic.
         // The checkpoint only decides which of those replayed bids stay silent.
@@ -241,6 +248,12 @@ public sealed class AuctionSupervisor(
 
             if (running.Closed) continue;
 
+            // A hall auction is closed by the person running it and by nothing else
+            // (§29). The auctioneer brings the hammer down, so a clock here would
+            // close an auction that is still taking bids in the room — and "we
+            // already know who wins" is only true because a human said so.
+            if (running.Definition.Channel == BidChannel.Onsite) continue;
+
             // The engine moves EffectiveEndsAt as quiet-period extensions land,
             // so this is re-read every tick rather than scheduled once.
             if (now < running.Pump.Engine.EffectiveEndsAt + options.CloseGrace) continue;
@@ -362,10 +375,84 @@ public sealed class AuctionSupervisor(
             return Task.CompletedTask;
         }
 
-        if (record.EventType != InboundEvents.WinnerDisqualified) return Task.CompletedTask;
+        switch (record.EventType)
+        {
+            case InboundEvents.WinnerDisqualified:
+            {
+                var payload = JsonSerializer.Deserialize<WinnerDisqualifiedPayload>(
+                    record.Payload, Json);
+                return payload is null
+                    ? Task.CompletedTask
+                    : OnWinnerDisqualifiedAsync(payload, ct);
+            }
 
-        var payload = JsonSerializer.Deserialize<WinnerDisqualifiedPayload>(record.Payload, Json);
-        return payload is null ? Task.CompletedTask : OnWinnerDisqualifiedAsync(payload, ct);
+            case InboundEvents.AuctionExtendedByClerk:
+            {
+                var payload = JsonSerializer.Deserialize<ClerkCommandPayload>(record.Payload, Json);
+                if (payload is not null) OnClerkExtended(payload);
+                return Task.CompletedTask;
+            }
+
+            case InboundEvents.AuctionClosedByClerk:
+            {
+                var payload = JsonSerializer.Deserialize<ClerkCommandPayload>(record.Payload, Json);
+                return payload is null ? Task.CompletedTask : OnClerkClosedAsync(payload, ct);
+            }
+
+            default:
+                return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Moves a hall auction's end time at the clerk's instruction.
+    ///
+    /// The engine refuses once the published <c>MaxExtensions</c> is spent, and that
+    /// refusal is recorded rather than swallowed: a clerk who thinks they extended
+    /// and did not would keep taking bids the engine is about to reject.
+    /// </summary>
+    private void OnClerkExtended(ClerkCommandPayload payload)
+    {
+        if (!_running.TryGetValue(payload.AuctionId, out var running) || running.Pump is null)
+            return;
+
+        if (running.Closed) return;
+
+        var by = TimeSpan.FromSeconds(payload.ExtendBySeconds);
+        if (running.Pump.Engine.ExtendByClerk(by))
+        {
+            logger.LogInformation(
+                "Auction {AuctionId}: clerk {Clerk} extended to {EndsAt:o} ({Used} of {Max}).",
+                payload.AuctionId, payload.ClerkUserId,
+                running.Pump.Engine.EffectiveEndsAt, running.Pump.Engine.ExtensionsUsed,
+                running.Definition.MaxExtensions);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Auction {AuctionId}: clerk {Clerk} could not extend — {Used} of {Max} used.",
+                payload.AuctionId, payload.ClerkUserId,
+                running.Pump.Engine.ExtensionsUsed, running.Definition.MaxExtensions);
+        }
+    }
+
+    /// <summary>
+    /// The hammer. Closes the auction and offers the candidate exactly as a clock
+    /// close would, so everything downstream — the committee's candidate, the
+    /// cascade, the deposits — is the same workflow whichever channel sold the land.
+    /// </summary>
+    private async Task OnClerkClosedAsync(ClerkCommandPayload payload, CancellationToken ct)
+    {
+        if (!_running.TryGetValue(payload.AuctionId, out var running) || running.Pump is null)
+            return;
+
+        // At-least-once delivery, and a clerk may press the button twice.
+        if (running.Closed) return;
+
+        logger.LogInformation(
+            "Auction {AuctionId}: closed by clerk {Clerk}.", payload.AuctionId, payload.ClerkUserId);
+
+        await CloseAsync(running, DateTimeOffset.UtcNow, ct);
     }
 
     private void RecordDuringRecovery(Guid auctionId, StreamEvent record)
@@ -381,6 +468,18 @@ public sealed class AuctionSupervisor(
             case nameof(AuctionClosed):
                 state.Closed = true;
                 break;
+
+            case InboundEvents.AuctionExtendedByClerk:
+            {
+                // Replayed because it is not a bid: the engine's ladder is rebuilt
+                // from the bid log, but a clerk's extension lives only here, and a
+                // processor that restarted mid-auction would otherwise come back
+                // with the original end time and reject the hall's next bid.
+                var payload = JsonSerializer.Deserialize<ClerkCommandPayload>(
+                    record.Payload, Json);
+                if (payload is not null) state.ClerkExtensions.Add(payload.ExtendBySeconds);
+                break;
+            }
 
             case nameof(CandidateOffered):
             case nameof(LadderExhausted):
@@ -408,12 +507,17 @@ public sealed class AuctionSupervisor(
         public bool Announced;
         public bool Closed;
         public int OffersPublished;
+        public readonly List<int> ClerkExtensions = new();
         public readonly HashSet<Guid> Disqualified = new();
 
         public void ApplyTo(RunningAuction running)
         {
             running.Announced |= Announced;
             running.Closed |= Closed;
+            // Assigned rather than appended: ApplyTo runs again whenever more
+            // history replays, and appending would double every extension.
+            running.ClerkExtensions.Clear();
+            running.ClerkExtensions.AddRange(ClerkExtensions);
             running.OffersPublished = Math.Max(running.OffersPublished, OffersPublished);
             foreach (var bidder in Disqualified) running.Disqualified.Add(bidder);
 
@@ -440,6 +544,17 @@ public sealed class RunningAuction(AuctionDefinition definition)
     public bool Announced { get; internal set; }
     public bool Closed { get; internal set; }
     public int CascadeStep { get; internal set; }
+
+    /// <summary>
+    /// Extensions a clerk granted before this process started, in the order granted,
+    /// carried from the lifecycle replay and applied to the engine once it exists
+    /// (§29). The bid log rebuilds everything else; this is the one piece of engine
+    /// state that is not in it.
+    ///
+    /// A list rather than a total, because each one also consumed an extension from
+    /// the auction's published cap.
+    /// </summary>
+    public List<int> ClerkExtensions { get; } = new();
 
     /// <summary>Candidate offers and exhaustion notices already published.</summary>
     public int OffersPublished { get; internal set; }

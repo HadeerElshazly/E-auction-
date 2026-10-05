@@ -86,6 +86,18 @@ internal sealed class ProcessorHarness : IAsyncDisposable
             JsonSerializer.Serialize(new { auctionId, bidderId, reason = "لم يسدد" }, Json),
             InboundEvents.WinnerDisqualified, Token);
 
+    /// <summary>A clerk moving their hall auction's end time (§29).</summary>
+    public Task PublishClerkExtensionAsync(Guid auctionId, Guid clerkUserId, int seconds) =>
+        Events.PublishAsync(Topics.Lifecycle, auctionId.ToString(),
+            JsonSerializer.Serialize(new { auctionId, clerkUserId, extendBySeconds = seconds }, Json),
+            InboundEvents.AuctionExtendedByClerk, Token);
+
+    /// <summary>The hammer.</summary>
+    public Task PublishClerkCloseAsync(Guid auctionId, Guid clerkUserId) =>
+        Events.PublishAsync(Topics.Lifecycle, auctionId.ToString(),
+            JsonSerializer.Serialize(new { auctionId, clerkUserId }, Json),
+            InboundEvents.AuctionClosedByClerk, Token);
+
     /// <summary>Appends a bid exactly as the catcher would, then waits for the pump.</summary>
     public async Task BidAsync(AuctionDefinition d, Guid bidder, long amount, DateTimeOffset at)
     {

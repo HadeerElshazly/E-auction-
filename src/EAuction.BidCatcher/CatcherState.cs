@@ -22,11 +22,22 @@ public sealed class CatcherState(byte[] bidderMasterKey)
     private readonly ConcurrentDictionary<(Guid Auction, Guid Bidder), byte[]> _eligibility = new();
     private readonly ConcurrentDictionary<(Guid Auction, Guid Bidder), TokenBucket> _rateLimits = new();
 
+    /// <summary>
+    /// The clerks running hall auctions, and their derived signing keys (§29).
+    ///
+    /// Separate from eligibility and keyed the same way, because a clerk is not a
+    /// participant: they put down no deposit, win nothing, and are allowed to sign
+    /// for somebody else. Collapsing the two dictionaries would make "may bid" and
+    /// "may bid on another person's behalf" the same question.
+    /// </summary>
+    private readonly ConcurrentDictionary<(Guid Auction, Guid Clerk), byte[]> _clerks = new();
+
     public TimeSpan CeilingGrace { get; init; } = TimeSpan.FromMinutes(1);
     public int MaxBidsPerSecondPerBidder { get; init; } = 20;
 
     public int AuctionCount => _auctions.Count;
     public int EligibilityCount => _eligibility.Count;
+    public int ClerkCount => _clerks.Count;
 
     /// <summary>Applied from <c>auctions.upcoming</c> (compacted).</summary>
     public void UpsertAuction(AuctionDefinition auction) =>
@@ -65,6 +76,36 @@ public sealed class CatcherState(byte[] bidderMasterKey)
     public void RevokeEligibility(Guid auctionId, Guid bidderId) =>
         _eligibility.TryRemove((auctionId, bidderId), out _);
 
+    /// <summary>
+    /// Applied from <c>auctions.participants</c>. Derived here from the master key,
+    /// exactly as a bidder's is, so a clerk's signing key never travels either.
+    /// </summary>
+    public void AssignClerk(Guid auctionId, Guid clerkUserId, int keyEpoch) =>
+        _clerks[(auctionId, clerkUserId)] =
+            BidderKeys.Derive(bidderMasterKey, auctionId, clerkUserId, keyEpoch);
+
+    public void UnassignClerk(Guid auctionId, Guid clerkUserId) =>
+        _clerks.TryRemove((auctionId, clerkUserId), out _);
+
+    /// <summary>Test and dev hook, mirroring the eligibility one.</summary>
+    internal void AssignClerkWithSecret(Guid auctionId, Guid clerkUserId, byte[] secret) =>
+        _clerks[(auctionId, clerkUserId)] = secret;
+
+    internal bool TryGetClerkSecret(Guid auctionId, Guid clerkUserId, out byte[] secret) =>
+        _clerks.TryGetValue((auctionId, clerkUserId), out secret!);
+
+    /// <summary>
+    /// Whether this auction is run from the hall. Null when the auction is unknown,
+    /// which the caller must treat as "refuse", not as "online".
+    /// </summary>
+    public bool? IsOnsite(Guid auctionId) =>
+        _auctions.TryGetValue(auctionId, out var auction)
+            ? auction.Channel == BidChannel.Onsite
+            : null;
+
+    public bool IsClerkFor(Guid auctionId, Guid userId) =>
+        _clerks.ContainsKey((auctionId, userId));
+
     /// <summary>Applied from <c>auctions.current-winner</c> (compacted).</summary>
     public void UpdateCurrentPrice(Guid auctionId, long price) =>
         _currentPrice[auctionId] = price;
@@ -80,25 +121,62 @@ public sealed class CatcherState(byte[] bidderMasterKey)
     /// too-low bids and keep junk out of the log. The processor stays
     /// authoritative (§7.1 step 5).
     /// </summary>
-    public RejectionReason Screen(ReadOnlySpan<byte> frame, DateTimeOffset now)
+    /// <param name="clerk">
+    /// The clerk entering this bid for a hall auction, or null when the bidder is
+    /// bidding for themselves. It decides whose key must have signed the frame.
+    /// </param>
+    public RejectionReason Screen(ReadOnlySpan<byte> frame, DateTimeOffset now, Guid? clerk = null)
     {
         var auctionId = BidFrame.AuctionId(frame);
         if (!_auctions.TryGetValue(auctionId, out var auction))
             return RejectionReason.UnknownAuction;
 
-        // Gated on the permissive ceiling, never on the live end time (§6.3).
-        if (now < auction.StartsAt || now > auction.HardCeiling(CeilingGrace))
+        var onsite = auction.Channel == BidChannel.Onsite;
+
+        // A hall auction has no upper bound here, because the end time it would be
+        // checked against is the clerk's to move and this service does not follow
+        // the lifecycle topic. The processor's engine holds the real cutoff and
+        // refuses a late bid as AuctionClosed — which is the same arrangement the
+        // price floor already has, advisory here and authoritative there (§6.3).
+        if (now < auction.StartsAt) return RejectionReason.OutsideWindow;
+        if (!onsite && now > auction.HardCeiling(CeilingGrace))
             return RejectionReason.OutsideWindow;
 
         var bidderId = BidFrame.BidderId(frame);
-        if (!_eligibility.TryGetValue((auctionId, bidderId), out var secret))
+
+        // The bidder must be eligible on both channels: standing in the hall does
+        // not pay a deposit, and the clerk is not entitled to bid for someone who
+        // has not qualified.
+        if (!_eligibility.TryGetValue((auctionId, bidderId), out var bidderSecret))
             return RejectionReason.NotEligible;
 
-        if (!BidFrame.VerifySignature(frame, secret))
+        byte[] signingSecret;
+        if (clerk is { } clerkId)
+        {
+            if (!onsite) return RejectionReason.NotTheClerk;
+            if (!_clerks.TryGetValue((auctionId, clerkId), out var clerkSecret))
+                return RejectionReason.NotTheClerk;
+
+            signingSecret = clerkSecret;
+        }
+        else
+        {
+            // An onsite auction takes no bid a clerk did not enter. Otherwise a
+            // bidder registered for a hall auction could bid from their phone and
+            // the room would not know.
+            if (onsite) return RejectionReason.NotTheClerk;
+            signingSecret = bidderSecret;
+        }
+
+        if (!BidFrame.VerifySignature(frame, signingSecret))
             return RejectionReason.BadSignature;
 
+        // Rate-limited per the party actually making the requests: a clerk enters
+        // for the whole room, so limiting them per bidder would let one terminal
+        // make twenty calls a second for each of fifty bidders.
+        var limitKey = clerk is { } who ? (auctionId, who) : (auctionId, bidderId);
         var bucket = _rateLimits.GetOrAdd(
-            (auctionId, bidderId), _ => new TokenBucket(MaxBidsPerSecondPerBidder));
+            limitKey, _ => new TokenBucket(MaxBidsPerSecondPerBidder));
         if (!bucket.TryTake(now))
             return RejectionReason.RateLimited;
 

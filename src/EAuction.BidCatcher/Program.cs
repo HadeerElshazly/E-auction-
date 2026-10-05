@@ -160,25 +160,62 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
         var now = DateTimeOffset.UtcNow;
         var frame = buffer.AsMemory(0, BidFrame.ServerLength);
 
-        // The token says who is calling; the frame says who the bid is for.
-        // They must be the same person, or a bidder could spend someone else's
-        // deposit — the signature alone would not catch it, because an
-        // eligible bidder's own key signs any frame they choose to build.
         var caller = http.User.SubjectId();
-        if (caller is null || caller != BidFrame.BidderId(frame.Span))
+        if (caller is null)
             return Results.Json(
                 new { reason = "BidderMismatch" }, statusCode: StatusCodes.Status403Forbidden);
 
-        var screen = state.Screen(frame.Span, now);
-        if (screen != RejectionReason.None)
-            return Results.Json(new { reason = screen.ToString() }, statusCode: 409);
+        // Which of the two kinds of caller this is depends on the auction, not on
+        // anything the caller said. An unknown auction is refused here rather than
+        // guessed at as online, because guessing would let a frame for an auction
+        // this pod has not replayed yet take the online path.
+        var onsite = state.IsOnsite(BidFrame.AuctionId(frame.Span));
+        if (onsite is null)
+            return Results.Json(
+                new { reason = nameof(RejectionReason.UnknownAuction) }, statusCode: 409);
 
+        Guid? clerk = null;
+
+        if (onsite.Value)
+        {
+            // In the hall the clerk types the bid, so the caller is not the bidder
+            // and never can be. What binds the record is the pair: the frame says
+            // whose bid it is, the token says who entered it, and both are written
+            // into the ledger (§29).
+            if (!http.User.IsInRole(Roles.Operator) || !state.IsClerkFor(
+                    BidFrame.AuctionId(frame.Span), caller.Value))
+                return Results.Json(
+                    new { reason = nameof(RejectionReason.NotTheClerk) },
+                    statusCode: StatusCodes.Status403Forbidden);
+
+            clerk = caller;
+        }
+        else
+        {
+            // The token says who is calling; the frame says who the bid is for.
+            // They must be the same person, or a bidder could spend someone else's
+            // deposit — the signature alone would not catch it, because an
+            // eligible bidder's own key signs any frame they choose to build.
+            if (caller != BidFrame.BidderId(frame.Span))
+                return Results.Json(
+                    new { reason = "BidderMismatch" }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var screen = state.Screen(frame.Span, now, clerk);
+        if (screen != RejectionReason.None)
+            return Results.Json(new { reason = screen.ToString() },
+                statusCode: screen == RejectionReason.NotTheClerk
+                    ? StatusCodes.Status403Forbidden
+                    : 409);
+
+        // Server-written, both of them. A client that could choose its own channel
+        // could claim a hall bid was online, or stamp another clerk's id on its own.
         BidFrame.AppendServerMetadata(
             frame.Span,
             now.ToUnixTimeMilliseconds(),
             podOrdinal,
-            BidChannel.Online,
-            Guid.Empty);
+            clerk is null ? BidChannel.Online : BidChannel.Onsite,
+            clerk ?? Guid.Empty);
 
         // acks=all: this does not return until the bid is durable (D-11).
         var offset = await bidLog.AppendAsync(BidFrame.AuctionId(frame.Span), frame, ct);
@@ -193,7 +230,7 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
     {
         ArrayPool<byte>.Shared.Return(buffer);
     }
-}).RequireAuthorization(Policies.Bidder);
+}).RequireAuthorization(Policies.SubmitsBids);
 
 // ---------------------------------------------------------------------------
 // The certificate (شهادة مزايدة). Not the hot path.

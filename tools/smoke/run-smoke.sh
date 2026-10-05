@@ -179,6 +179,7 @@ PORTAL_ORIGINS="http://localhost:3000,http://localhost:3001"
 
 start auction-admin EAuction.AuctionAdmin 5101 \
   ConnectionStrings__Admin="$PG;Database=eauction_admin" \
+  Admin__BidderMasterKeyHex="$MASTER_KEY" \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 start participant EAuction.Participant 5102 \

@@ -37,7 +37,8 @@ public class ControlPlaneTests : IAsyncDisposable
 
     private Task StartAsync() => _control.StartAsync(_cts.Token);
 
-    private Task PublishAuctionAsync(Guid auctionId, DateTimeOffset starts, DateTimeOffset ends) =>
+    private Task PublishAuctionAsync(
+        Guid auctionId, DateTimeOffset starts, DateTimeOffset ends, string? channel = null) =>
         _events.PublishAsync(Topics.Upcoming, auctionId.ToString(),
             JsonSerializer.Serialize(new
             {
@@ -47,9 +48,15 @@ public class ControlPlaneTests : IAsyncDisposable
                 openingPriceMinorUnits = 1_000_000_00L,
                 minIncrementMinorUnits = 50_000_00L,
                 quietPeriodSeconds = (int?)120,
-                maxExtensions = 3
+                maxExtensions = 3,
+                channel
             }, Json),
             "AuctionApproved", _cts.Token);
+
+    private Task PublishClerkAsync(Guid auctionId, Guid clerkUserId, bool assigned, int epoch = 0) =>
+        _events.PublishAsync(Topics.Participants, $"{auctionId}:{clerkUserId}",
+            JsonSerializer.Serialize(new { auctionId, clerkUserId, assigned, keyEpoch = epoch }, Json),
+            "AuctionClerkAssigned", _cts.Token);
 
     private Task PublishEligibilityAsync(Guid auctionId, Guid bidderId, bool eligible, int epoch = 0) =>
         _events.PublishAsync(Topics.Participants, $"{auctionId}:{bidderId}",
@@ -227,5 +234,104 @@ public class ControlPlaneTests : IAsyncDisposable
         await _cts.CancelAsync();
         try { await _control.StopAsync(CancellationToken.None); } catch { }
         _cts.Dispose();
+    }
+
+    // --- the channel, and the clerk who runs a hall auction (§29) -----------
+
+    [Fact]
+    public async Task The_channel_comes_off_the_topic()
+    {
+        // It did not, for a long time. AuctionDefinition has carried a Channel since
+        // the first commit and the control plane simply never read it, so every
+        // auction the catcher knew about was Online whatever the administrator had
+        // chosen. Nothing noticed, because until the hall existed nothing asked.
+        var hall = Guid.NewGuid();
+        var web = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await PublishAuctionAsync(hall, now.AddMinutes(-1), now.AddMinutes(30), "Onsite");
+        await PublishAuctionAsync(web, now.AddMinutes(-1), now.AddMinutes(30), "Online");
+        await StartAsync();
+
+        await EventuallyAsync(() => _state.IsOnsite(hall) == true, "the hall auction never arrived");
+        Assert.False(_state.IsOnsite(web));
+    }
+
+    [Fact]
+    public async Task An_auction_with_no_channel_stated_is_online()
+    {
+        // Online is the channel with the stricter caller rule — the bidder must be
+        // the caller — so an unreadable channel refuses a clerk rather than opening
+        // a door.
+        var auctionId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await PublishAuctionAsync(auctionId, now.AddMinutes(-1), now.AddMinutes(30));
+        await PublishAuctionAsync(auctionId, now.AddMinutes(-1), now.AddMinutes(30), "something-else");
+        await StartAsync();
+
+        await EventuallyAsync(() => _state.IsOnsite(auctionId) == false, "the auction never arrived");
+    }
+
+    [Fact]
+    public async Task An_unknown_auction_is_neither_channel()
+    {
+        // Null rather than false, so a caller cannot read "not onsite" as "online"
+        // for an auction this pod has not replayed yet.
+        await StartAsync();
+
+        Assert.Null(_state.IsOnsite(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task A_clerk_assignment_derives_the_same_key_the_admin_service_handed_out()
+    {
+        // The two services never exchange the key: both derive it from the master
+        // they already hold, and the topic carries only the epoch (D-20 applied to
+        // the person on the floor).
+        var auctionId = Guid.NewGuid();
+        var clerk = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await PublishAuctionAsync(auctionId, now.AddMinutes(-1), now.AddMinutes(30), "Onsite");
+        await PublishClerkAsync(auctionId, clerk, assigned: true, epoch: 2);
+        await StartAsync();
+
+        await EventuallyAsync(
+            () => _state.IsClerkFor(auctionId, clerk), "the clerk assignment never arrived");
+
+        Assert.True(_state.TryGetClerkSecret(auctionId, clerk, out var held));
+        Assert.Equal(BidderKeys.Derive(_master, auctionId, clerk, 2), held);
+    }
+
+    [Fact]
+    public async Task Taking_the_clerk_off_the_floor_stops_their_key_working()
+    {
+        var auctionId = Guid.NewGuid();
+        var clerk = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await PublishAuctionAsync(auctionId, now.AddMinutes(-1), now.AddMinutes(30), "Onsite");
+        await PublishClerkAsync(auctionId, clerk, assigned: true);
+        await StartAsync();
+        await EventuallyAsync(
+            () => _state.IsClerkFor(auctionId, clerk), "the clerk assignment never arrived");
+
+        await PublishClerkAsync(auctionId, clerk, assigned: false, epoch: 1);
+
+        await EventuallyAsync(
+            () => !_state.IsClerkFor(auctionId, clerk), "the clerk was never taken off the floor");
+    }
+
+    /// <summary>Polls a condition, because a topic propagates on its own schedule.</summary>
+    private static async Task EventuallyAsync(Func<bool> condition, string whatFailed)
+    {
+        for (var i = 0; i < 100; i++)
+        {
+            if (condition()) return;
+            await Task.Delay(50);
+        }
+
+        Assert.Fail(whatFailed);
     }
 }

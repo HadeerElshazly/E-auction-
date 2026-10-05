@@ -39,6 +39,14 @@ public static class Policies
     public const string Operator = "policy:operator";
 
     /// <summary>
+    /// Who may post a frame to the bid catcher: a bidder bidding for themselves,
+    /// or a clerk entering one for a bidder in the hall (§29). Which of the two is
+    /// allowed for a given auction depends on its channel, and the catcher decides
+    /// that from its own state — this is the outer gate, not the whole check.
+    /// </summary>
+    public const string SubmitsBids = "policy:submits-bids";
+
+    /// <summary>
     /// A role AND a recent second factor. For the endpoints that move money or land
     /// — see <see cref="StepUpOptions"/> for why the role alone is not enough.
     /// </summary>

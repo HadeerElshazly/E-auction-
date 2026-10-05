@@ -379,6 +379,7 @@ try
     // assertions can check that sara is told WHICH of her bids won rather than
     // inferring it from an amount.
     var saraLastBidId = Guid.Empty;
+    var khalidLastBidId = Guid.Empty;
     var saraLastOffset = -1L;
     var saraLastReceiptSignature = "";
     var accepted = 0;
@@ -398,6 +399,7 @@ try
         }
 
         accepted++;
+        if (bidder == khalid) khalidLastBidId = clientBidId;
         if (bidder == sara)
         {
             saraLastBidId = clientBidId;
@@ -472,17 +474,44 @@ try
     }
     else if (staleStatus == System.Net.HttpStatusCode.Accepted)
     {
-        // Accepted into the log, then judged. The verdict is the processor's.
-        await watcher.WaitForAsync(
-            Topics.BidsRejected, "BidRejected", auctionId,
-            p => p.Contains(staleBidId.ToString()));
-        n.Step("a bid below the current price is refused", "202 at the catcher, BidRejected by the processor");
+        // Accepted into the log, to be judged. Which of the two refused it is a
+        // race by design — the catcher's price view is eventually consistent — so
+        // what is asserted here is only that it got in, and the winner check below
+        // is what proves it never won. Waiting here for a specific BidRejected made
+        // this step depend on which side of the race the run landed on.
+        n.Step("a bid below the current price is refused",
+            "202 at the catcher; the processor is the judge (D-03)");
         n.Note("the catcher screens on an eventually-consistent price; the processor decides");
     }
     else
     {
         n.Fail("a bid below the current price is refused", $"got {(int)staleStatus} {staleBody}");
     }
+
+    // A bid the PROCESSOR is certain to refuse, whatever the catcher's price view
+    // happens to be at this instant.
+    //
+    // The stale bid above cannot do this job: the catcher may refuse it at the edge,
+    // in which case the processor never sees it and never publishes a verdict. The
+    // push-channel assertion further down used to depend on that race and failed
+    // whenever the catcher's price view had caught up — the test passing was a
+    // matter of timing rather than of anything working.
+    //
+    // A repeated clientBidId is deterministic instead: the catcher does not dedupe,
+    // and the processor refuses a repeat as DuplicateBidId before it looks at the
+    // amount. Sent at a winning amount so the catcher's own floor cannot refuse it,
+    // and it still cannot win, because the duplicate check comes first.
+    var replayed = BidFrame.BuildClientFrame(
+        auctionId, khalid, opening + 9 * increment, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        khalidLastBidId, 4, khalidSecret);
+
+    var (replayStatus, replayBody) = await khalidCatcher.TryPostBytesAsync("/bids", replayed);
+    if (replayStatus == System.Net.HttpStatusCode.Accepted)
+        n.Step("a repeated bid id is accepted at the edge and refused by the processor",
+            "idempotency belongs where the ladder is");
+    else
+        n.Fail("a repeated bid id is accepted at the edge and refused by the processor",
+            $"got {(int)replayStatus} {replayBody}");
 
     // -----------------------------------------------------------------------
     n.Section("8. The processor decides");
@@ -555,13 +584,14 @@ try
     // The verdict for the bid the processor refused, which until the fan-out existed
     // reached nobody: bids.rejected was written by the processor and read by nothing.
     var verdict = await khalidStream.WaitForAsync("verdict",
-        e => e.GetProperty("clientBidId").GetGuid() == staleBidId);
+        e => e.GetProperty("clientBidId").GetGuid() == khalidLastBidId
+             && !e.GetProperty("accepted").GetBoolean());
 
-    if (!verdict.GetProperty("accepted").GetBoolean())
-        n.Step("khalid is told why his stale bid was refused",
+    if (verdict.GetProperty("reason").GetString() == "DuplicateBidId")
+        n.Step("khalid is told why his bid was refused",
             verdict.GetProperty("reason").GetString() ?? "?");
     else
-        n.Fail("khalid is told why his stale bid was refused", verdict.ToString());
+        n.Fail("khalid is told why his bid was refused", verdict.ToString());
 
     if (saraStream.CountOf("verdict") == 0 && anonStream.CountOf("verdict") == 0)
         n.Step("the verdict reached nobody else", "a bidder's refusal is their own business");
@@ -666,6 +696,184 @@ try
         n.Step("the winner cannot drive their own award", "403");
     else
         n.Fail("the winner cannot drive their own award", $"got {(int)bidderAward}, wanted 403");
+
+    // -----------------------------------------------------------------------
+    n.Section("10. قاعة المزاد — the hall, where a clerk enters the bids");
+    // -----------------------------------------------------------------------
+    //
+    // A second auction, run the other way (§29). Everything a bidder does is
+    // unchanged — register, booklet, terms, deposit — and everything after the
+    // hammer is unchanged too. What differs is the middle: a clerk types the bids
+    // for people in the room, moves the end time, and brings the hammer down.
+
+    var clerkToken = await Keycloak.TokenAsync(http, issuer, "admin-web", "clerk-user", password);
+    var clerk = Keycloak.Subject(clerkToken);
+    var clerkAdmin = new Caller(http, adminUrl, clerkToken, "clerk");
+    var clerkCatcher = new Caller(http, catcherUrl, clerkToken, "clerk");
+
+    var hallStarts = DateTimeOffset.UtcNow.AddSeconds(10);
+    var hallId = (await admin.PostAsync("/auctions", new
+    {
+        createdByUserId = Keycloak.Subject(adminToken), nameAr = "قاعة", nameEn = "Hall"
+    })).GetProperty("id").GetGuid();
+
+    await admin.PutAsync($"/auctions/{hallId}", new
+    {
+        nameAr = $"مخطط السعيد — قاعة {DateTimeOffset.UtcNow:HHmmss}",
+        nameEn = "Al-Saeed hall",
+        channel = "Onsite",
+        bidderVisibility = "Masked",
+        startsAt = hallStarts,
+        endsAt = hallStarts.AddSeconds(20),
+        openingPriceMinorUnits = opening,
+        reservePriceMinorUnits = reserve,
+        minIncrementMinorUnits = increment,
+        depositMinorUnits = 100_000_00,
+        brokerageFeePercent = 2.5m,
+        bookletPriceMinorUnits = 1_000_00,
+        quietPeriodSeconds = (int?)null,
+        maxExtensions = 3,
+        phase = "Hall"
+    });
+    await admin.PostAsync($"/auctions/{hallId}/plots",
+        new { deedNumber = "2020/1", areaSqm = 900.0m });
+    await admin.PostAsync($"/auctions/{hallId}/booklet", new { documentId = Guid.NewGuid() });
+    await admin.PostAsync($"/auctions/{hallId}/cover-image", new { documentId = Guid.NewGuid() });
+
+    // The clerk goes on the floor before approval here, but the domain allows it
+    // after as well — a clerk falls ill and a shift changes, and an auction cannot
+    // be re-approved to deal with that.
+    await admin.PutAsync($"/auctions/{hallId}/clerk", new { clerkUserId = clerk });
+    n.Step("a clerk is put on the floor", "operator role, assigned to this auction only");
+
+    await admin.PostAsync($"/auctions/{hallId}/submit");
+    await committee.PostAsync($"/auctions/{hallId}/approve");
+
+    // Nobody but the assigned clerk gets the key that signs for the room.
+    var (keyToStranger, _) = await new Caller(http, adminUrl, adminToken, "auction-admin")
+        .TryGetAsync($"/auctions/{hallId}/clerk-key");
+    if (keyToStranger is System.Net.HttpStatusCode.Forbidden)
+        n.Step("not even an administrator can take the clerk's key", "403");
+    else
+        n.Fail("not even an administrator can take the clerk's key", $"got {(int)keyToStranger}");
+
+    var clerkKey = (await clerkAdmin.GetAsync($"/auctions/{hallId}/clerk-key"))
+        .GetProperty("secretHex").GetString()!;
+    var clerkSecret = Convert.FromHexString(clerkKey);
+
+    // The participant service learns the auction's terms from auctions.upcoming, so
+    // a subscription posted the instant after approval races the relay. Waited for
+    // rather than slept through, because a fixed sleep is a flake with a timer.
+    await watcher.WaitForAsync(Topics.Upcoming, "AuctionApproved", hallId);
+    await WaitForTermsAsync(saraParticipant, hallId, sara);
+
+    // The bidders qualify exactly as they did online.
+    foreach (var (who, strong, bidderId) in new[]
+             {
+                 (saraParticipant, saraStrong, sara),
+                 (khalidParticipant, khalidStrong, khalid)
+             })
+    {
+        var sub = $"/auctions/{hallId}/subscriptions/{bidderId}";
+        await who.PostAsync($"/auctions/{hallId}/subscriptions", new { bidderId });
+        await who.PostAsync($"{sub}/booklet", new { paymentRef = $"HBK-{bidderId:N}"[..16] });
+        await who.PostAsync($"{sub}/terms");
+        await who.PostAsync($"{sub}/deposit-method", new { method = "Payment" });
+        await strong.PostAsync($"{sub}/deposit", new { paymentRef = $"HDP-{bidderId:N}"[..16] });
+    }
+    n.Step("both bidders qualify for the hall auction", "same booklet → terms → deposit");
+
+    await WaitUntil(hallStarts, "the hall auction to open");
+
+    // The catcher has to have both the auction and the clerk assignment before it
+    // can accept anything; both arrive on compacted topics it replays.
+    JsonElement hallBid = default;
+    var hallAccepted = false;
+    for (var attempt = 0; attempt < 40 && !hallAccepted; attempt++)
+    {
+        // At the reserve: below it the right outcome is an exhausted ladder and no
+        // candidate at all, which would be a weaker thing for this walk-through to
+        // prove than the committee being handed the hall's winner.
+        var frame = BidFrame.BuildClientFrame(
+            hallId, sara, reserve, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Guid.NewGuid(), RandomNumberGenerator.GetInt32(int.MaxValue), clerkSecret);
+
+        var (hallStatus, body) = await clerkCatcher.TryPostBytesAsync("/bids", frame);
+        if (hallStatus == System.Net.HttpStatusCode.Accepted)
+        {
+            hallBid = JsonDocument.Parse(body).RootElement.Clone();
+            hallAccepted = true;
+            break;
+        }
+
+        await Task.Delay(500);
+    }
+
+    if (hallAccepted)
+        n.Step("the clerk enters a bid for a bidder in the room",
+            $"signed with the clerk's key, recorded as sara's at offset {hallBid.GetProperty("offset").GetInt64()}");
+    else
+        n.Fail("the clerk enters a bid for a bidder in the room", "never accepted");
+
+    // The bidder is in the room with a paddle, not a keyboard. She has a perfectly
+    // valid signing key for this auction and it does not help her: the refusal is
+    // about the channel, not about the signature.
+    var saraHallSecret = Convert.FromHexString(
+        (await saraParticipant.GetAsync(
+            $"/auctions/{hallId}/subscriptions/{sara}/signing-key"))
+        .GetProperty("secretHex").GetString()!);
+
+    var saraHallFrame = BidFrame.BuildClientFrame(
+        hallId, sara, reserve + increment, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        Guid.NewGuid(), RandomNumberGenerator.GetInt32(int.MaxValue), saraHallSecret);
+    var (saraDirect, _) = await saraCatcher.TryPostBytesAsync("/bids", saraHallFrame);
+    if (saraDirect == System.Net.HttpStatusCode.Forbidden)
+        n.Step("a bidder cannot bid directly in a hall auction", "403 — the room would not know");
+    else
+        n.Fail("a bidder cannot bid directly in a hall auction", $"got {(int)saraDirect}");
+
+    // The record names both parties, which is the whole evidential story onsite —
+    // and it is the bidder's certificate, not the clerk's. A clerk who entered a bid
+    // is not thereby entitled to read it back: they are staff who typed it, and the
+    // proof belongs to the person whose money is on it.
+    var (clerkReadsIt, _) = await clerkCatcher.TryGetAsync(
+        $"/auctions/{hallId}/bids/{hallBid.GetProperty("offset").GetInt64()}/certificate");
+    if (clerkReadsIt == System.Net.HttpStatusCode.Forbidden)
+        n.Step("the clerk cannot read back the certificate they created", "403 — it is the bidder's");
+    else
+        n.Fail("the clerk cannot read back the certificate they created", $"got {(int)clerkReadsIt}");
+
+    var hallCertificate = await saraCatcher.GetAsync(
+        $"/auctions/{hallId}/bids/{hallBid.GetProperty("offset").GetInt64()}/certificate");
+    if (hallCertificate.GetProperty("channel").GetString() == "Onsite"
+        && hallCertificate.GetProperty("enteredByUserId").GetGuid() == clerk
+        && hallCertificate.GetProperty("bidderId").GetGuid() == sara)
+        n.Step("the record names the bidder and the clerk who entered it",
+            "an onsite bid claims less than an online one, and says so");
+    else
+        n.Fail("the record names the bidder and the clerk who entered it",
+            hallCertificate.ToString());
+
+    // The clerk's two verbs.
+    await clerkAdmin.PostAsync($"/auctions/{hallId}/extend", new { seconds = 120 });
+    n.Step("the clerk moves the end time", "the auctioneer decides, not a clock");
+
+    var (strangerClose, _) = await new Caller(http, adminUrl, committeeToken, "award-committee")
+        .TryPostAsync($"/auctions/{hallId}/close");
+    if (strangerClose is System.Net.HttpStatusCode.Forbidden)
+        n.Step("only this auction's clerk can bring the hammer down", "403");
+    else
+        n.Fail("only this auction's clerk can bring the hammer down", $"got {(int)strangerClose}");
+
+    await clerkAdmin.PostAsync($"/auctions/{hallId}/close");
+    n.Step("the hammer falls", "the only thing that ends a hall auction");
+
+    var (hallWinner, hallAmount) = await WaitForCandidateAsync(committee, hallId);
+    if (hallWinner == sara && hallAmount == reserve)
+        n.Step("the committee is offered the hall's candidate",
+            $"{hallAmount / 100:N0} SAR — the same الترسية workflow as online");
+    else
+        n.Fail("the committee is offered the hall's candidate", $"{hallWinner} at {hallAmount}");
 }
 catch (SmokeException e)
 {
@@ -763,6 +971,29 @@ static async Task<JsonElement> WaitForPriceAsync(Caller who, Guid auctionId, lon
     throw new SmokeException(
         $"the public price never reached {expected / 100:N0} SAR; is the query BFF "
         + "consuming auctions.current-winner?");
+}
+
+/// <summary>
+/// Waits until the participant service has an auction's terms, by trying the thing
+/// that needs them. A 404 here means the relay has not caught up yet, not that the
+/// auction does not exist — the admin service approved it moments ago.
+/// </summary>
+static async Task WaitForTermsAsync(Caller who, Guid auctionId, Guid bidderId)
+{
+    for (var i = 0; i < 60; i++)
+    {
+        var (status, _) = await who.TryPostAsync(
+            $"/auctions/{auctionId}/subscriptions", new { bidderId });
+
+        // Created, or already there from a previous attempt: either way the terms
+        // have arrived.
+        if (status != System.Net.HttpStatusCode.NotFound) return;
+        await Task.Delay(500);
+    }
+
+    throw new SmokeException(
+        $"the participant service never learned auction {auctionId}; is it consuming "
+        + Topics.Upcoming + "?");
 }
 
 static async Task<(Guid Bidder, long Amount)> WaitForCandidateAsync(Caller committee, Guid auctionId)

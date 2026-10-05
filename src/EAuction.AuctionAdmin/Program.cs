@@ -14,6 +14,23 @@ var connectionString = builder.Configuration.GetConnectionString("Admin")
 
 builder.Services.AddDbContextFactory<AdminDbContext>(o => o.UseNpgsql(connectionString));
 
+// The same master key the participant service and the catcher hold. This service
+// needs it for one thing only: handing a hall clerk the key they sign frames with
+// (§29). Derived, never stored and never published — the participants topic
+// carries the clerk's epoch, exactly as it carries a bidder's.
+var clerkMasterKeyHex = builder.Configuration["Admin:BidderMasterKeyHex"];
+if (string.IsNullOrWhiteSpace(clerkMasterKeyHex))
+{
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(
+            "Admin:BidderMasterKeyHex is required. Without the same master key the catcher "
+            + "uses, no clerk could sign a bid the catcher would accept.");
+
+    clerkMasterKeyHex = Convert.ToHexString(BidderKeys.NewMasterKey());
+}
+
+var clerkMasterKey = Convert.FromHexString(clerkMasterKeyHex);
+
 var bootstrap = builder.Configuration["Kafka:BootstrapServers"];
 if (string.IsNullOrWhiteSpace(bootstrap))
 {
@@ -99,6 +116,50 @@ app.MapPut("/auctions/{id:guid}", (Guid id, UpdateAuctionRequest r, IDbContextFa
         r.DepositMinorUnits, r.BrokerageFeePercent, r.BookletPriceMinorUnits,
         r.QuietPeriodSeconds, r.MaxExtensions, r.Phase)))
     .RequireAuthorization(Policies.AuctionAdmin);
+
+// --- قاعة المزاد: the clerk on the floor (§29) ------------------------------
+
+app.MapPut("/auctions/{id:guid}/clerk", (
+    Guid id, AssignClerkRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, a => a.AssignClerk(r.ClerkUserId)))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+app.MapDelete("/auctions/{id:guid}/clerk", (
+    Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, a => a.UnassignClerk()))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// The clerk's own signing key. Derived on demand like a bidder's, and handed to
+// nobody else: whoever holds it can sign a bid for any eligible bidder in that
+// auction, which is exactly the clerk's job and nobody else's.
+app.MapGet("/auctions/{id:guid}/clerk-key", async (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var auction = await db.Auctions.FirstOrDefaultAsync(a => a.Id == id, ct);
+    if (auction is null) return Results.NotFound();
+
+    // Not "an operator": this auction's operator. A clerk running the hall next
+    // door has the same role and no business signing here.
+    if (auction.ClerkUserId is null || auction.ClerkUserId != http.User.SubjectId())
+        return Results.Forbid();
+
+    return Results.Ok(new SigningKeyResponse(
+        Convert.ToHexString(
+            BidderKeys.Derive(clerkMasterKey, id, auction.ClerkUserId.Value, auction.ClerkKeyEpoch)),
+        auction.ClerkKeyEpoch));
+}).RequireAuthorization(Policies.Operator);
+
+app.MapPost("/auctions/{id:guid}/extend", (
+    Guid id, HttpContext http, ExtendRequest r,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, a => a.ExtendByClerk(http.User.SubjectId() ?? Guid.Empty, r.Seconds)))
+    .RequireAuthorization(Policies.Operator);
+
+app.MapPost("/auctions/{id:guid}/close", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, a => a.CloseByClerk(http.User.SubjectId() ?? Guid.Empty)))
+    .RequireAuthorization(Policies.Operator);
 
 app.MapPost("/auctions/{id:guid}/plots", (Guid id, AddPlotRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.AddPlot(new Plot(
@@ -314,6 +375,10 @@ public sealed record UpdateAuctionRequest(
     decimal BrokerageFeePercent, long BookletPriceMinorUnits,
     int? QuietPeriodSeconds, int MaxExtensions, string? Phase);
 
+public sealed record AssignClerkRequest(Guid ClerkUserId);
+public sealed record ExtendRequest(int Seconds);
+public sealed record SigningKeyResponse(string SecretHex, int KeyEpoch);
+
 public sealed record AddPlotRequest(
     string DeedNumber, decimal AreaSqm, string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn);
@@ -344,7 +409,7 @@ public sealed record AuctionListItem(
 
 public sealed record AuctionResponse(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,
-    string BidderVisibility, string? Phase,
+    string BidderVisibility, Guid? ClerkUserId, string? Phase,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long MinIncrementMinorUnits, long DepositMinorUnits,
     decimal BrokerageFeePercent, long BookletPriceMinorUnits,
@@ -358,7 +423,7 @@ public sealed record AuctionResponse(
 {
     public static AuctionResponse From(Auction a) => new(
         a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
-        a.BidderVisibility.ToString(), a.Phase,
+        a.BidderVisibility.ToString(), a.ClerkUserId, a.Phase,
         a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
         a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
         a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,

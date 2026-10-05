@@ -296,6 +296,24 @@
       "realmRoles": [
         "award-committee"
       ]
+    },
+    {
+      "username": "clerk-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Faisal",
+      "lastName": "Al-Qahtani",
+      "email": "clerk@example.sa",
+      "realmRoles": [
+        "operator"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ]
     }
   ],
   "identityProviders": [],
