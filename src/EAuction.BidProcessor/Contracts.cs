@@ -96,6 +96,16 @@ public sealed record CurrentWinner
     /// <summary>Masked in public views (D-22); the raw id stays on this restricted topic.</summary>
     public Guid? LeaderBidderId { get; init; }
 
+    /// <summary>
+    /// The bid that took the lead, as the bidder's own client identified it.
+    ///
+    /// Carried so a bidder can be told which of their bids won rather than inferring
+    /// it from a price that happens to match. Masked exactly like
+    /// <see cref="LeaderBidderId"/>: it is one bidder's identifier and the fan-out
+    /// sends it only to them.
+    /// </summary>
+    public Guid? LeaderClientBidId { get; init; }
+
     public DateTimeOffset EffectiveEndsAt { get; init; }
     public int ExtensionsUsed { get; init; }
 }

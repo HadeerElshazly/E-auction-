@@ -142,6 +142,22 @@ dotnet "$REPO/tools/migrate/bin/Release/net8.0/EAuction.Migrate.dll" \
 
 start() {
   local name="$1" project="$2" port="$3"; shift 3
+
+  # Replace anything already on the port. --services-only deliberately leaves
+  # services running, so the next ordinary run would otherwise fail to bind and
+  # then be tested against the previous run's processes — which is confusing in
+  # exactly the way that wastes an afternoon.
+  local squatter
+  squatter=$(pgrep -f "bin/Release/net8.0/$project.dll" 2>/dev/null | head -1)
+  if [ -n "$squatter" ]; then
+    echo "  replacing $name already running as pid $squatter"
+    kill "$squatter" 2>/dev/null
+    for _ in $(seq 1 20); do
+      kill -0 "$squatter" 2>/dev/null || break
+      sleep 0.5
+    done
+  fi
+
   say "Starting $name on :$port"
   env "${@}" \
     ASPNETCORE_URLS="http://127.0.0.1:$port" \

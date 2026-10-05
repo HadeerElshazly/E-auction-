@@ -6,13 +6,21 @@ namespace EAuction.QueryBff;
 /// <summary>
 /// Fills <see cref="CatalogueState"/> from the control topics.
 ///
-/// Three topics, and deliberately not a fourth: this service never consumes
+/// Four topics, and deliberately not a fifth: this service never consumes
 /// <c>auctions.sealed</c>, so the reserve price is unreachable from the public read
 /// path by ACL rather than by care (D-23). It also never touches a bid topic — the
 /// bid path is the hot path and a read API has no business on it.
+///
+/// Every applied record also pushes to <see cref="FanOut"/>. <c>bids.rejected</c> is
+/// consumed for that reason alone: the processor has always published a bidder's
+/// rejection there and, until this, nothing read it — so a bidder could not learn
+/// why a bid failed, and the portal left a refused bid on screen marked "recorded"
+/// indefinitely.
 /// </summary>
 public sealed class CatalogueConsumer(
     CatalogueState state,
+    BidderAliases aliases,
+    FanOut fanOut,
     IEventStream events,
     ILogger<CatalogueConsumer> logger) : BackgroundService
 {
@@ -43,6 +51,7 @@ public sealed class CatalogueConsumer(
             FollowAsync(Topics.Upcoming, ApplyDefinition, ct),
             FollowAsync(Topics.CurrentWinner, ApplyPrice, ct),
             FollowAsync(Topics.Lifecycle, ApplyLifecycle, ct),
+            FollowAsync(Topics.BidsRejected, ApplyRejection, ct),
             MarkWarmAsync(ct));
     }
 
@@ -122,6 +131,10 @@ public sealed class CatalogueConsumer(
                     x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn))
                 .ToArray()
         });
+
+        // The compacted topics replay concurrently, so this may be the record that
+        // completes an auction whose price arrived first.
+        if (state.TryGet(p.AuctionId, out var entry)) Push(entry);
     }
 
     private void ApplyPrice(StreamEvent record)
@@ -131,8 +144,50 @@ public sealed class CatalogueConsumer(
         var p = JsonSerializer.Deserialize<CurrentWinnerPayload>(record.Payload, Json);
         if (p is null) return;
 
-        state.SetPrice(
-            p.AuctionId, p.PriceMinorUnits, p.LeaderBidderId, p.EffectiveEndsAt, p.ExtensionsUsed);
+        var updated = state.SetPrice(
+            p.AuctionId, p.PriceMinorUnits, p.LeaderBidderId, p.LeaderClientBidId,
+            p.EffectiveEndsAt, p.ExtensionsUsed);
+
+        // Null while this topic is replaying ahead of auctions.upcoming, which is
+        // normal on a cold start: the definition arrives and brings its own push.
+        if (updated is not null) Push(updated);
+    }
+
+    /// <summary>
+    /// Sends a price change to everyone watching, in the two variants that exist.
+    ///
+    /// Pushed from here rather than from the endpoint, so a price reaches a watcher
+    /// because the processor published it and not because the watcher asked.
+    /// </summary>
+    private void Push(AuctionEntry entry)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var alias = entry.LeaderBidderId is null
+            ? null
+            : aliases.For(entry.AuctionId, entry.LeaderBidderId.Value);
+
+        fanOut.PublishPrice(
+            entry.AuctionId,
+            LiveViews.Serialise(LiveViews.ForOthers(entry, alias, now)),
+            LiveViews.Serialise(LiveViews.ForLeader(entry, alias, now)),
+            entry.LeaderBidderId);
+    }
+
+    private void ApplyRejection(StreamEvent record)
+    {
+        if (record.EventType != "BidRejected") return;
+
+        var p = JsonSerializer.Deserialize<BidRejectedPayload>(record.Payload, Json);
+        if (p is null) return;
+
+        var minimumNext = state.TryGet(p.AuctionId, out var entry)
+            ? entry.MinimumNextBidMinorUnits
+            : p.CurrentPriceMinorUnits;
+
+        fanOut.PublishVerdict(p.AuctionId, p.BidderId, LiveViews.Serialise(
+            new BidVerdictView(
+                p.AuctionId, p.ClientBidId, Accepted: false, p.Reason,
+                p.CurrentPriceMinorUnits, minimumNext, DateTimeOffset.UtcNow)));
     }
 
     private void ApplyLifecycle(StreamEvent record)
@@ -150,7 +205,17 @@ public sealed class CatalogueConsumer(
         var p = JsonSerializer.Deserialize<LifecyclePayload>(record.Payload, Json);
         if (p is null) return;
 
-        state.SetStatus(p.AuctionId, status, p.EffectiveEndsAt);
+        var updated = state.SetStatus(p.AuctionId, status, p.EffectiveEndsAt);
+        if (updated is null) return;
+
+        // Watchers need the close as much as they need a price: it is what turns the
+        // bid box off, and a portal that only learned about it by polling would keep
+        // offering to bid on an auction that had ended.
+        Push(updated);
+
+        // An auction past its award is nobody's live view any more, and its verdict
+        // buffers are memory held for bidders who will not come back for them.
+        if (status is "Unsold") fanOut.Forget(p.AuctionId);
     }
 
     // Local payload shapes rather than a shared contracts package: this service reads
@@ -190,8 +255,18 @@ public sealed class CatalogueConsumer(
         public Guid AuctionId { get; init; }
         public long PriceMinorUnits { get; init; }
         public Guid? LeaderBidderId { get; init; }
+        public Guid? LeaderClientBidId { get; init; }
         public DateTimeOffset EffectiveEndsAt { get; init; }
         public int ExtensionsUsed { get; init; }
+    }
+
+    private sealed record BidRejectedPayload
+    {
+        public Guid AuctionId { get; init; }
+        public Guid BidderId { get; init; }
+        public Guid ClientBidId { get; init; }
+        public string Reason { get; init; } = "";
+        public long CurrentPriceMinorUnits { get; init; }
     }
 
     private sealed record LifecyclePayload

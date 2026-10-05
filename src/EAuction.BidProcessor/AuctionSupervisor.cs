@@ -179,6 +179,7 @@ public sealed class AuctionSupervisor(
                     AuctionId = verdict.AuctionId,
                     PriceMinorUnits = verdict.PriceAfterMinorUnits,
                     LeaderBidderId = running.Pump!.Engine.ProvisionalLeader,
+                    LeaderClientBidId = verdict.ClientBidId,
                     EffectiveEndsAt = verdict.EffectiveEndsAt,
                     ExtensionsUsed = verdict.ExtensionsUsed
                 }, Json),

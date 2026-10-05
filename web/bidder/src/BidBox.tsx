@@ -12,13 +12,15 @@ import {
   type Api,
   type Session,
 } from '@eauction/shared'
-import type { AuctionDetail, BidReceipt, LivePrice } from './types'
+import type { AuctionDetail, BidReceipt, BidVerdict, LivePrice } from './types'
 import { useSigningKey } from './useSigningKey'
 
 interface Props {
   auction: AuctionDetail
   session: Session
   price: LivePrice | null
+  /** This bidder's own verdicts, pushed by the fan-out. */
+  verdicts: BidVerdict[]
   participant: Api
   onBid: () => void
 }
@@ -46,24 +48,33 @@ const reasons: Record<string, string> = {
 }
 
 /**
- * What the authoritative price says about one submitted bid.
+ * The processor's actual ruling on one submitted bid.
  *
- * Inference, not a verdict: the processor publishes its ruling to bids.rejected and
- * nothing delivers that to a browser yet (docs/ARCHITECTURE.md §7.2). Comparing
- * against the price the BFF reports is enough to stop a refused bid sitting on
- * screen as "recorded" indefinitely, and the wording stays honest about which of
- * the two it is.
+ * Previously inferred by comparing against the price, because the processor's ruling
+ * went to `bids.rejected` and nothing delivered it to a browser. The fan-out now
+ * does, so each bid gets its own verdict matched by client bid id — and a bid
+ * refused as a self-outbid or a duplicate is named as such instead of being guessed
+ * at from a price that happens not to have moved.
+ *
+ * Inference survives only as the fallback for a bid whose verdict has not arrived,
+ * which on a polling connection is every bid.
  */
-function outcome(bid: Submitted, price: LivePrice | null) {
-  if (!price || price.priceMinorUnits === null) {
-    return <span className="pill done">مُسجَّلة</span>
+function outcome(bid: Submitted, price: LivePrice | null, verdicts: BidVerdict[]) {
+  const verdict = verdicts.find((v) => v.clientBidId === bid.clientBidId)
+
+  if (verdict && !verdict.accepted) {
+    return (
+      <span className="pill bad" title={verdict.reason ?? undefined}>
+        {verdict.reason ? (reasons[verdict.reason] ?? verdict.reason) : 'مرفوضة'}
+      </span>
+    )
   }
 
-  if (price.leaderIsYou && price.priceMinorUnits === bid.amount) {
+  if (price?.leaderIsYou && price.yourWinningBidId === bid.clientBidId) {
     return <span className="pill live">الأعلى</span>
   }
 
-  if (price.priceMinorUnits >= bid.amount) {
+  if (price?.priceMinorUnits != null && price.priceMinorUnits >= bid.amount) {
     return <span className="pill done">تجاوزها غيرك</span>
   }
 
@@ -71,7 +82,7 @@ function outcome(bid: Submitted, price: LivePrice | null) {
 }
 
 
-export function BidBox({ auction, session, price, participant, onBid }: Props) {
+export function BidBox({ auction, session, price, verdicts, participant, onBid }: Props) {
   const key = useSigningKey(participant, auction.id, session.subject)
   const catcher = api({ baseUrl: config.catcherApi, session })
 
@@ -223,14 +234,14 @@ export function BidBox({ auction, session, price, participant, onBid }: Props) {
                   <td className="num">{sar(b.amount, 'ar')}</td>
                   <td className="num small">{b.at.toLocaleTimeString('ar-SA')}</td>
                   <td className="num small">{b.offset}</td>
-                  <td className="small">{outcome(b, price)}</td>
+                  <td className="small">{outcome(b, price, verdicts)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <p className="muted small">
-            «مُسجَّلة» تعني أن المزايدة حُفظت في السجل ولم يصدر حكمها بعد. الحكم من
-            خدمة المعالجة بترتيب السجل، لا بوقت جهازك.
+            «مُسجَّلة» تعني أن المزايدة حُفظت في السجل ولم يصل حكمها بعد. الحكم يصدر
+            من خدمة المعالجة بترتيب السجل، لا بوقت جهازك.
           </p>
         </>
       )}

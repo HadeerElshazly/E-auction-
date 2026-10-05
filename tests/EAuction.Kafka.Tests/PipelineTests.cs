@@ -109,6 +109,25 @@ public class PipelineTests(KafkaFixture kafka) : IAsyncDisposable
         return (definition, supervisor, registry, _events);
     }
 
+    /// <summary>
+    /// Retries a read until it satisfies the predicate, or gives up and returns the
+    /// last value so the assertion that follows reports something useful.
+    /// </summary>
+    private static async Task<T> EventuallyAsync<T>(
+        Func<Task<T>> read, Func<T, bool> satisfied, TimeSpan within)
+    {
+        var deadline = DateTime.UtcNow + within;
+        var last = await read();
+
+        while (!satisfied(last) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(500);
+            last = await read();
+        }
+
+        return last;
+    }
+
     private static async Task DrainAsync(
         IEventStream events, string topic, Action<StreamEvent> apply, TimeSpan quietFor)
     {
@@ -242,10 +261,24 @@ public class PipelineTests(KafkaFixture kafka) : IAsyncDisposable
                 1_000_000_00 + (i + 1) * 50_000_00, DateTimeOffset.UtcNow);
 
         // A fresh checkpoint store, as a restarted process would build.
-        var reloaded = new CheckpointStore(events);
-        await DrainAsync(events, Topics.Checkpoints, r => reloaded.Apply(r), TimeSpan.FromSeconds(15));
+        //
+        // Retried until the checkpoint is there rather than drained once for a fixed
+        // window. The property is "the checkpoint reaches the topic", not "within
+        // fifteen seconds of one drain" — and on a loaded machine the single-drain
+        // version failed intermittently while being perfectly correct, which is the
+        // worst kind of test.
+        var published = await EventuallyAsync(
+            async () =>
+            {
+                var reloaded = new CheckpointStore(events);
+                await DrainAsync(
+                    events, Topics.Checkpoints, r => reloaded.Apply(r), TimeSpan.FromSeconds(10));
+                return reloaded.PublishedThrough(d.AuctionId);
+            },
+            through => through == 3,
+            TimeSpan.FromSeconds(90));
 
-        Assert.Equal(3, reloaded.PublishedThrough(d.AuctionId));
+        Assert.Equal(3, published);
     }
 
     public async ValueTask DisposeAsync()

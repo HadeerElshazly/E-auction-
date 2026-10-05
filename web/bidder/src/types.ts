@@ -36,6 +36,17 @@ export interface AuctionDetail extends Omit<AuctionSummary, 'plotCount'> {
   plots: Plot[]
 }
 
+/** A bidder's own bid outcome, pushed to them and to nobody else. */
+export interface BidVerdict {
+  auctionId: string
+  clientBidId: string
+  accepted: boolean
+  reason: string | null
+  currentPriceMinorUnits: number
+  minimumNextBidMinorUnits: number
+  asOf: string
+}
+
 export interface LivePrice {
   auctionId: string
   status: string
@@ -44,6 +55,8 @@ export interface LivePrice {
   /** A per-auction pseudonym, never an id or a name (D-22). */
   leaderAlias: string | null
   leaderIsYou: boolean
+  /** Set only on the copy sent to the leader, so they know which of their bids won. */
+  yourWinningBidId: string | null
   effectiveEndsAt: string
   extensionsUsed: number
   maxExtensions: number

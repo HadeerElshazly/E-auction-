@@ -73,6 +73,10 @@ public class MaskingTests
                 .Where(p => p.Name.Contains("Bidder", StringComparison.OrdinalIgnoreCase)
                          || p.Name.Contains("Leader", StringComparison.OrdinalIgnoreCase)
                          || p.Name.Contains("Winner", StringComparison.OrdinalIgnoreCase))
+                // YourWinningBidId is the one exception: it is the recipient's own
+                // bid id, set only on the variant sent to that one bidder, and the
+                // tests below assert it never appears on anyone else's.
+                .Where(p => p.Name != nameof(LivePrice.YourWinningBidId))
                 .Select(p => p.Name)
                 .ToArray();
 
@@ -127,7 +131,8 @@ public class CatalogueStateTests
         // the price alone would publish an auction with no name, no plots and no
         // deposit — and the catalogue would show it.
         var state = new CatalogueState();
-        state.SetPrice(Guid.NewGuid(), 1_100_000_00, Guid.NewGuid(), DateTimeOffset.UtcNow, 0);
+        state.SetPrice(Guid.NewGuid(), 1_100_000_00, Guid.NewGuid(), Guid.NewGuid(),
+            DateTimeOffset.UtcNow, 0);
 
         Assert.Equal(0, state.Count);
     }
@@ -144,7 +149,8 @@ public class CatalogueStateTests
 
         state.Upsert(Definition(id));
         state.SetStatus(id, "Live");
-        state.SetPrice(id, 1_200_000_00, leader, DateTimeOffset.UtcNow.AddMinutes(5), 2);
+        state.SetPrice(id, 1_200_000_00, leader, Guid.NewGuid(),
+            DateTimeOffset.UtcNow.AddMinutes(5), 2);
 
         state.Upsert(Definition(id, nameEn: "A, corrected"));
 
@@ -170,9 +176,101 @@ public class CatalogueStateTests
         Assert.Null(fresh.PriceMinorUnits);
         Assert.Equal(1_000_000_00, fresh.MinimumNextBidMinorUnits);
 
-        state.SetPrice(id, 1_000_000_00, Guid.NewGuid(), DateTimeOffset.UtcNow, 0);
+        state.SetPrice(id, 1_000_000_00, Guid.NewGuid(), Guid.NewGuid(),
+            DateTimeOffset.UtcNow, 0);
 
         Assert.True(state.TryGet(id, out var bidOn));
         Assert.Equal(1_050_000_00, bidOn.MinimumNextBidMinorUnits);
+    }
+}
+
+/// <summary>
+/// The two variants of a price update. These are the only place the leader-only
+/// fields can escape from, which is why there is exactly one pair of builders.
+/// </summary>
+public class LiveViewTests
+{
+    private static AuctionEntry Led(Guid leader, Guid winningBid) => new()
+    {
+        AuctionId = Guid.NewGuid(),
+        NameAr = "أ", NameEn = "A", Channel = "Online",
+        StartsAt = DateTimeOffset.UtcNow, EndsAt = DateTimeOffset.UtcNow.AddHours(1),
+        OpeningPriceMinorUnits = 1_000_000_00,
+        MinIncrementMinorUnits = 50_000_00,
+        DepositMinorUnits = 1, BookletPriceMinorUnits = 1,
+        MaxExtensions = 3, TotalAreaSqm = 1m, Plots = [],
+        Status = "Live",
+        PriceMinorUnits = 1_200_000_00,
+        LeaderBidderId = leader,
+        LeaderClientBidId = winningBid
+    };
+
+    [Fact]
+    public void The_others_variant_carries_no_winning_bid_id()
+    {
+        // The field this exists to contain. It is the leading bidder's own
+        // identifier for their bid, and it must not reach anyone else.
+        var leader = Guid.NewGuid();
+        var winningBid = Guid.NewGuid();
+
+        var view = LiveViews.ForOthers(Led(leader, winningBid), "#1", DateTimeOffset.UtcNow);
+
+        Assert.Null(view.YourWinningBidId);
+        Assert.False(view.LeaderIsYou);
+        Assert.DoesNotContain(winningBid.ToString(), LiveViews.Serialise(view));
+        Assert.DoesNotContain(leader.ToString(), LiveViews.Serialise(view));
+    }
+
+    [Fact]
+    public void The_leader_variant_names_the_bid_that_won()
+    {
+        // So a bidder is told which of their bids took the lead, rather than
+        // inferring it from a price that happens to match the amount they typed.
+        var leader = Guid.NewGuid();
+        var winningBid = Guid.NewGuid();
+
+        var view = LiveViews.ForLeader(Led(leader, winningBid), "#1", DateTimeOffset.UtcNow);
+
+        Assert.Equal(winningBid, view.YourWinningBidId);
+        Assert.True(view.LeaderIsYou);
+
+        // Still not the leader's bidder id: the alias is what identifies them.
+        Assert.DoesNotContain(leader.ToString(), LiveViews.Serialise(view));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void The_per_caller_view_picks_the_variant_by_who_is_asking(bool callerLeads)
+    {
+        var leader = Guid.NewGuid();
+        var entry = Led(leader, Guid.NewGuid());
+        var caller = callerLeads ? leader : Guid.NewGuid();
+
+        var view = LiveViews.For(entry, caller, "#1", DateTimeOffset.UtcNow);
+
+        Assert.Equal(callerLeads, view.LeaderIsYou);
+        Assert.Equal(callerLeads, view.YourWinningBidId is not null);
+    }
+
+    [Fact]
+    public void An_anonymous_caller_never_leads()
+    {
+        // Guards a null-equals-null slip: the caller is null when anonymous, and
+        // LeaderBidderId is null before the first bid.
+        var noBidsYet = Led(Guid.NewGuid(), Guid.NewGuid()) with
+        {
+            LeaderBidderId = null,
+            LeaderClientBidId = null,
+            PriceMinorUnits = null
+        };
+
+        var view = LiveViews.For(noBidsYet, caller: null, alias: null, DateTimeOffset.UtcNow);
+
+        Assert.False(view.LeaderIsYou);
+        Assert.Null(view.YourWinningBidId);
+
+        // And with no bid, the floor to beat is the opening price.
+        Assert.Equal(1_000_000_00, view.MinimumNextBidMinorUnits);
     }
 }

@@ -15,7 +15,7 @@ interface Props {
 }
 
 export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefresh }: Props) {
-  const price = useLivePrice(auction.id, session)
+  const { price, verdicts, transport } = useLivePrice(auction.id, session)
   const participant = useMemo(
     () => api({ baseUrl: config.participantApi, session }),
     [session],
@@ -70,7 +70,22 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
       {error && <div className="notice error">{error}</div>}
 
       <div className="card">
-        <h2 style={{ marginBottom: 4 }}>{auction.nameAr}</h2>
+        <div className="row" style={{ marginBottom: 4 }}>
+          <h2 style={{ margin: 0 }}>{auction.nameAr}</h2>
+          <span className="grow" />
+          {/* Said out loud, because the two differ in how stale the price can be
+              and a bidder in a war deserves to know which they are on. */}
+          {live && transport === 'stream' && (
+            <span className="pill live" title="يُحدَّث السعر فور تغيّره">
+              مباشر
+            </span>
+          )}
+          {live && transport === 'polling' && (
+            <span className="pill wait" title="تعذّر البث المباشر — يُحدَّث السعر كل ثانيتين">
+              تحديث دوري
+            </span>
+          )}
+        </div>
         <div className="muted small ltr" style={{ marginBottom: 16 }}>
           {auction.nameEn}
         </div>
@@ -161,6 +176,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           auction={auction}
           session={session}
           price={price}
+          verdicts={verdicts}
           participant={participant}
           onBid={onRefresh}
         />

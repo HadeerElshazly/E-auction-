@@ -27,33 +27,45 @@ public sealed class CatalogueState
             Status = existing.Status,
             PriceMinorUnits = existing.PriceMinorUnits,
             LeaderBidderId = existing.LeaderBidderId,
+            LeaderClientBidId = existing.LeaderClientBidId,
             EffectiveEndsAt = existing.EffectiveEndsAt,
             ExtensionsUsed = existing.ExtensionsUsed
         });
 
-    public void SetPrice(
-        Guid auctionId, long price, Guid? leader, DateTimeOffset effectiveEndsAt, int extensions)
+    /// <summary>Returns the updated entry, or null if the auction is not known yet.</summary>
+    public AuctionEntry? SetPrice(
+        Guid auctionId, long price, Guid? leader, Guid? leaderClientBidId,
+        DateTimeOffset effectiveEndsAt, int extensions)
     {
-        if (!_auctions.TryGetValue(auctionId, out var entry)) return;
+        if (!_auctions.TryGetValue(auctionId, out var entry)) return null;
 
-        _auctions[auctionId] = entry with
+        var updated = entry with
         {
             PriceMinorUnits = price,
             LeaderBidderId = leader,
+            LeaderClientBidId = leaderClientBidId,
             EffectiveEndsAt = effectiveEndsAt,
             ExtensionsUsed = extensions
         };
+
+        _auctions[auctionId] = updated;
+        return updated;
     }
 
-    public void SetStatus(Guid auctionId, string status, DateTimeOffset? effectiveEndsAt = null)
+    /// <summary>Returns the updated entry, or null if the auction is not known yet.</summary>
+    public AuctionEntry? SetStatus(
+        Guid auctionId, string status, DateTimeOffset? effectiveEndsAt = null)
     {
-        if (!_auctions.TryGetValue(auctionId, out var entry)) return;
+        if (!_auctions.TryGetValue(auctionId, out var entry)) return null;
 
-        _auctions[auctionId] = entry with
+        var updated = entry with
         {
             Status = status,
             EffectiveEndsAt = effectiveEndsAt ?? entry.EffectiveEndsAt
         };
+
+        _auctions[auctionId] = updated;
+        return updated;
     }
 
     public bool TryGet(Guid auctionId, out AuctionEntry entry) =>
@@ -90,6 +102,14 @@ public sealed record AuctionEntry
     public long? PriceMinorUnits { get; init; }
 
     public Guid? LeaderBidderId { get; init; }
+
+    /// <summary>
+    /// The leading bid as its own bidder's client identified it. Held so the fan-out
+    /// can tell that one bidder which of their bids won; never served to anyone else,
+    /// for the same reason as <see cref="LeaderBidderId"/> (D-22).
+    /// </summary>
+    public Guid? LeaderClientBidId { get; init; }
+
     public DateTimeOffset? EffectiveEndsAt { get; init; }
     public int ExtensionsUsed { get; init; }
 

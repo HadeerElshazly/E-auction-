@@ -154,6 +154,16 @@ test('an auction runs from draft to award through the portals', async ({ browser
       await qualify(khalid.page, nameAr, 'khalid@example.sa')
     })
 
+    await test.step('the portal is on the push channel, not polling', async () => {
+      // The badge is driven by which transport delivered the price, so this is the
+      // one assertion that distinguishes a stream from a poll from outside. If the
+      // SSE connection were refused — a missing CORS header, an ingress that
+      // buffers, EventSource's inability to send an Authorization header — the
+      // portal would still work and would quietly say "تحديث دوري" instead.
+      await expect(sara.page.getByText('مباشر')).toBeVisible({ timeout: 180_000 })
+      await expect(sara.page.getByText('تحديث دوري')).toHaveCount(0)
+    })
+
     await test.step('the browser signs a bid and the catcher accepts it', async () => {
       const page = sara.page
 
@@ -167,11 +177,20 @@ test('an auction runs from draft to award through the portals', async ({ browser
       await expect(page.getByLabel('مبلغ المزايدة')).toHaveValue('1,000,000.00')
       await bid.click()
 
-      // Recorded, not yet judged: the row says مُسجَّلة, never "you won".
-      await expect(page.getByRole('cell', { name: 'مُسجَّلة' })).toBeVisible({ timeout: 30_000 })
+      // The row appears, then carries the processor's actual ruling.
+      //
+      // Deliberately not asserting the intermediate "مُسجَّلة" — recorded, not yet
+      // judged. That state is real and the 202 still means it, but over the push
+      // channel the verdict arrives within milliseconds, so the row goes straight
+      // to "الأعلى" and the intermediate state is not observable from outside.
+      // Pinning a test to it made the test fail because the fan-out was fast.
+      await expect(page.getByRole('cell', { name: /الأعلى|مُسجَّلة/ })).toBeVisible({
+        timeout: 30_000,
+      })
 
-      // The processor's verdict comes back through the query BFF.
+      // The processor's verdict, pushed: she led, and it was this bid that won.
       await expect(page.getByText('أنت الأعلى حالياً')).toBeVisible({ timeout: 60_000 })
+      await expect(page.getByRole('cell', { name: 'الأعلى' })).toBeVisible({ timeout: 30_000 })
 
       // And once she leads, the portal refuses to let her raise her own bid rather
       // than letting the processor discard it silently.
@@ -201,7 +220,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
     await test.step('the first bidder is told she has been outbid', async () => {
       const page = sara.page
 
-      // Her own bid, which the price has now moved past.
+      // Pushed, not polled: her own bid, which the price has now moved past.
       await expect(page.getByRole('cell', { name: 'تجاوزها غيرك' })).toBeVisible({
         timeout: 60_000,
       })

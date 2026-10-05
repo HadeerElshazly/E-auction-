@@ -32,6 +32,19 @@ using var http = new HttpClient
     DefaultRequestVersion = new Version(1, 1)
 };
 
+// A separate client for the event streams, with no timeout.
+//
+// HttpClient.Timeout covers the whole operation including reading the body, even
+// with ResponseHeadersRead — so the ordinary 30-second timeout above severs a
+// long-lived SSE stream at exactly 30 seconds, which looks like the server hanging
+// up. Any .NET client of this channel needs the same treatment; a browser's fetch
+// has no default timeout and does not.
+using var streams = new HttpClient
+{
+    Timeout = Timeout.InfiniteTimeSpan,
+    DefaultRequestVersion = new Version(1, 1)
+};
+
 using var watcher = new TopicWatcher(bootstrap, new[]
 {
     Topics.Upcoming, Topics.Sealed, Topics.Participants,
@@ -257,6 +270,28 @@ try
     await WaitForReady(http, catcherUrl, n);
     await WaitUntil(startsAt, "the auction to open");
 
+    // Subscribed before the first bid, so what follows is pushed rather than found
+    // by a later read. Three viewers, because what each is told differs.
+    using var saraStream = new EventStreamClient(
+        streams, $"{bffUrl}/auctions/{auctionId}/stream", saraToken);
+    using var khalidStream = new EventStreamClient(
+        streams, $"{bffUrl}/auctions/{auctionId}/stream", khalidToken);
+    using var anonStream = new EventStreamClient(
+        streams, $"{bffUrl}/auctions/{auctionId}/stream", null);
+
+    var snapshot = await saraStream.WaitForAsync("snapshot",
+        e => e.GetProperty("auctionId").GetGuid() == auctionId);
+    n.Step("the stream opens with a snapshot", "the truth as of now, then deltas");
+    n.Note("no Last-Event-ID: a compacted read model has no history to replay");
+
+    // Whatever the status is at this instant is the right answer: the processor may
+    // not have ticked yet, and "the truth as of now" is exactly what a snapshot
+    // promises. Asserting Live here would be asserting a race — and asserting that
+    // it arrives as a later push is worse, because when the snapshot already says
+    // Live there is no later push to wait for. What the push channel actually
+    // delivers is asserted in section 8b, after the bids that cause it.
+    n.Note($"snapshot status: {snapshot.GetProperty("status").GetString()}");
+
     var saraCatcher = new Caller(http, catcherUrl, saraToken, "sara");
     var khalidCatcher = new Caller(http, catcherUrl, khalidToken, "khalid");
 
@@ -291,11 +326,18 @@ try
         (saraCatcher,   saraSecret,   sara,   opening + 4 * increment)
     };
 
+    // The id of the last bid, which is the one that should win. Kept so the stream
+    // assertions can check that sara is told WHICH of her bids won rather than
+    // inferring it from an amount.
+    var saraLastBidId = Guid.Empty;
+    var accepted = 0;
+
     foreach (var (who, secret, bidder, amount) in ladder)
     {
+        var clientBidId = Guid.NewGuid();
         var frame = BidFrame.BuildClientFrame(
             auctionId, bidder, amount, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Guid.NewGuid(), RandomNumberGenerator.GetInt32(int.MaxValue), secret);
+            clientBidId, RandomNumberGenerator.GetInt32(int.MaxValue), secret);
 
         var (bidStatus, bidBody) = await who.TryPostBytesAsync("/bids", frame);
         if (bidStatus != System.Net.HttpStatusCode.Accepted)
@@ -303,8 +345,18 @@ try
             n.Fail($"{who.Who} bids {amount / 100:N0} SAR", $"got {(int)bidStatus} {bidBody}");
             break;
         }
+
+        accepted++;
+        if (bidder == sara) saraLastBidId = clientBidId;
     }
-    n.Step("five accepted bids", $"202 each — recorded, not yet judged; last {(opening + 4 * increment) / 100:N0} SAR");
+
+    // Reported on what happened, not unconditionally: this step used to claim five
+    // accepted bids even when the loop had broken on a refusal.
+    if (accepted == ladder.Length)
+        n.Step("five accepted bids",
+            $"202 each — recorded, not yet judged; last {(opening + 4 * increment) / 100:N0} SAR");
+    else
+        n.Fail("five accepted bids", $"only {accepted} of {ladder.Length} were accepted");
 
     // Below the OPENING price. The catcher knows the opening price from
     // auctions.upcoming the moment it is warm, so this is a local decision with no
@@ -367,6 +419,69 @@ try
             $"got {leader} at {price / 100:N0} SAR");
 
     n.Note("the order came from Kafka partition offsets, not client timestamps (D-03)");
+
+    // -----------------------------------------------------------------------
+    n.Section("8b. The push channel — what each watcher was told");
+    // -----------------------------------------------------------------------
+
+    var pushedToSara = await saraStream.WaitForAsync("price",
+        e => PriceIs(e, opening + 4 * increment));
+
+    if (pushedToSara.GetProperty("leaderIsYou").GetBoolean())
+        n.Step("sara is pushed the price and told she leads",
+            $"{saraStream.CountOf("price")} delta(s), no polling");
+    else
+        n.Fail("sara is pushed the price and told she leads", pushedToSara.ToString());
+
+    // The field that lets a bidder match the win to one of their own bids, instead
+    // of inferring it from a price that happens to equal what they typed.
+    var winningBidId = pushedToSara.GetProperty("yourWinningBidId");
+    if (winningBidId.ValueKind == JsonValueKind.String
+        && winningBidId.GetGuid() == saraLastBidId)
+        n.Step("sara is told which of her bids won", $"{winningBidId.GetGuid()}");
+    else
+        n.Fail("sara is told which of her bids won", winningBidId.ToString());
+
+    var pushedToKhalid = await khalidStream.WaitForAsync("price",
+        e => PriceIs(e, opening + 4 * increment));
+
+    var khalidSawLeader = pushedToKhalid.GetProperty("leaderIsYou").GetBoolean();
+    var khalidAlias = pushedToKhalid.GetProperty("leaderAlias").GetString();
+    var khalidSawWinningBid = pushedToKhalid.GetProperty("yourWinningBidId").ValueKind;
+
+    if (!khalidSawLeader && khalidAlias is not null
+        && khalidSawWinningBid == JsonValueKind.Null
+        && !pushedToKhalid.ToString().Contains(sara.ToString())
+        && !pushedToKhalid.ToString().Contains(saraLastBidId.ToString()))
+        n.Step("khalid is pushed the price, masked", $"leader is {khalidAlias} — D-22");
+    else
+        n.Fail("khalid is pushed the price, masked", pushedToKhalid.ToString());
+
+    var pushedToAnon = await anonStream.WaitForAsync("price",
+        e => PriceIs(e, opening + 4 * increment));
+
+    if (!pushedToAnon.GetProperty("leaderIsYou").GetBoolean()
+        && pushedToAnon.GetProperty("yourWinningBidId").ValueKind == JsonValueKind.Null)
+        n.Step("an anonymous watcher is pushed the price too", "open auction, masked identity");
+    else
+        n.Fail("an anonymous watcher is pushed the price too", pushedToAnon.ToString());
+
+    // The verdict for the bid the processor refused, which until the fan-out existed
+    // reached nobody: bids.rejected was written by the processor and read by nothing.
+    var verdict = await khalidStream.WaitForAsync("verdict",
+        e => e.GetProperty("clientBidId").GetGuid() == staleBidId);
+
+    if (!verdict.GetProperty("accepted").GetBoolean())
+        n.Step("khalid is told why his stale bid was refused",
+            verdict.GetProperty("reason").GetString() ?? "?");
+    else
+        n.Fail("khalid is told why his stale bid was refused", verdict.ToString());
+
+    if (saraStream.CountOf("verdict") == 0 && anonStream.CountOf("verdict") == 0)
+        n.Step("the verdict reached nobody else", "a bidder's refusal is their own business");
+    else
+        n.Fail("the verdict reached nobody else",
+            $"sara {saraStream.CountOf("verdict")}, anonymous {anonStream.CountOf("verdict")}");
 
     // The same verdict, as each party is allowed to see it.
     var saraPrice = await WaitForPriceAsync(
@@ -469,6 +584,19 @@ return n.Summarise();
 
 static string Env(string name, string fallback) =>
     Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : fallback;
+
+/// <summary>
+/// True when a pushed price equals the amount, tolerating the ones that do not.
+///
+/// A predicate is run against every event on the stream, including a push from the
+/// auction going live, whose priceMinorUnits is null because no bid has been judged.
+/// Reading it as a number threw and failed the walk-through on an event it simply
+/// did not want.
+/// </summary>
+static bool PriceIs(JsonElement e, long amount) =>
+    e.TryGetProperty("priceMinorUnits", out var price)
+    && price.ValueKind == JsonValueKind.Number
+    && price.GetInt64() == amount;
 
 static string Reason(string body)
 {

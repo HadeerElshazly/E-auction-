@@ -1781,3 +1781,144 @@ Worth recording because both would have passed for ever:
   let the walk-through address them by name, but nothing has been checked against
   WCAG or a screen reader.
 - **No CSP.** The argument in `web/README.md` for one is not yet acted on.
+
+## 24. The push channel
+
+§7.2 always said the processor's verdict reaches the bidder over a push channel.
+It did not exist, so the portals polled, and `bids.rejected` — written by the
+processor since §14 — was read by nobody at all. A bidder could not learn why a
+bid failed, and the portal left a refused bid on screen marked "recorded".
+
+### Why it is worth the complexity
+
+At the design target of 10,000 concurrent bidders, a one-second poll through the
+final minute of an auction is **~10,000 requests a second** on the query BFF — the
+same order as the bid load the whole platform is built around — to carry a number
+that changed perhaps fifty times. The push channel carries the same information in
+fifty messages per watcher.
+
+And it is *fresher*. A one-second poll is 500 ms stale on average and up to a
+second at worst; the measured p99 of this channel at ten thousand watchers is
+227 ms. Cheaper and more current, which is the whole argument.
+
+### D-31: server-sent events, read over `fetch`
+
+Nothing flows upwards on this channel — bids go to the catcher over their own POST
+— so half a WebSocket would be unused, and SSE survives a proxy that mangles
+upgrade handshakes.
+
+Read with `fetch` and a `ReadableStream`, **not** `EventSource`. `EventSource`
+cannot set request headers, so an authenticated stream would have to carry its
+bearer token in the query string, where it lands in every access log, proxy log and
+browser history entry on the way. A token that can award land does not belong in a
+URL. The cost is reimplementing reconnect, which is about forty lines in
+`web/shared/src/sse.ts`.
+
+### D-32: a snapshot on connect, then deltas — and no resume
+
+A connecting or reconnecting client is sent the truth as of now, then kept current.
+There is no `Last-Event-ID` and no replay from an offset, for two reasons: this
+service's state is a compacted read model with no arbitrary history to serve, and a
+snapshot is self-healing — a delta missed while disconnected is irrelevant because
+the snapshot supersedes it.
+
+**A bid verdict breaks that symmetry**, because it is an event rather than state:
+it is absent from the snapshot, and a dropped one is simply lost. So each bidder
+has a bounded buffer of their last ten verdicts in an auction, replayed on connect.
+Without it, a two-second blip during a bidding war loses the one message that
+explains why a bid failed. It is bounded because it is memory a bidder influences
+directly — a thousand doomed bids must not grow a replica's heap with them.
+
+### Two payloads per change, not one per subscriber
+
+A price update differs between recipients only in whether the recipient is the
+leader, so it is serialised twice — once for everyone who is not, once for the one
+who is. At ten thousand watchers that is two serialisations per change rather than
+ten thousand. It is also the only place the leader-only fields can escape from, so
+having exactly one pair of builders is worth more than the speed; `LiveViewTests`
+asserts the "others" variant carries neither the leader's id nor the winning bid's.
+
+The per-connection queue is bounded at 32 and drops its **oldest** entry when full.
+A dropped price is harmless — the next supersedes it, and a client that far behind
+will reconnect to a fresh snapshot — while an unbounded queue lets one client on a
+stalled connection take a replica down. Verdicts survive the same policy because of
+the buffer above.
+
+### Measured
+
+One BFF replica, 20 price changes 300 ms apart, Kafka and Postgres on the same
+4-core host as the load client. Full table and caveats in
+`tools/fanouttest/README.md`.
+
+| watchers | delivered | p50 | p99 | RSS |
+|---|---|---|---|---|
+| 1,000 | 100% | 10.49 ms | 20.07 ms | 166 MiB |
+| 5,000 | 100% | 34.13 ms | 155.32 ms | 289 MiB |
+| 10,000 | 100% | 77.58 ms | 226.73 ms | 565 MiB |
+
+Nothing was dropped at any size — 200,000 of 200,000 at ten thousand watchers,
+which is the measurement that mattered since loss was the likeliest failure.
+Marginal cost between 1,000 and 10,000 watchers is about **45 KiB per stream**.
+
+### Four bugs in one async loop
+
+The handler races a channel read against a keep-alive timer, and every version of
+that race was wrong in a different way. Recording them because each is a trap that
+compiles, passes a unit test, and fails only against a real client:
+
+1. **`ValueTask` consumed twice.** `MoveNextAsync()` returns a `ValueTask`, and the
+   loop called `AsTask()` on the same one each iteration. A `ValueTask` may be
+   consumed exactly once.
+2. **`ReadAllAsync`'s enumerator cannot be disposed outside `await foreach`.**
+   Disposing it manually throws `NotSupportedException` and kills the connection.
+   The designed API for this shape is `WaitToReadAsync` + `TryRead`.
+3. **`PeriodicTimer` permits one outstanding waiter.** The loop abandoned the timer
+   arm whenever the read arm won, so the next call threw
+   `InvalidOperationException` — the stream died as soon as any message arrived.
+   `Task.Delay` has no such restriction.
+4. **A minimal-API handler must not both write the response and return an
+   `IResult`.** Doing so leaves the framework executing a result over a started
+   response, surfacing as `NotSupportedException` from the error-page middleware
+   with the real stack swallowed. The handler now returns `Task` and sets its own
+   status code.
+
+A fifth belongs to clients rather than the server: **`HttpClient.Timeout` covers
+reading the body even with `ResponseHeadersRead`**, so an ordinary 30-second timeout
+severs every stream at exactly 30 seconds and looks like the server hanging up. Any
+.NET consumer of this channel needs `Timeout.InfiniteTimeSpan` and per-request
+cancellation. A browser's `fetch` has no default timeout and is unaffected.
+
+### What the tests got wrong
+
+Three of the assertions written for this were wrong in ways worth recording:
+
+- **The load test's first run reported p50 of 1.1 seconds**, which was entirely the
+  client: the .NET thread pool grows by about one thread every half second, so
+  thousands of socket readers started at once queue behind pool growth and the
+  delay gets charged to the server. Pre-sizing the pool gave 0.85 ms at ten
+  watchers. A load client that does not pre-size is measuring itself.
+- **A matcher threw on an event it did not want.** The predicate read
+  `priceMinorUnits` as a number, and the push from an auction going live carries
+  null because no bid has been judged. A predicate runs against every event on the
+  stream, so it has to tolerate all of them.
+- **The browser test waited for a state the fan-out is too fast to show.** It
+  asserted the bid row reads "recorded, not yet judged" before the verdict — true
+  of the 202, and over this channel the verdict arrives in milliseconds, so the row
+  goes straight to "leading". The test failed because the feature worked.
+
+### Still not verified
+
+- **One replica, one machine.** The chart defaults to two with an HPA and
+  connections are independent, but a multi-replica fleet was not measured, and the
+  load client shared the four cores with the service under test — so the numbers
+  above are a floor.
+- **Connection count is not an autoscaling signal.** The HPA scales the BFF on CPU,
+  which is the wrong metric for a connection-bound service. A long-lived stream
+  costs little CPU while idle, so a replica can be at its connection ceiling while
+  looking unloaded.
+- **No ingress in the path.** `X-Accel-Buffering: no` is set for nginx and
+  `no-transform` for intermediaries, but nothing was tested behind a real ingress,
+  which is where SSE most often breaks.
+- **The portal's fallback is untested in anger.** Polling is still there and
+  `transport` reports which path is live, but no test forces the stream to fail and
+  checks the portal degrades rather than going blank.
