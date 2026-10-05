@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Playwright run artifacts.
+test-results/
+playwright-report/
