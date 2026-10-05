@@ -81,28 +81,63 @@ public class CatcherAuthTests(AuthenticatedFactory<Program> factory)
     [Fact]
     public async Task A_bidder_cannot_submit_a_frame_naming_someone_else()
     {
-        // The signature alone would not catch this: an eligible bidder's own
-        // key signs whatever frame they choose to build, including one that
-        // spends another bidder's deposit. The token is what ties the request
-        // to a person.
+        // Signing keys are derived per (auction, bidder), so Sara and Khalid
+        // hold different ones — as they would in any real deployment.
         var state = factory.Services.GetRequiredService<CatcherState>();
         var now = DateTimeOffset.UtcNow;
         var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
 
         var sara = Guid.NewGuid();
         var khalid = Guid.NewGuid();
+        var saraSecret = new byte[32]; saraSecret[0] = 1;
+        var khalidSecret = new byte[32]; khalidSecret[0] = 2;
+
         state.UpsertAuction(auction);
-        state.GrantEligibilityWithSecret(auction.AuctionId, sara, TestAuction.Secret);
-        state.GrantEligibilityWithSecret(auction.AuctionId, khalid, TestAuction.Secret);
+        state.GrantEligibilityWithSecret(auction.AuctionId, sara, saraSecret);
+        state.GrantEligibilityWithSecret(auction.AuctionId, khalid, khalidSecret);
 
-        // Khalid's token, a frame in Sara's name.
-        var frame = TestAuction.Frame(auction.AuctionId, sara, 1_200_000_00, now);
-        var client = factory.CreateClient().As(khalid, Roles.Bidder);
+        // Khalid's token, a frame in Sara's name, signed with Khalid's key.
+        var frame = TestAuction.Frame(
+            auction.AuctionId, sara, 1_200_000_00, now, secret: khalidSecret);
 
-        var response = await client.PostAsync("/bids", Body(frame));
+        var response = await factory.CreateClient().As(khalid, Roles.Bidder)
+            .PostAsync("/bids", Body(frame));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Contains("BidderMismatch", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public void The_signature_rejects_an_impersonated_frame_on_its_own()
+    {
+        // Worth stating separately, because an earlier version of the test
+        // above gave both bidders the same secret and so proved less than it
+        // appeared to. Keys are derived per (auction, bidder): the catcher
+        // looks up the secret of whoever the frame names, so a frame in
+        // Sara's name signed with Khalid's key fails on the signature, with
+        // no token involved at all.
+        var state = factory.Services.GetRequiredService<CatcherState>();
+        var now = DateTimeOffset.UtcNow;
+        var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
+
+        var sara = Guid.NewGuid();
+        var saraSecret = new byte[32]; saraSecret[0] = 3;
+        var khalidSecret = new byte[32]; khalidSecret[0] = 4;
+
+        state.UpsertAuction(auction);
+        state.GrantEligibilityWithSecret(auction.AuctionId, sara, saraSecret);
+
+        var impersonating = TestAuction.Frame(
+            auction.AuctionId, sara, 1_200_000_00, now, secret: khalidSecret);
+
+        Assert.Equal(RejectionReason.BadSignature, state.Screen(impersonating, now));
+
+        // The same frame signed with Sara's own key is fine, so the rejection
+        // is about the key and not about the frame.
+        var genuine = TestAuction.Frame(
+            auction.AuctionId, sara, 1_200_000_00, now, secret: saraSecret);
+
+        Assert.Equal(RejectionReason.None, state.Screen(genuine, now));
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using EAuction.LoadTest;
 using EAuction.Core;
 
 // Load generator for the bid hot path.
@@ -9,7 +10,11 @@ using EAuction.Core;
 //
 // Usage:
 //   eauction-loadtest --url http://localhost:5080 --auction <guid>
-//                     --bidders 200 --seconds 20 --rate 5000
+//                     --bidders 200 --seconds 20 --rate 5000 [--auth]
+//
+// --auth starts a local RS256 issuer and sends a bearer token per bidder, so
+// the measurement includes JWT validation on the hot path. Start the catcher
+// with Jwt__Authority pointing at it (default http://127.0.0.1:8099).
 
 var cfg = Args.Parse(args);
 
@@ -18,10 +23,23 @@ Console.WriteLine($"auction     {cfg.AuctionId}");
 Console.WriteLine($"bidders     {cfg.Bidders}");
 Console.WriteLine($"duration    {cfg.Seconds}s");
 Console.WriteLine($"target rate {cfg.Rate}/s");
+Console.WriteLine($"auth        {(cfg.Auth ? "RS256 bearer token per bidder" : "off")}");
 Console.WriteLine();
 
 var secret = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
 var bidders = Enumerable.Range(0, cfg.Bidders).Select(_ => Guid.NewGuid()).ToArray();
+
+// One token per bidder: the catcher checks the token's subject against the
+// bidder named in the frame, so a shared token would be rejected.
+TestIdentityProvider? idp = null;
+var tokens = new Dictionary<Guid, string>();
+
+if (cfg.Auth)
+{
+    idp = new TestIdentityProvider();
+    foreach (var bidder in bidders) tokens[bidder] = idp.TokenFor(bidder, "bidder");
+    Console.WriteLine($"issuer      {idp.Issuer} (RS256, {bidders.Length} tokens)");
+}
 
 var handler = new SocketsHttpHandler
 {
@@ -87,10 +105,13 @@ var workers = bidders.Select(bidder => Task.Run(async () =>
         var content = new ByteArrayContent(frame);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/bids") { Content = content };
+        if (cfg.Auth) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens[bidder]);
+
         var sw = Stopwatch.StartNew();
         try
         {
-            using var response = await http.PostAsync("/bids", content);
+            using var response = await http.SendAsync(request);
             sw.Stop();
             latencies.Add(sw.Elapsed.TotalMilliseconds);
 
@@ -111,6 +132,7 @@ var workers = bidders.Select(bidder => Task.Run(async () =>
 
 await Task.WhenAll(workers);
 deadline.Stop();
+idp?.Dispose();
 
 var samples = latencies.OrderBy(x => x).ToArray();
 if (samples.Length == 0)
@@ -142,7 +164,7 @@ Console.WriteLine(p99 <= 50
 
 return failed > 0 ? 2 : 0;
 
-internal sealed record Args(string Url, Guid AuctionId, int Bidders, int Seconds, int Rate)
+internal sealed record Args(string Url, Guid AuctionId, int Bidders, int Seconds, int Rate, bool Auth)
 {
     public static Args Parse(string[] a)
     {
@@ -157,6 +179,7 @@ internal sealed record Args(string Url, Guid AuctionId, int Bidders, int Seconds
             Guid.Parse(Get("auction", Guid.Empty.ToString())),
             int.Parse(Get("bidders", "200")),
             int.Parse(Get("seconds", "15")),
-            int.Parse(Get("rate", "0")));
+            int.Parse(Get("rate", "0")),
+            Array.IndexOf(a, "--auth") >= 0);
     }
 }

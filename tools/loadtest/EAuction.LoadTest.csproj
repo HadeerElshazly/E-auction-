@@ -11,4 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/EAuction.Core/EAuction.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.2.1" />
+  </ItemGroup>
 </Project>

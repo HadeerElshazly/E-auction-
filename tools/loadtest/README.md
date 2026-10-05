@@ -25,6 +25,41 @@ that state in a real environment.
 
 `--rate 0` (the default) means "as fast as the workers can go".
 
+## Measured with Kafka and authentication — 2026-10-05
+
+Same box and shape as the run below, with RS256 bearer tokens on every
+request. `--auth` starts a local RS256 issuer and mints one token per bidder,
+because the catcher checks the token's subject against the bidder named in the
+frame and a shared token would be rejected.
+
+| | no auth | RS256, per request | RS256, cached |
+|---|---|---|---|
+| Throughput | 13,196 req/s | 7,539 req/s | **11,308 req/s** |
+| p50 | 10.75 ms | 15.38 ms | 11.62 ms |
+| p99 | 19.49 ms | **89.67 ms** | **35.37 ms** |
+| p99.9 | 28.83 ms | 197.87 ms | 90.90 ms |
+| Against the 50 ms budget | met | **missed** | met |
+
+**Verifying an RS256 signature on every bid missed the budget by 40 ms.** It
+cost more than the rest of the request put together — HTTP, framing, HMAC,
+screening and the `acks=all` write combined. A bidder sends many bids under
+one token, so almost every verification after the first was repeating
+identical work.
+
+Validating once per token instead of once per request brings p99 back to
+35.37 ms. The entry is kept only until the token's own `exp`, so the cache
+cannot extend a token's life (`ValidatedTokenCache`).
+
+226,210 accepted, 226,210 on the topic, zero failures.
+
+### The margin is thinner than it looks
+
+35.37 ms against a 50 ms budget leaves far less headroom than the 19.49 ms
+before auth. The residual ~16 ms is the authentication pipeline itself: header
+parsing, the cache lookup, principal construction and policy evaluation. A
+three-broker cluster at `min.insync.replicas=2` will add more on top, and that
+has not been measured.
+
 ## Measured with real Kafka — 2026-10-04
 
 4 shared vCPU, 15 GB. **Broker, catcher and load generator all on the same

@@ -1242,18 +1242,27 @@ checking it.
 | **JWT** | *Who is calling.* Revocable, short-lived, tied to a session |
 | **HMAC** (D-20) | *What they asked for.* Non-repudiable, bound to the exact amount |
 
-Neither replaces the other. The catcher checks that the token's subject
-matches the bidder named in the frame:
+The catcher checks that the token's subject matches the bidder named in the
+frame:
 
 ```
 caller = token.sub
 if caller != frame.bidderId  →  403 BidderMismatch
 ```
 
-**The signature alone would not catch this.** An eligible bidder's own key
-signs whatever frame they choose to build, including one that spends another
-bidder's deposit. The token is what ties a request to a person; the signature
-is what ties it to an amount.
+**Correction.** An earlier version of this section said the signature alone
+would not catch an impersonated frame. That was wrong, and it came from a test
+that gave two bidders the same secret — something that never happens in
+practice. Keys are derived per `(auctionId, bidderId)`, and the catcher looks
+up the secret of whoever the *frame* names, so a frame in Sara's name signed
+with Khalid's key fails on the signature with no token involved at all.
+`The_signature_rejects_an_impersonated_frame_on_its_own` now asserts exactly
+that.
+
+The subject check is still worth having — it fails earlier and more cheaply,
+it carries the role check, and it means a request is tied to an authenticated
+session rather than only to possession of a key — but it is defence in depth,
+not the only thing standing between a bidder and someone else's deposit.
 
 ### Roles, and why there are only four
 
@@ -1318,4 +1327,40 @@ and the refill clock never rewinds.
 | **Tokens are not revocable mid-session** | Short lifetimes limit the window; a back-channel logout or token-revocation check is not wired |
 | **`/dev/seed` still exists** | Config-gated and refuses to start in Production without a master key, but it should not ship at all |
 | Service-to-service calls are unauthenticated | Nothing makes them today; when something does, it needs client credentials |
-| The load figures predate auth | 13,196 req/s at p99 19.49 ms was measured without JWT validation on the hot path |
+| ~~The load figures predate auth~~ | **Measured** — see below |
+
+
+### What authentication costs on the bid path
+
+Verifying an RS256 signature on every bid **missed the latency budget**:
+
+| | no auth | RS256, per request | RS256, cached |
+|---|---|---|---|
+| Throughput | 13,196 req/s | 7,539 req/s | 11,308 req/s |
+| p99 | 19.49 ms | **89.67 ms** | **35.37 ms** |
+| Against the 50 ms budget | met | **missed** | met |
+
+The signature cost more than the rest of the request put together — HTTP,
+framing, HMAC, screening and the `acks=all` write combined. A bidder sends
+many bids under one token, so nearly every verification after the first was
+repeating identical work.
+
+`ValidatedTokenCache` verifies once per token instead of once per request.
+Three properties keep that safe:
+
+- An entry lives only until the token's own `exp`, so the cache cannot extend
+  a token's life.
+- The key is a hash of the complete token, so altering any byte misses and the
+  token is validated in full.
+- Revocation is unchanged: offline validation already means a revoked session
+  works until expiry. For bidding it does not depend on tokens at all —
+  clearing eligibility on `auctions.participants` stops the bidder
+  immediately, which is both faster and stronger than token revocation.
+
+**The margin is now thin.** 35.37 ms against 50 ms is much less headroom than
+the 19.49 ms before auth, and the residual ~16 ms is the authentication
+pipeline itself. A three-broker cluster at `min.insync.replicas=2` will add
+more, and that has not been measured. If it stops fitting, the next move is
+terminating JWT validation at the Envoy ingress so the catcher reads a trusted
+header — which moves the cost rather than removing it, but moves it somewhere
+that scales independently of the bid path.

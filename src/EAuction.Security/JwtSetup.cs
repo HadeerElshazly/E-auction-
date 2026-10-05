@@ -43,6 +43,7 @@ public static class JwtSetup
                 + "endpoint would be open.");
 
         services.AddSingleton(options);
+        services.AddSingleton<ValidatedTokenCache>();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(jwt =>
@@ -67,15 +68,50 @@ public static class JwtSetup
                     ClockSkew = TimeSpan.FromSeconds(30)
                 };
 
-                // Keycloak nests realm roles under realm_access.roles, which
-                // no standard handler reads. Without this every role policy
-                // would deny, and every [Authorize(Role)] would be dead.
                 jwt.Events = new JwtBearerEvents
                 {
+                    // An RS256 signature costs far more than the rest of a bid
+                    // request put together, and a bidder sends many bids under
+                    // one token. Verifying it once per token instead of once
+                    // per request is the difference between meeting the
+                    // latency budget and missing it by a wide margin.
+                    OnMessageReceived = context =>
+                    {
+                        var token = ReadBearer(context.Request.Headers.Authorization);
+                        if (token is null) return Task.CompletedTask;
+
+                        var cache = context.HttpContext.RequestServices
+                            .GetRequiredService<ValidatedTokenCache>();
+
+                        if (cache.TryGet(token, DateTimeOffset.UtcNow, out var principal)
+                            && principal is not null)
+                        {
+                            context.Principal = principal;
+                            context.Success();
+                        }
+
+                        return Task.CompletedTask;
+                    },
+
+                    // Keycloak nests realm roles under realm_access.roles, which
+                    // no standard handler reads. Without this every role policy
+                    // would deny, and every [Authorize(Role)] would be dead.
                     OnTokenValidated = context =>
                     {
                         if (context.Principal?.Identity is ClaimsIdentity identity)
                             KeycloakRoles.Project(identity);
+
+                        var token = ReadBearer(context.Request.Headers.Authorization);
+                        if (token is not null && context.Principal is not null
+                            && context.SecurityToken.ValidTo != default)
+                        {
+                            context.HttpContext.RequestServices
+                                .GetRequiredService<ValidatedTokenCache>()
+                                .Set(token, context.Principal,
+                                    new DateTimeOffset(context.SecurityToken.ValidTo, TimeSpan.Zero),
+                                    DateTimeOffset.UtcNow);
+                        }
+
                         return Task.CompletedTask;
                     }
                 };
@@ -95,6 +131,14 @@ public static class JwtSetup
         });
 
         return services;
+    }
+
+    private static string? ReadBearer(Microsoft.Extensions.Primitives.StringValues header)
+    {
+        var value = header.ToString();
+        return value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? value["Bearer ".Length..].Trim()
+            : null;
     }
 }
 
