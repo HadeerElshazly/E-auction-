@@ -147,3 +147,201 @@ public class ReceiptTests
         Assert.NotEqual(first.Signature, second.Signature);
     }
 }
+
+/// <summary>
+/// The certificate a bidder can show afterwards (شهادة مزايدة).
+///
+/// The receipt handed over at the gavel is not checkable by the person holding it:
+/// the signature covers the frame, the frame is not in the receipt, and the key
+/// that would verify it is secret by design. So the certificate is read back out of
+/// the append-only log rather than recomputed from what the caller presents — which
+/// also makes it a stronger claim, because it says the bid is in the record at that
+/// position and not merely that someone could compute an HMAC.
+/// </summary>
+public class BidCertificateTests
+{
+    private const string ReceiptKeyHex =
+        "a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf00";
+
+    private static AuthenticatedFactory<Program> Catcher() => new()
+    {
+        Settings = new Dictionary<string, string?>
+        {
+            ["Catcher:ReceiptKeyHex"] = ReceiptKeyHex,
+        },
+    };
+
+    private static HttpContent Body(byte[] frame)
+    {
+        var content = new ByteArrayContent(frame);
+        content.Headers.ContentType = new("application/octet-stream");
+        return content;
+    }
+
+    /// <summary>Places one bid and returns what the bidder was handed for it.</summary>
+    private static async Task<(BidReceipt Receipt, Guid Auction, Guid Bidder, long Amount)>
+        PlaceBidAsync(AuthenticatedFactory<Program> factory, long amount = 1_200_000_00)
+    {
+        var bidder = Guid.NewGuid();
+        var client = factory.CreateClient().As(bidder, Roles.Bidder);
+        var state = factory.Services.GetRequiredService<CatcherState>();
+
+        var now = DateTimeOffset.UtcNow;
+        var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
+        state.UpsertAuction(auction);
+        state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
+
+        var response = await client.PostAsync(
+            "/bids", Body(TestAuction.Frame(auction.AuctionId, bidder, amount, now)));
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        var receipt = await response.Content.ReadFromJsonAsync<BidReceipt>();
+        return (receipt, auction.AuctionId, bidder, amount);
+    }
+
+    private static string Path(Guid auction, long offset, string? signature = null) =>
+        $"/auctions/{auction}/bids/{offset}/certificate"
+        + (signature is null ? "" : $"?signature={signature}");
+
+    [Fact]
+    public async Task A_bidder_can_get_a_certificate_for_their_own_bid()
+    {
+        using var factory = Catcher();
+        var (receipt, auction, bidder, amount) = await PlaceBidAsync(factory);
+
+        var certificate = await factory.CreateClient().As(bidder, Roles.Bidder)
+            .GetFromJsonAsync<BidCertificate>(Path(auction, receipt.Offset));
+
+        Assert.NotNull(certificate);
+        Assert.Equal(auction, certificate.AuctionId);
+        Assert.Equal(bidder, certificate.BidderId);
+        Assert.Equal(amount, certificate.AmountMinorUnits);
+        Assert.Equal(receipt.ClientBidId, certificate.ClientBidId);
+        Assert.Equal(receipt.Offset, certificate.Offset);
+        Assert.Equal("Online", certificate.Channel);
+        Assert.Null(certificate.EnteredByUserId);
+
+        // The whole point: the certificate and the receipt agree, which is what
+        // makes a receipt saved at the time worth anything later.
+        Assert.Equal(receipt.Signature, certificate.Signature);
+    }
+
+    [Fact]
+    public async Task The_certificate_quotes_a_reference_a_person_can_read_out()
+    {
+        using var factory = Catcher();
+        var (receipt, auction, bidder, _) = await PlaceBidAsync(factory);
+
+        var certificate = await factory.CreateClient().As(bidder, Roles.Bidder)
+            .GetFromJsonAsync<BidCertificate>(Path(auction, receipt.Offset));
+
+        Assert.StartsWith("EA-", certificate!.Reference);
+        Assert.EndsWith($"-{receipt.Offset}", certificate.Reference);
+    }
+
+    [Fact]
+    public async Task Another_bidder_cannot_read_it()
+    {
+        // It carries an amount and a bidder id. A rival reading it would learn both.
+        using var factory = Catcher();
+        var (receipt, auction, _, _) = await PlaceBidAsync(factory);
+
+        var response = await factory.CreateClient().As(Guid.NewGuid(), Roles.Bidder)
+            .GetAsync(Path(auction, receipt.Offset));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Staff_cannot_browse_certificates_without_a_receipt()
+    {
+        // The committee has a legitimate reason to check a receipt someone hands
+        // them. That is not the same as reading the ladder off the log one offset at
+        // a time, which is what an unconditional staff permission would allow.
+        using var factory = Catcher();
+        var (receipt, auction, _, _) = await PlaceBidAsync(factory);
+
+        var response = await factory.CreateClient()
+            .As(Guid.NewGuid(), Roles.AwardCommittee, Roles.AuctionAdmin)
+            .GetAsync(Path(auction, receipt.Offset));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Staff_can_check_a_receipt_that_was_handed_to_them()
+    {
+        using var factory = Catcher();
+        var (receipt, auction, bidder, _) = await PlaceBidAsync(factory);
+
+        var certificate = await factory.CreateClient().As(Guid.NewGuid(), Roles.AwardCommittee)
+            .GetFromJsonAsync<BidCertificate>(Path(auction, receipt.Offset, receipt.Signature));
+
+        Assert.NotNull(certificate);
+        Assert.True(certificate.PresentedSignatureMatched);
+        Assert.Equal(bidder, certificate.BidderId);
+    }
+
+    [Fact]
+    public async Task A_forged_receipt_does_not_open_the_door()
+    {
+        using var factory = Catcher();
+        var (receipt, auction, _, _) = await PlaceBidAsync(factory);
+
+        foreach (var forged in new[]
+                 {
+                     new string('A', 64),
+                     receipt.Signature[..62] + "FF",
+                     "not-hex-at-all",
+                     "",
+                 })
+        {
+            var response = await factory.CreateClient().As(Guid.NewGuid(), Roles.AwardCommittee)
+                .GetAsync(Path(auction, receipt.Offset, forged));
+
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task A_bidder_reading_their_own_is_told_nothing_was_presented()
+    {
+        // Null, not false. "You did not show me a receipt" and "the receipt you
+        // showed me is wrong" are different answers, and a certificate that said
+        // false to the first would look like a failed verification.
+        using var factory = Catcher();
+        var (receipt, auction, bidder, _) = await PlaceBidAsync(factory);
+
+        var certificate = await factory.CreateClient().As(bidder, Roles.Bidder)
+            .GetFromJsonAsync<BidCertificate>(Path(auction, receipt.Offset));
+
+        Assert.Null(certificate!.PresentedSignatureMatched);
+    }
+
+    [Fact]
+    public async Task An_offset_with_no_bid_is_not_found()
+    {
+        using var factory = Catcher();
+        var (receipt, auction, bidder, _) = await PlaceBidAsync(factory);
+
+        foreach (var offset in new[] { receipt.Offset + 50, -1L })
+        {
+            var response = await factory.CreateClient().As(bidder, Roles.Bidder)
+                .GetAsync(Path(auction, offset));
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task An_anonymous_caller_gets_nothing()
+    {
+        using var factory = Catcher();
+        var (receipt, auction, _, _) = await PlaceBidAsync(factory);
+
+        var response = await factory.CreateClient().Anonymous()
+            .GetAsync(Path(auction, receipt.Offset));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+}

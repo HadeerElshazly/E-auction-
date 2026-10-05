@@ -149,6 +149,13 @@ public sealed class Caller(HttpClient http, string baseUrl, string token, string
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 
+    /// <summary>A GET whose status is the assertion — a refusal, usually.</summary>
+    public async Task<(HttpStatusCode Status, string Body)> TryGetAsync(string path)
+    {
+        using var response = await http.SendAsync(Request(HttpMethod.Get, path));
+        return (response.StatusCode, await response.Content.ReadAsStringAsync());
+    }
+
     public async Task<(HttpStatusCode Status, string Body)> TryPostBytesAsync(
         string path, byte[] payload)
     {

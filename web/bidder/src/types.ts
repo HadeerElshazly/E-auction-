@@ -116,3 +116,24 @@ export interface BidReceipt {
   serverTimestampMs: number
   signature: string
 }
+
+/**
+ * شهادة مزايدة. Read back out of the append-only log by the service, so every
+ * field here is what is in the record rather than what this browser submitted.
+ */
+export interface BidCertificate {
+  reference: string
+  auctionId: string
+  bidderId: string
+  clientBidId: string
+  offset: number
+  amountMinorUnits: number
+  clientTimestampMs: number
+  serverTimestampMs: number
+  channel: string
+  enteredByUserId: string | null
+  signature: string
+  /** Null when no receipt was presented — only staff checking one get true/false. */
+  presentedSignatureMatched: boolean | null
+  issuedAt: string
+}

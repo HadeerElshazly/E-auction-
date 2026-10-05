@@ -120,3 +120,73 @@ tbody tr:hover { background: var(--bg); }
   }
   header.bar { background: var(--surface); }
 }
+
+/* --- the bid certificate -------------------------------------------------- */
+
+/*
+ * A printable overlay. It sits over the page rather than on a route of its own
+ * because the portal has no router — and because a certificate is something a
+ * bidder opens, prints and dismisses, not a place they navigate to.
+ */
+.certificate-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 20, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+  padding: 24px 16px;
+  z-index: 50;
+}
+
+.certificate {
+  max-width: 680px;
+  width: 100%;
+  margin: 0;
+}
+
+.certificate h2 {
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 8px;
+}
+
+/*
+ * Printing drops everything but the certificate. Without this the print carries
+ * the catalogue, the bid box and a modal backdrop rendered as a grey slab.
+ *
+ * Hidden by visibility rather than display, and that is not a style preference.
+ * The certificate is rendered inside the app's own tree, so `display: none` on
+ * anything above it takes the certificate out of the layout too and prints a blank
+ * page. `visibility: hidden` does not inherit past a descendant that sets
+ * `visible`, which is the one way to keep a deep node and drop its ancestors.
+ */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .certificate-backdrop,
+  .certificate-backdrop * {
+    visibility: visible;
+  }
+
+  .certificate-backdrop {
+    position: absolute;
+    inset: 0;
+    background: none;
+    padding: 0;
+    overflow: visible;
+  }
+
+  .certificate {
+    box-shadow: none;
+    border: none;
+    max-width: none;
+  }
+
+  /* Buttons print as empty boxes and are useless on paper. */
+  .no-print {
+    display: none !important;
+  }
+}

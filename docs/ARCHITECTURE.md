@@ -2336,3 +2336,84 @@ it is good for: proving something is absent.
 - **No audit record of who chose `Named`.** The auction records its creator, not
   the administrator who set this particular field, and publishing a citizen's name
   is the kind of decision that should name its author.
+
+## 28. شهادة مزايدة — a certificate the bidder can actually use
+
+D-21 promised a signed receipt, and §26 made its key a real secret. What neither
+did was make the receipt *checkable* by the person holding it.
+
+The signature is an HMAC over the recorded frame and the offset it landed at. The
+frame is not in the receipt, and the key that would verify it is secret by
+design — it has to be, or anybody could forge one. So a bidder holding a receipt
+has a string they cannot check, nobody they can take it to, and no way to show
+it means anything. That is a screenshot, not evidence.
+
+### Read from the log, not from the request
+
+The certificate is issued by reading the bid back out of the append-only log at
+the offset the receipt names. Every field on it — amount, timestamps, channel,
+the clerk who entered it — comes from that record and not from the request.
+
+That is a stronger claim than verifying what the caller presents. "This MAC
+checks out" says somebody could compute an HMAC. "The bid is in the record at
+position N, for this amount, accepted at this time" is what a bidder in a dispute
+actually needs, and it is what the ledger is for. `IBidLog.ReadAsync` already
+seeks to an exact offset, so this costs one assign-and-read rather than a replay.
+
+The receipt and the certificate then confirm each other: the signature on the
+certificate is recomputed from the logged frame and equals the one handed over at
+the gavel. One function defines what is signed, used at both ends, because two
+copies that drifted would make every certificate disagree with the receipt it
+exists to confirm.
+
+### Who may read one
+
+The bidder, for their own bids. And staff — the committee or an auction admin —
+but **only by presenting the signature from the receipt**, which is what a
+dispute looks like: somebody has handed them a piece of paper and asked whether
+it is real.
+
+An unconditional staff permission would have been simpler and wrong. The
+certificate carries a bidder id and an amount, so a staff member who could ask
+for any offset could read the ladder out of the log one position at a time —
+D-22's masking undone by the endpoint next to it. Requiring the signature makes
+it a checking tool rather than a browsing one.
+
+Three further details, each of which is a way this could have gone wrong:
+
+- **`PresentedSignatureMatched` is null, not false, when nothing was presented.**
+  "You did not show me a receipt" and "the receipt you showed me is wrong" are
+  different answers, and a bidder reading their own certificate should not see
+  what looks like a failed verification.
+- **A malformed signature is a mismatch, not a 500.** `Convert.FromHexString`
+  throws on anything that is not hex, and the caller controls that string.
+- **It is rate-limited per caller.** Each call opens a consumer, seeks and reads.
+  That is cheap but not free, and it sits in the service with a 50ms budget on
+  its other endpoint. If this ever carries real traffic it belongs somewhere else.
+
+### Printing, because there is no document service
+
+MinIO is still unused (§2), so the certificate is data and the portal renders it.
+The browser prints it to PDF, and a print stylesheet drops the rest of the app.
+
+That stylesheet hides everything by `visibility` rather than `display`, and that
+is not a style preference. The certificate is rendered inside the application's
+own tree, so `display: none` on any ancestor removes the certificate from the
+layout along with everything else and prints a blank page — a mistake that is
+completely invisible on screen. `visibility: hidden` is the one form that a
+descendant can override. The browser walk-through switches the page to print
+media and asserts that the certificate is still visible while the bid button is
+not, because nothing else in the suite would have noticed either failure.
+
+### Still not verified
+
+- **A certificate needs an offset, and the portal only has this session's.** A
+  bidder who reloads cannot reach yesterday's bids: nothing stores their receipts
+  for them. Saving the certificate at the time works, and a "my bids" page backed
+  by a reporting read model is the real answer.
+- **It is not a sealed document.** No municipal letterhead, no QR code, no
+  document id in a store — a printed page with a reference and a verification
+  fingerprint. The content is what a sealed PDF would carry.
+- **Nothing verifies a certificate from the printed paper alone.** The reference
+  is quotable and staff can check the signature, but there is no endpoint that
+  takes a reference string; it is auction id plus offset.

@@ -14,6 +14,7 @@ import {
 } from '@eauction/shared'
 import type { AuctionDetail, BidReceipt, BidVerdict, LivePrice } from './types'
 import { useSigningKey } from './useSigningKey'
+import { Certificate } from './Certificate'
 
 interface Props {
   auction: AuctionDetail
@@ -91,6 +92,11 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState<Submitted[]>([])
+
+  /// The log offset whose certificate is open, or null. An offset rather than the
+  /// submitted row: the certificate is issued from the record, and the offset is
+  /// the only thing this page holds that points at one.
+  const [certificateFor, setCertificateFor] = useState<number | null>(null)
 
   // Keep the box prefilled with the cheapest winning bid, but never overwrite what
   // the bidder is typing — the price moves during a war and a box that resets
@@ -226,6 +232,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
                 <th>الوقت</th>
                 <th>الترتيب في السجل</th>
                 <th>الحالة</th>
+                <th>الشهادة</th>
               </tr>
             </thead>
             <tbody>
@@ -235,6 +242,11 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
                   <td className="num small">{b.at.toLocaleTimeString('ar-SA')}</td>
                   <td className="num small">{b.offset}</td>
                   <td className="small">{outcome(b, price, verdicts)}</td>
+                  <td>
+                    <button className="small" onClick={() => setCertificateFor(b.offset)}>
+                      شهادة
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -244,6 +256,16 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
             من خدمة المعالجة بترتيب السجل، لا بوقت جهازك.
           </p>
         </>
+      )}
+
+      {certificateFor !== null && (
+        <Certificate
+          client={catcher}
+          auctionId={auction.id}
+          auctionNameAr={auction.nameAr}
+          offset={certificateFor}
+          onClose={() => setCertificateFor(null)}
+        />
       )}
     </div>
   )

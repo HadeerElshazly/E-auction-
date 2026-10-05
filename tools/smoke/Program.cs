@@ -379,6 +379,8 @@ try
     // assertions can check that sara is told WHICH of her bids won rather than
     // inferring it from an amount.
     var saraLastBidId = Guid.Empty;
+    var saraLastOffset = -1L;
+    var saraLastReceiptSignature = "";
     var accepted = 0;
 
     foreach (var (who, secret, bidder, amount) in ladder)
@@ -396,7 +398,17 @@ try
         }
 
         accepted++;
-        if (bidder == sara) saraLastBidId = clientBidId;
+        if (bidder == sara)
+        {
+            saraLastBidId = clientBidId;
+
+            // Kept so the certificate can be checked against the receipt handed
+            // over at the time, which is the only thing that makes a receipt saved
+            // on the day worth anything later.
+            var receipt = JsonDocument.Parse(bidBody).RootElement;
+            saraLastOffset = receipt.GetProperty("offset").GetInt64();
+            saraLastReceiptSignature = receipt.GetProperty("signature").GetString() ?? "";
+        }
     }
 
     // Reported on what happened, not unconditionally: this step used to claim five
@@ -406,6 +418,31 @@ try
             $"202 each — recorded, not yet judged; last {(opening + 4 * increment) / 100:N0} SAR");
     else
         n.Fail("five accepted bids", $"only {accepted} of {ladder.Length} were accepted");
+
+    // --- the certificate (شهادة مزايدة) ------------------------------------
+    //
+    // Issued from the append-only log, not from what the caller presents: the
+    // service seeks to the offset, reads the frame back and reports what is in the
+    // record. That is why it can be asked for months later from a saved receipt.
+    var certificate = await saraCatcher.GetAsync(
+        $"/auctions/{auctionId}/bids/{saraLastOffset}/certificate");
+
+    if (certificate.GetProperty("signature").GetString() == saraLastReceiptSignature
+        && certificate.GetProperty("amountMinorUnits").GetInt64() == opening + 4 * increment
+        && certificate.GetProperty("bidderId").GetGuid() == sara
+        && certificate.GetProperty("channel").GetString() == "Online")
+        n.Step("sara's bid has a certificate that matches her receipt",
+            certificate.GetProperty("reference").GetString() ?? "");
+    else
+        n.Fail("sara's bid has a certificate that matches her receipt", certificate.ToString());
+
+    // Another bidder's certificate carries their amount and their identity.
+    var (othersStatus, _) = await khalidCatcher.TryGetAsync(
+        $"/auctions/{auctionId}/bids/{saraLastOffset}/certificate");
+    if (othersStatus == System.Net.HttpStatusCode.Forbidden)
+        n.Step("khalid cannot fetch sara's certificate", "403");
+    else
+        n.Fail("khalid cannot fetch sara's certificate", $"got {(int)othersStatus}");
 
     // Below the OPENING price. The catcher knows the opening price from
     // auctions.upcoming the moment it is warm, so this is a local decision with no

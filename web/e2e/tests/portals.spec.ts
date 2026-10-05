@@ -218,6 +218,36 @@ test('an auction runs from draft to award through the portals', async ({ browser
       await expect(page.getByText('أنت الأعلى حالياً')).toBeVisible({ timeout: 60_000 })
     })
 
+    await test.step('the bidder can take a certificate for the bid', async () => {
+      const page = sara.page
+
+      await page.getByRole('button', { name: 'شهادة' }).first().click()
+
+      const certificate = page.locator('.certificate')
+      await expect(certificate.getByRole('heading', { name: 'شهادة مزايدة' })).toBeVisible({
+        timeout: 30_000,
+      })
+
+      // Every figure on it is read back out of the log by the service, so this is
+      // also the assertion that the read-by-offset path works against a real broker.
+      await expect(certificate.getByText(/EA-[0-9A-F]{8}-\d+/)).toBeVisible()
+      // Sara's own bid was the opening price; khalid's 1,200,000 is not hers.
+      await expect(certificate.getByText(arabicRiyals(100_000_000))).toBeVisible()
+      await expect(certificate.getByText('إلكتروني')).toBeVisible()
+
+      // The print stylesheet, which nothing else would catch. It hides the rest of
+      // the app by visibility rather than display — `display: none` on an ancestor
+      // would take the certificate out of the layout with it and print a blank
+      // page, and that mistake is invisible on screen.
+      await page.emulateMedia({ media: 'print' })
+      await expect(certificate.getByRole('heading', { name: 'شهادة مزايدة' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'إرسال المزايدة' })).toBeHidden()
+      await page.emulateMedia({ media: 'screen' })
+
+      await page.getByRole('button', { name: 'إغلاق' }).click()
+      await expect(certificate).toHaveCount(0)
+    })
+
     await test.step('the first bidder is told she has been outbid', async () => {
       const page = sara.page
 

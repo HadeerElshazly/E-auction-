@@ -195,7 +195,84 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
     }
 }).RequireAuthorization(Policies.Bidder);
 
+// ---------------------------------------------------------------------------
+// The certificate (شهادة مزايدة). Not the hot path.
+//
+// Deliberately not issued from what the caller presents. The frame is read back
+// out of the append-only log at the offset given, and every field on the
+// certificate comes from that record — so the certificate says "this bid is in
+// the legal record at this position, for this amount", which is the claim a
+// bidder actually needs. Recomputing an HMAC over a payload the caller supplied
+// would prove only that the caller could supply a payload.
+//
+// Each call opens a consumer, seeks and reads one record. That is cheap but it is
+// not free, and this service is the one with a 50ms budget on its other endpoint,
+// so it is rate-limited per caller. If this ever carries real traffic it belongs
+// in its own service rather than beside the bid path.
+// ---------------------------------------------------------------------------
+var certificateLimits = new System.Collections.Concurrent.ConcurrentDictionary<Guid, TokenBucket>();
+
+app.MapGet("/auctions/{auctionId:guid}/bids/{offset:long}/certificate", async (
+    Guid auctionId, long offset, string? signature,
+    HttpContext http, IBidLog log, CancellationToken ct) =>
+{
+    var caller = http.User.SubjectId();
+    if (caller is null) return Results.Forbid();
+
+    var bucket = certificateLimits.GetOrAdd(caller.Value, _ => new TokenBucket(2));
+    if (!bucket.TryTake(DateTimeOffset.UtcNow))
+        return Results.Json(
+            new { reason = nameof(RejectionReason.RateLimited) }, statusCode: 429);
+
+    if (offset < 0) return Results.NotFound();
+
+    var frame = await ReadFrameAsync(log, auctionId, offset, ct);
+    if (frame is null) return Results.NotFound();
+
+    // Built before the access check, because the check needs the recorded bidder
+    // and the recomputed signature — both of which come out of the frame.
+    var certificate = BuildCertificate(frame.Value, offset, signature, receiptKey);
+
+    // A bidder may read their own. Staff may check one that has been handed to
+    // them, which is what a dispute looks like — but only by presenting the
+    // signature from the receipt, so this is not a tool for browsing who bid what.
+    var isOwner = caller == certificate.BidderId;
+    var isStaffWithReceipt =
+        http.User.IsInAnyRole(Roles.AwardCommittee, Roles.AuctionAdmin)
+        && certificate.PresentedSignatureMatched == true;
+
+    return isOwner || isStaffWithReceipt
+        ? Results.Ok(certificate)
+        : Results.Forbid();
+}).RequireAuthorization();
+
 app.Run();
+
+/// <summary>
+/// The one record at <paramref name="offset"/>, or null if the log does not have
+/// one there. Bounded by a short timeout: ReadAsync follows the tail once it has
+/// caught up, so a request for an offset that does not exist yet would otherwise
+/// wait for a bid that may never come.
+/// </summary>
+static async Task<ReadOnlyMemory<byte>?> ReadFrameAsync(
+    IBidLog log, Guid auctionId, long offset, CancellationToken ct)
+{
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    timeout.CancelAfter(TimeSpan.FromSeconds(5));
+
+    try
+    {
+        await foreach (var record in log.ReadAsync(auctionId, offset, timeout.Token))
+            if (record.Offset == offset)
+                return record.Frame;
+    }
+    catch (OperationCanceledException)
+    {
+        // No record at that offset within the window.
+    }
+
+    return null;
+}
 
 static async ValueTask<int> ReadExactAsync(
     Stream body, byte[] buffer, int count, CancellationToken ct)
@@ -210,7 +287,53 @@ static async ValueTask<int> ReadExactAsync(
     return total;
 }
 
-static BidReceipt BuildReceipt(ReadOnlySpan<byte> frame, long offset, byte[] receiptKey)
+static BidReceipt BuildReceipt(ReadOnlySpan<byte> frame, long offset, byte[] receiptKey) =>
+    new(BidFrame.AuctionId(frame),
+        BidFrame.BidderId(frame),
+        BidFrame.ClientBidId(frame),
+        offset,
+        BidFrame.ServerTimestamp(frame),
+        SignatureFor(frame, offset, receiptKey));
+
+/// <summary>
+/// What a receipt signs: the recorded frame and where it landed.
+///
+/// One definition, used both when the receipt is handed over and when a
+/// certificate is issued months later. Two copies that drifted would make every
+/// certificate disagree with the receipt it is supposed to confirm.
+/// </summary>
+static BidCertificate BuildCertificate(
+    ReadOnlyMemory<byte> frame, long offset, string? presented, byte[] receiptKey)
+{
+    // Takes Memory rather than Span: the caller is an async handler, and a ref
+    // struct cannot be a local there.
+    var span = frame.Span;
+    var expected = SignatureFor(span, offset, receiptKey);
+    var enteredBy = BidFrame.EnteredBy(span);
+    var auctionId = BidFrame.AuctionId(span);
+
+    return new BidCertificate
+    {
+        Reference = $"EA-{auctionId.ToString()[..8].ToUpperInvariant()}-{offset}",
+        AuctionId = auctionId,
+        BidderId = BidFrame.BidderId(span),
+        ClientBidId = BidFrame.ClientBidId(span),
+        Offset = offset,
+        AmountMinorUnits = BidFrame.Amount(span),
+        ClientTimestampMs = BidFrame.ClientTimestamp(span),
+        ServerTimestampMs = BidFrame.ServerTimestamp(span),
+        Channel = BidFrame.Channel(span).ToString(),
+        EnteredByUserId = enteredBy == Guid.Empty ? null : enteredBy,
+        Signature = expected,
+        PresentedSignatureMatched = presented is null
+            ? null
+            : CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(expected), SafeHex(presented)),
+        IssuedAt = DateTimeOffset.UtcNow,
+    };
+}
+
+static string SignatureFor(ReadOnlySpan<byte> frame, long offset, byte[] receiptKey)
 {
     Span<byte> payload = stackalloc byte[BidFrame.ServerLength + 8];
     frame[..BidFrame.ServerLength].CopyTo(payload);
@@ -219,14 +342,22 @@ static BidReceipt BuildReceipt(ReadOnlySpan<byte> frame, long offset, byte[] rec
 
     Span<byte> signature = stackalloc byte[32];
     HMACSHA256.HashData(receiptKey, payload, signature);
+    return Convert.ToHexString(signature);
+}
 
-    return new BidReceipt(
-        BidFrame.AuctionId(frame),
-        BidFrame.BidderId(frame),
-        BidFrame.ClientBidId(frame),
-        offset,
-        BidFrame.ServerTimestamp(frame),
-        Convert.ToHexString(signature));
+/// <summary>
+/// Hex that may not be hex. A malformed signature is a mismatch, not a 500.
+/// </summary>
+static byte[] SafeHex(string value)
+{
+    try
+    {
+        return Convert.FromHexString(value);
+    }
+    catch (FormatException)
+    {
+        return [];
+    }
 }
 
 public partial class Program;
