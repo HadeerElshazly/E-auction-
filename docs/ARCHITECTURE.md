@@ -1576,3 +1576,62 @@ the judge — and asserting otherwise would have encoded a race as a requirement
 - Anything in the chart. The smoke test runs the services directly, so the Helm
   templates, the migration hook that should run `tools/migrate`, and the topic
   provisioning Job are all still unexercised.
+
+## 22. Provisioning in the chart and in Compose
+
+§21 found that nothing created the topics and nothing applied the migrations. The
+smoke runner did both as script steps, which proved the sequence but left the
+deployment artefacts still broken: `helm upgrade --install` or
+`docker compose up` would have failed the same way, with services reporting
+healthy while every write failed.
+
+Both now carry the same two steps, in the same order.
+
+| | Helm | Compose |
+|---|---|---|
+| topics | `pre-install,pre-upgrade` hook, weight `-10` | `provision-topics`, depends on `kafka` healthy |
+| migrations | `pre-install,pre-upgrade` hook, weight `-5` | `provision-migrate`, depends on topics completed |
+| services | Deployments, after both hooks | `service_completed_successfully` on `provision-migrate` |
+
+One image for both, `e-auction/provision`, with the command selecting the tool —
+they are one deployment step, not two concerns.
+
+### Why topics come first
+
+The outbox relay is ordered and cannot skip a message to an unknown topic without
+losing ordering. So a single missing topic stalls a service's entire relay, and
+the service keeps reporting healthy: §21's `participants.payments` left both
+bidders reading `Eligible` through the participant API while the catcher never
+learned they existed. "Everything is green and nothing arrives" is an expensive
+symptom to debug, and the ordering that prevents it is one line of hook weight.
+`deploy/helm/test-chart.sh` asserts the weights stay in that order, and that
+assertion was verified to fail when they are swapped.
+
+### Why migrations are a hook and not a startup step
+
+Several replicas starting together would race on the same schema, and a schema
+change would run while the previous version is still serving. The job also reads
+the same Secrets the services read, so no connection string reaches a values file
+— the existing `test-chart.sh` check for that still passes.
+
+A failed hook blocks the release. A release that proceeds past a failed migration
+is worse than one that stops.
+
+### A third gap, in Compose only
+
+`POSTGRES_DB` creates one database. The participant service uses its own —
+a national ID is personal data under PDPL and must not share a schema with the
+auction catalogue that feeds public read paths — and nothing created it, so the
+migration step would have failed on a fresh volume.
+`deploy/compose/postgres-init/01-databases.sql` creates it during Postgres's
+initial initialisation, which is the right moment: it must not re-run over a
+database that already holds data. The health check now names that database rather
+than the default, because `pg_isready` answers before the init scripts have run.
+
+### Still not verified
+
+- No Kubernetes cluster was available, so the hooks are rendered, ordered,
+  asserted and packaged but never executed by Helm. What has been run is the same
+  sequence they encode, by `tools/smoke/run-smoke.sh`.
+- No Docker daemon was available either. `docker compose config` validates, and
+  the Dockerfile follows the four that exist, but no image here was built.

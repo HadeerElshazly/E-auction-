@@ -1,0 +1,150 @@
+{{/*
+The two steps that must happen once before any pod rolls.
+
+Both run as Helm pre-install/pre-upgrade hooks, so `helm upgrade` cannot bring up
+a new version against a cluster that is not ready for it. Neither can be done by
+the services themselves: several replicas would race, and a schema change would
+run while the previous version is still serving.
+
+Hook weights order them -- topics (-10) before migrations (-5) before the
+Deployments. Topics first because the services' outbox relays are ordered and
+cannot skip a message to an unknown topic: one missing topic stalls a relay
+completely, and the failure looks like "a service is healthy but nothing arrives".
+
+Both are idempotent, so a re-run or a retried hook is safe. Neither is deleted on
+failure, so `kubectl logs` still has the reason.
+*/}}
+{{- if .Values.provision.topics.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "e-auction.fullname" (dict "root" $ "name" "topics") }}
+  labels:
+    {{- include "e-auction.labels" (dict "root" $ "name" "topics") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.provision.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "e-auction.labels" (dict "root" $ "name" "topics") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "e-auction.fullname" (dict "root" $ "name" "provision") }}
+      securityContext:
+        {{- include "e-auction.podSecurityContext" (dict "root" $) | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: topics
+          image: {{ include "e-auction.image" (dict "root" $ "svc" .Values.provision) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "e-auction.containerSecurityContext" (dict "root" $) | nindent 12 }}
+          command:
+            - dotnet
+            - EAuction.Topics.dll
+            - --bootstrap
+            - {{ .Values.config.kafka.bootstrapServers | quote }}
+            - --replication
+            - {{ .Values.provision.topics.replicationFactor | quote }}
+            - --partitions
+            - {{ .Values.provision.topics.partitions | quote }}
+          resources:
+            {{- toYaml .Values.provision.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- if and .Values.provision.migrations.enabled (or .Values.auctionAdmin.enabled .Values.participant.enabled) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "e-auction.fullname" (dict "root" $ "name" "migrate") }}
+  labels:
+    {{- include "e-auction.labels" (dict "root" $ "name" "migrate") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.provision.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "e-auction.labels" (dict "root" $ "name" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "e-auction.fullname" (dict "root" $ "name" "provision") }}
+      securityContext:
+        {{- include "e-auction.podSecurityContext" (dict "root" $) | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "e-auction.image" (dict "root" $ "svc" .Values.provision) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "e-auction.containerSecurityContext" (dict "root" $) | nindent 12 }}
+          command: ["dotnet", "EAuction.Migrate.dll"]
+          env:
+            {{/*
+            The same Secrets the services read. Passing the connection strings any
+            other way would put a database password in values.yaml.
+            */}}
+            {{- if .Values.auctionAdmin.enabled }}
+            {{- range .Values.auctionAdmin.secretEnv }}
+            {{- if eq .name "ConnectionStrings__Admin" }}
+            - name: ConnectionStrings__Admin
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.participant.enabled }}
+            {{- range .Values.participant.secretEnv }}
+            {{- if eq .name "ConnectionStrings__Participant" }}
+            - name: ConnectionStrings__Participant
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.provision.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- if or .Values.provision.topics.enabled .Values.provision.migrations.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "e-auction.fullname" (dict "root" $ "name" "provision") }}
+  labels:
+    {{- include "e-auction.labels" (dict "root" $ "name" "provision") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
+automountServiceAccountToken: false
+{{- end }}

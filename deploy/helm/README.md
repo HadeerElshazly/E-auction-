@@ -75,9 +75,11 @@ e-auction/
 ├── charts/
 │   └── e-auction-common/   library chart: shared templates
 └── templates/
+    ├── provision.yaml      pre-install/pre-upgrade hooks: topics, then migrations
     ├── bid-catcher.yaml
     ├── bid-processor.yaml
     ├── auction-admin.yaml
+    ├── participant.yaml
     └── NOTES.txt
 ```
 
@@ -96,6 +98,38 @@ property we deliberately do not want.
 
 A library chart plus one application chart gives the same deduplication with
 one version and one `helm package`. `enabled: false` per service still works.
+
+## Provisioning hooks
+
+Two things must happen once before any pod rolls, and neither can be done by a
+service at startup:
+
+| Hook | Weight | What it does |
+|---|---|---|
+| `-topics` | `-10` | creates the control-plane topics with the cleanup policy each one needs |
+| `-migrate` | `-5` | applies the EF Core migrations for auction-admin and participant |
+
+Both are `pre-install,pre-upgrade` hooks, both are idempotent, and both are
+`before-hook-creation` rather than `hook-succeeded`, so a failed run's logs
+survive for `kubectl logs`.
+
+**Topics run first** because the outbox relays are ordered and cannot skip a
+message to an unknown topic without losing ordering. One missing topic stalls a
+service's entire relay — and the service still reports healthy, so the symptom is
+"everything is green and nothing arrives". `test-chart.sh` asserts the weights
+stay in that order.
+
+**Migrations are a hook, not a startup step.** Several replicas starting together
+would race, and a schema change would run while the previous version is still
+serving. The job reads the same Secrets the services do, so no connection string
+appears in a values file.
+
+A failed hook blocks the release. That is deliberate: a release that proceeds past
+a failed migration is worse than one that stops.
+
+Both images are the same one — `e-auction/provision`, from
+`deploy/compose/Dockerfile.provision` — because they are one deployment step with
+two commands.
 
 ## Versioning
 
@@ -124,4 +158,12 @@ created out of band. The test script asserts nothing was templated in.
   answer (architecture §7.4).
 - **Never deployed to a real cluster.** The charts are linted, rendered,
   structurally validated and packaged, but no cluster was available here. The
-  first `helm upgrade --install` is part of the work.
+  first `helm upgrade --install` is part of the work. What *has* been run is the
+  same sequence the hooks encode — topics, then migrations, then the four
+  services — by `tools/smoke/run-smoke.sh` against real Kafka, Postgres and
+  Keycloak. That is where the need for these hooks was found: without them the
+  services come up and fail every write.
+- **`provision.topics.replicationFactor` must not exceed the broker count.** The
+  tool checks and refuses rather than leaving half the topics created, which
+  fails the hook and blocks the release — the right outcome, but set it correctly
+  and the question does not arise.

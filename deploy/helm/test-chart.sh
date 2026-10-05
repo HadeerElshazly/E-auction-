@@ -59,6 +59,31 @@ for f in "$OUT/k8s.yaml" "$OUT/ocp.yaml"; do
 done
 pass "credentials referenced, never rendered"
 
+echo "==> provisioning hooks"
+for f in "$OUT/k8s.yaml" "$OUT/ocp.yaml"; do
+  grep -q "EAuction.Topics.dll"  "$f" || fail "$f: no topic provisioning job"
+  grep -q "EAuction.Migrate.dll" "$f" || fail "$f: no migration job"
+
+  # Ordering is the whole point. Topics must run before migrations, and both
+  # before the Deployments: the services' outbox relays are ordered and cannot
+  # skip a message to an unknown topic, so one missing topic stalls a relay while
+  # the service still reports healthy.
+  topics_weight=$(awk '/name: eauction-topics$/,/hook-weight/' "$f" \
+    | grep -o '"-[0-9]*"' | tr -d '"' | head -1)
+  migrate_weight=$(awk '/name: eauction-migrate$/,/hook-weight/' "$f" \
+    | grep -o '"-[0-9]*"' | tr -d '"' | head -1)
+  [ -n "$topics_weight" ] || fail "$f: topics job has no hook weight"
+  [ -n "$migrate_weight" ] || fail "$f: migrate job has no hook weight"
+  [ "$topics_weight" -lt "$migrate_weight" ] \
+    || fail "$f: topics ($topics_weight) must run before migrations ($migrate_weight)"
+
+  # A migration that runs as part of the normal rollout rather than as a hook
+  # would race across replicas and migrate under the running version.
+  awk '/name: eauction-migrate$/,/^---/' "$f" | grep -q "pre-install,pre-upgrade" \
+    || fail "$f: the migration job is not a pre-install/pre-upgrade hook"
+done
+pass "topics before migrations, both as pre-upgrade hooks"
+
 echo "==> package"
 helm package "$CHART" --destination "$OUT" >/dev/null || fail "packaging failed"
 pass "$(basename "$(ls "$OUT"/e-auction-*.tgz)")"

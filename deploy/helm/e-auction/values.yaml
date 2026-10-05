@@ -43,6 +43,46 @@ config:
     audience: eauction
 
 # ---------------------------------------------------------------------------
+# Provisioning: the steps that run once, before any pod rolls
+#
+# Neither can be done by the services at startup. Several replicas would race on
+# the migration, and a schema change would run while the previous version is
+# still serving. Topics must exist first: the outbox relays are ordered and
+# cannot skip a message to an unknown topic, so one missing topic stalls a
+# service's whole relay while the service itself still reports healthy.
+#
+# Both are Helm pre-install/pre-upgrade hooks and both are idempotent.
+# ---------------------------------------------------------------------------
+provision:
+  image: e-auction/provision
+
+  topics:
+    enabled: true
+
+    # Must not exceed the number of brokers, or topic creation fails. The tool
+    # checks and refuses rather than leaving half the topics created.
+    replicationFactor: 3
+
+    # Control-plane volume is small; this is about consumer parallelism, not
+    # throughput. Bid topics are always exactly one partition and are not
+    # configurable — see src/EAuction.Core/Topics.cs.
+    partitions: 3
+
+  migrations:
+    enabled: true
+
+  # A failed hook blocks the release, which is the point. Two attempts covers a
+  # broker or database that is still accepting connections but not yet ready.
+  backoffLimit: 2
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
 # Services
 # ---------------------------------------------------------------------------
 

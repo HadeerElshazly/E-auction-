@@ -53,8 +53,14 @@ services:
     command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=4"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # POSTGRES_DB creates eauction only; the participant service has its own
+      # database because a national ID must not share a schema with the auction
+      # catalogue that feeds public read paths.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U eauction"]
+      # pg_isready answers before the init scripts have run, so name the database
+      # the migration job needs rather than the default one.
+      test: ["CMD-SHELL", "pg_isready -U eauction -d eauction_participant"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -123,6 +129,42 @@ services:
       postgres:
         condition: service_healthy
 
+  # The two steps that must finish before any service starts. Compose mirrors the
+  # chart's pre-install hooks here (deploy/helm/e-auction/templates/provision.yaml):
+  # topics first, because the outbox relays are ordered and cannot skip a message to
+  # an unknown topic -- one missing topic stalls a relay while the service still
+  # reports healthy -- then the migrations, which no service applies itself.
+  #
+  # Both are idempotent, so `docker compose up` after the first time is a no-op.
+  provision-topics:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.provision
+    container_name: eauction-provision-topics
+    command:
+      ["dotnet", "EAuction.Topics.dll",
+       "--bootstrap", "kafka:9092", "--replication", "1", "--partitions", "1"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  provision-migrate:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.provision
+    container_name: eauction-provision-migrate
+    command: ["dotnet", "EAuction.Migrate.dll"]
+    environment:
+      ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=eauction"
+      ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      provision-topics:
+        condition: service_completed_successfully
+    restart: "no"
+
   auction-admin:
     build:
       context: ../..
@@ -140,6 +182,8 @@ services:
       Kafka__ReplicationFactor: "1"
       Award__ComplianceWindowDays: "5"
     depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       postgres:
@@ -164,6 +208,8 @@ services:
       # and neither ever sends a derived secret to the other.
       Participant__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
     depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       postgres:
@@ -187,6 +233,8 @@ services:
       Catcher__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
       DOTNET_gcServer: "1"
     depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
 
@@ -201,6 +249,8 @@ services:
       Processor__TickIntervalMs: "500"
       DOTNET_gcServer: "1"
     depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
 

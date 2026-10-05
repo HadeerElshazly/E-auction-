@@ -1,0 +1,37 @@
+# Provisioning image: migrations and topic creation.
+#
+# One image for both tools, because they are the same deployment step — the things
+# that must happen once before the new pods roll, not something a replica does at
+# startup. Several replicas migrating concurrently is a race, and a schema change
+# running while the previous version still serves is an outage.
+#
+# Runs as a non-root user with an explicit UID, like every other image here
+# (docs/ARCHITECTURE.md §10.1).
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY src/EAuction.Core/EAuction.Core.csproj src/EAuction.Core/
+COPY src/EAuction.Outbox/EAuction.Outbox.csproj src/EAuction.Outbox/
+COPY src/EAuction.Security/EAuction.Security.csproj src/EAuction.Security/
+COPY src/EAuction.AuctionAdmin/EAuction.AuctionAdmin.csproj src/EAuction.AuctionAdmin/
+COPY src/EAuction.Participant/EAuction.Participant.csproj src/EAuction.Participant/
+COPY tools/migrate/EAuction.Migrate.csproj tools/migrate/
+COPY tools/topics/EAuction.Topics.csproj tools/topics/
+RUN dotnet restore tools/migrate/EAuction.Migrate.csproj \
+ && dotnet restore tools/topics/EAuction.Topics.csproj
+COPY src/ src/
+COPY tools/migrate/ tools/migrate/
+COPY tools/topics/ tools/topics/
+RUN dotnet publish tools/migrate/EAuction.Migrate.csproj -c Release -o /app --no-restore \
+ && dotnet publish tools/topics/EAuction.Topics.csproj  -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:8.0
+WORKDIR /app
+COPY --from=build /app .
+
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eauction
+USER 10001
+
+# No ENTRYPOINT: the Job picks which tool to run.
+#   dotnet EAuction.Topics.dll  --bootstrap … --replication …
+#   dotnet EAuction.Migrate.dll --admin … --participant …
