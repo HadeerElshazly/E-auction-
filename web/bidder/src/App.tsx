@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, has, Roles, useSession } from '@eauction/shared'
+import {
+  ApiError,
+  api,
+  config,
+  has,
+  Roles,
+  takePendingAction,
+  useSession,
+} from '@eauction/shared'
+import { authConfig } from './authConfig'
 import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
 
-const authConfig = {
-  issuer: config.issuer,
-  clientId: 'bidder-web',
-  redirectUri: window.location.origin + '/',
-  // national_id and name_ar ride on the realm's default scopes, so nothing extra
-  // is requested here; see deploy/keycloak/README.md.
-  scope: 'openid profile email',
-}
 
 export function App() {
   const { session, loading, error: authError, signIn, signOut } = useSession(authConfig)
@@ -22,6 +23,14 @@ export function App() {
   const [auctions, setAuctions] = useState<AuctionSummary[]>([])
   const [openAuction, setOpenAuction] = useState<AuctionDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // Whether this page load followed a second-factor confirmation.
+  //
+  // Read once, on mount, because takePendingAction clears it. The action is NOT
+  // resumed automatically: a payment should be the result of someone pressing a
+  // button, not of a redirect completing, and a user who confirmed their identity
+  // for one purpose has not thereby agreed to whatever was pending.
+  const [confirmed] = useState(() => takePendingAction())
 
   const load = useCallback(async () => {
     try {
@@ -114,6 +123,12 @@ export function App() {
         {authError && <div className="notice error">{authError}</div>}
         {error && <div className="notice error">{error}</div>}
 
+        {confirmed && (
+          <div className="notice ok">
+            تم التحقق من هويتك. يمكنك الآن إكمال الخطوة التي كنت عليها.
+          </div>
+        )}
+
         {session && !isBidder && (
           <div className="notice info">
             هذا الحساب لا يحمل دور <code>bidder</code>، فلا يمكنه المزايدة. المزادات
@@ -143,6 +158,12 @@ export function App() {
 
 function describe(e: unknown): string {
   if (e instanceof ApiError) {
+    // A step-up challenge is not an error the user can act on by reading it: the
+    // runner has already sent them to confirm their identity, so by the time this
+    // renders the browser is navigating away. Say what is happening rather than
+    // showing a 403.
+    if (e.needsStepUp) return 'يتطلب هذا الإجراء تأكيد هويتك — جارٍ التحويل…'
+
     if (e.status === 401) return 'انتهت الجلسة. أعد تسجيل الدخول.'
     if (e.problems.length > 0) return e.problems.join(' · ')
     return e.message

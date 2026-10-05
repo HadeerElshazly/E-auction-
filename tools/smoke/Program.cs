@@ -57,10 +57,29 @@ try
     n.Section("1. Identity — real Keycloak, real tokens");
     // -----------------------------------------------------------------------
 
+    // admin-user has no second factor, so no OTP. The other three do, and a
+    // password grant for a user who has one must supply it even though the
+    // resulting token is still level 1.
+    var otp = Keycloak.DevTotpSecret;
     var adminToken = await Keycloak.TokenAsync(http, issuer, "admin-web", "admin-user", password);
-    var committeeToken = await Keycloak.TokenAsync(http, issuer, "admin-web", "committee-user", password);
-    var saraToken = await Keycloak.TokenAsync(http, issuer, "bidder-web", "sara", password);
-    var khalidToken = await Keycloak.TokenAsync(http, issuer, "bidder-web", "khalid", password);
+    var committeeToken = await Keycloak.TokenAsync(
+        http, issuer, "admin-web", "committee-user", password, otp);
+    var saraToken = await Keycloak.TokenAsync(
+        http, issuer, "bidder-web", "sara", password, otp);
+    var khalidToken = await Keycloak.TokenAsync(
+        http, issuer, "bidder-web", "khalid", password, otp);
+
+    // Stepped-up tokens, minted by tools/smoke/stepup-token.mjs through a real
+    // browser login. Keycloak only issues a second factor through the
+    // authorization-code flow, so these cannot come from a password grant.
+    var saraStepUp = Env("SMOKE_SARA_STEPUP", "");
+    var khalidStepUp = Env("SMOKE_KHALID_STEPUP", "");
+    var committeeStepUp = Env("SMOKE_COMMITTEE_STEPUP", "");
+
+    if (saraStepUp.Length == 0 || khalidStepUp.Length == 0 || committeeStepUp.Length == 0)
+        throw new SmokeException(
+            "No stepped-up tokens. Run through tools/smoke/run-smoke.sh, which mints "
+            + "them; the endpoints that move money cannot be reached without one.");
 
     var sara = Keycloak.Subject(saraToken);
     var khalid = Keycloak.Subject(khalidToken);
@@ -177,17 +196,35 @@ try
     n.Section("4. Register and qualify two bidders");
     // -----------------------------------------------------------------------
 
+    // The gate, before crossing it. An ordinary sign-in — which is what a password
+    // grant is, and what the rest of this walk-through uses — must not be able to
+    // bind a national identity to an account.
+    var (kycStatus, kycBody) = await new Caller(http, participantUrl, saraToken, "sara")
+        .TryPostAsync("/bidders/register");
+
+    if (kycStatus == System.Net.HttpStatusCode.Forbidden && kycBody.Contains("StepUpRequired"))
+        n.Step("registration is refused without a second factor", "403 StepUpRequired");
+    else
+        n.Fail("registration is refused without a second factor",
+            $"got {(int)kycStatus} {kycBody}");
+
     var saraParticipant = new Caller(http, participantUrl, saraToken, "sara");
     var khalidParticipant = new Caller(http, participantUrl, khalidToken, "khalid");
 
-    foreach (var who in new[] { saraParticipant, khalidParticipant })
+    // Registration and the deposit go through the stepped-up tokens; everything
+    // else uses the ordinary ones, so the walk-through also demonstrates that the
+    // gate is at the money and not at every click.
+    var saraStrong = new Caller(http, participantUrl, saraStepUp, "sara (stepped up)");
+    var khalidStrong = new Caller(http, participantUrl, khalidStepUp, "khalid (stepped up)");
+
+    foreach (var (who, bidderId) in new[] { (saraStrong, sara), (khalidStrong, khalid) })
     {
         // No body: every field comes from the Nafath claims in the token.
         await who.PostAsync("/bidders/register");
-        await who.PostAsync($"/bidders/{Keycloak.Subject(who == saraParticipant ? saraToken : khalidToken)}/profile",
-            new { phone = "+966500000001", email = $"{who.Who}@example.sa" });
+        await who.PostAsync($"/bidders/{bidderId}/profile",
+            new { phone = "+966500000001", email = $"{bidderId:N}"[..8] + "@example.sa" });
     }
-    n.Step("both bidders registered from token claims", "national_id never crosses the wire");
+    n.Step("both bidders registered with a second factor", "national_id never crosses the wire");
 
     foreach (var (who, bidderId) in new[] { (saraParticipant, sara), (khalidParticipant, khalid) })
     {
@@ -196,7 +233,10 @@ try
         await who.PostAsync($"{sub}/booklet", new { paymentRef = $"BKLT-{bidderId:N}"[..16] });
         await who.PostAsync($"{sub}/terms");
         await who.PostAsync($"{sub}/deposit-method", new { method = "Payment" });
-        await who.PostAsync($"{sub}/deposit", new { paymentRef = $"DEP-{bidderId:N}"[..16] });
+
+        // The deposit, with the second factor.
+        var strong = bidderId == sara ? saraStrong : khalidStrong;
+        await strong.PostAsync($"{sub}/deposit", new { paymentRef = $"DEP-{bidderId:N}"[..16] });
 
         var state = await who.GetAsync(sub);
         var stage = state.GetProperty("status").GetString();
@@ -536,7 +576,19 @@ try
             $"got {pendingBidder} at {pendingAmount / 100:N0} SAR");
 
     // The committee decides; the system never awards by itself.
-    await committee.PostAsync($"/auctions/{auctionId}/award", new { committeeUserId = committeeUser });
+    // The single most consequential act in the platform. Refused without a second
+    // factor, which is asserted first so the gate is shown to hold.
+    var (awardStatus, awardBody) = await committee
+        .TryPostAsync($"/auctions/{auctionId}/award", new { committeeUserId = committeeUser });
+
+    if (awardStatus == System.Net.HttpStatusCode.Forbidden && awardBody.Contains("StepUpRequired"))
+        n.Step("the award is refused without a second factor", "403 StepUpRequired");
+    else
+        n.Fail("the award is refused without a second factor", $"got {(int)awardStatus} {awardBody}");
+
+    var committeeStrong = new Caller(http, adminUrl, committeeStepUp, "committee (stepped up)");
+    await committeeStrong.PostAsync(
+        $"/auctions/{auctionId}/award", new { committeeUserId = committeeUser });
 
     var afterAward = await committee.GetAsync($"/auctions/{auctionId}");
     var award = afterAward.GetProperty("currentAward");

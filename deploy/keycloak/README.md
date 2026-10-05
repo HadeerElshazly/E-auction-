@@ -188,13 +188,42 @@ bidder endpoint.
 ### The two-factor step-up
 
 Nafath's 2-digit confirmation is a separate, stronger assertion than the
-redirect login. The design (see `docs/ARCHITECTURE.md`) uses the redirect for
-ordinary login and requires the 2-digit step-up at three points: KYC, paying
-the deposit, and accepting an award. In Keycloak that is an authentication flow
-with the step-up marked by an ACR value, requested per-transaction with
-`acr_values`, and asserted in the token's `acr` claim. The services must check
-`acr` on those three endpoints — that check is **not yet implemented**; the
-endpoints currently require only `bidder`.
+redirect login. The design uses the redirect for ordinary login and requires the
+2-digit step-up wherever money or land moves: binding a national identity, paying
+the deposit, lodging a bank guarantee, and awarding an auction. The flow, the
+services' half of it and the four measured facts behind both are in
+`docs/ARCHITECTURE.md` §25.
+
+**In the realm.** `acr.loa.map` is `{"low": 1, "high": 2}`, so a token says
+`"high"`, not `2`. The browser flow `eauction-browser` is Keycloak's documented
+step-up shape: `auth-cookie` and a forms subflow as alternatives, and inside the
+forms subflow two CONDITIONAL subflows, each guarded by a
+`conditional-level-of-authentication` condition — level 1 holds the password
+form, level 2 holds the second factor. A client asks for a level with
+`acr_values=high`.
+
+**The second factor is an OTP authenticator, standing in for Nafath.** It has the
+same shape — an out-of-band confirmation of a login already in progress — and it
+plugs into the same slot once the Elm/NIC contract exists. `sara`, `khalid` and
+`committee-user` are seeded with the TOTP secret `eauctiondevsecret1234567890`,
+which is how the tests drive a second factor without a device. It is a dev
+credential in a dev realm; see the production checklist below.
+
+Three behaviours are worth knowing before you debug this realm:
+
+- **A password grant is always level 1.** `grant_type=password` ignores
+  `acr_values`, and sending the one-time code does not raise the level. A
+  stepped-up token can only be minted through a browser — `web/e2e/stepup-token.mjs`
+  does it.
+- **A user holding a TOTP credential must send `otp` on every grant**, direct
+  grants included, and a code is single-use: two authentications for the same
+  user inside one 30-second window cannot both succeed.
+- **Stepping up re-prompts for the password.** The conditional condition compares
+  against the level reached by the authentication in progress, not the level the
+  SSO session holds, so a signed-in user is asked for their password (username
+  hidden) and then the second factor. This is Keycloak's behaviour on its own
+  documented flow, and it is left alone: a stolen session cookie cannot step
+  itself up.
 
 ## Before production
 
@@ -203,7 +232,9 @@ endpoints currently require only `bidder`.
       token without driving a browser. Leaving it on in production means a
       stolen password is a token, with no Nafath in the path.
 - [ ] Delete every dev user (`sara`, `khalid`, `admin-user`, `committee-user`).
-      They carry a known password.
+      They carry a known password, and three of them carry a known TOTP secret —
+      which, until Nafath is wired in, is the whole of the second factor guarding
+      deposits and awards.
 - [ ] Narrow the redirect URIs and web origins. The committed ones include
       `localhost` entries for development and a trailing `/*` wildcard on the
       production hosts, and `webOrigins` is `+`. Pin each to the exact callback
@@ -214,8 +245,9 @@ endpoints currently require only `bidder`.
 - [ ] Nafath identity provider configured, with its secret from a sealed secret
       or the cluster's secret store — never from this file.
 - [ ] Staff accounts (`auction-admin`, `award-committee`, `operator`) federated
-      to the municipality's own directory, or at minimum given OTP, since those
-      roles move money and award land.
+      to the municipality's own directory. The award committee already needs a
+      second factor to award, but it is the dev OTP credential; a real one has to
+      come from the directory.
 - [ ] A production-grade database behind Keycloak. `start-dev` keeps the realm
       in an embedded H2 file that is not meant to survive.
 - [ ] `registrationAllowed` stays `false`. Self-registration would let a bidder

@@ -97,12 +97,69 @@ public class AdminAuthTests : IDisposable
     [Fact]
     public async Task The_committee_reaches_the_award_surface()
     {
-        // Not found rather than forbidden: the role passed and the auction
-        // simply does not exist.
-        var response = await As(Roles.AwardCommittee)
+        // Not found rather than forbidden: the role and the second factor both
+        // passed, and the auction simply does not exist.
+        var response = await factory.CreateClient()
+            .WithToken(TestJwt.SteppedUp(Someone, Roles.AwardCommittee))
             .PostAsJsonAsync($"/auctions/{Guid.NewGuid()}/award", new { committeeUserId = Someone });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Confirming_an_award_needs_a_second_factor()
+    {
+        // The most consequential act in the platform: it transfers a parcel of
+        // state land to a named person. The committee role alone is not enough —
+        // the second factor is what ties the decision to the person, which is what
+        // the minutes of an award have to be able to claim.
+        var response = await As(Roles.AwardCommittee)
+            .PostAsJsonAsync($"/auctions/{Guid.NewGuid()}/award", new { committeeUserId = Someone });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("StepUpRequired", body);
+    }
+
+    [Fact]
+    public async Task A_stale_second_factor_does_not_confirm_an_award()
+    {
+        var response = await factory.CreateClient()
+            .WithToken(TestJwt.StepUpExpired(Someone, Roles.AwardCommittee))
+            .PostAsJsonAsync($"/auctions/{Guid.NewGuid()}/award", new { committeeUserId = Someone });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("StepUpStale", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task A_second_factor_does_not_substitute_for_the_committee_role()
+    {
+        // An auction administrator with a fresh second factor is still not the
+        // committee. Separation of duties survives a step-up.
+        var response = await factory.CreateClient()
+            .WithToken(TestJwt.SteppedUp(Someone, Roles.AuctionAdmin))
+            .PostAsJsonAsync($"/auctions/{Guid.NewGuid()}/award", new { committeeUserId = Someone });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.DoesNotContain("StepUp", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task The_rest_of_the_award_workflow_does_not_require_a_second_factor()
+    {
+        // Issuing the letter, uploading the signed copy and notifying the winner
+        // all carry out a decision already taken under a confirmed identity.
+        // Re-confirming at every step trains people to approve without reading.
+        foreach (var path in new[] { "/award/letter", "/award/signed-letter", "/award/notify" })
+        {
+            var response = await As(Roles.AwardCommittee)
+                .PostAsJsonAsync($"/auctions/{Guid.NewGuid()}{path}",
+                    new { documentId = Guid.NewGuid() });
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
     }
 
     [Fact]

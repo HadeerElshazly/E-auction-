@@ -37,4 +37,12 @@ public static class Policies
     public const string AuctionAdmin = "policy:auction-admin";
     public const string AwardCommittee = "policy:award-committee";
     public const string Operator = "policy:operator";
+
+    /// <summary>
+    /// A role AND a recent second factor. For the endpoints that move money or land
+    /// — see <see cref="StepUpOptions"/> for why the role alone is not enough.
+    /// </summary>
+    public const string BidderStepUp = "policy:bidder+step-up";
+
+    public const string AwardCommitteeStepUp = "policy:award-committee+step-up";
 }

@@ -52,14 +52,57 @@ public static class TestJwt
     /// accepts nothing else, so a test that registers a bidder needs this and not
     /// <see cref="For"/>.
     /// </summary>
+    /// <remarks>
+    /// Includes a second factor confirmed just now, because registration is one of
+    /// the endpoints that requires one. <see cref="FromNafathWithoutStepUp"/> is the
+    /// ordinary-sign-in version, for asserting that the gate holds.
+    /// </remarks>
     public static string FromNafath(
         Guid subject, string nationalId, string nameAr, string nameEn,
         params string[] realmRoles) =>
+        Nafath(subject, nationalId, nameAr, nameEn, steppedUp: true, realmRoles);
+
+    /// <summary>A Nafath login with no second factor — acr "low".</summary>
+    public static string FromNafathWithoutStepUp(
+        Guid subject, string nationalId, string nameAr, string nameEn,
+        params string[] realmRoles) =>
+        Nafath(subject, nationalId, nameAr, nameEn, steppedUp: false, realmRoles);
+
+    private static string Nafath(
+        Guid subject, string nationalId, string nameAr, string nameEn,
+        bool steppedUp, string[] realmRoles) =>
         Write(subject, realmRoles, DateTime.UtcNow.AddMinutes(15), DateTime.UtcNow,
             new SigningCredentials(Key, SecurityAlgorithms.HmacSha256),
-            new Claim("national_id", nationalId),
-            new Claim("name_ar", nameAr),
-            new Claim("name", nameEn));
+            StepUpClaims(steppedUp, DateTimeOffset.UtcNow)
+                .Append(new Claim("national_id", nationalId))
+                .Append(new Claim("name_ar", nameAr))
+                .Append(new Claim("name", nameEn))
+                .ToArray());
+
+    /// <summary>An ordinary token plus a second factor confirmed just now.</summary>
+    public static string SteppedUp(Guid subject, params string[] realmRoles) =>
+        Write(subject, realmRoles, DateTime.UtcNow.AddMinutes(15), DateTime.UtcNow,
+            new SigningCredentials(Key, SecurityAlgorithms.HmacSha256),
+            StepUpClaims(true, DateTimeOffset.UtcNow).ToArray());
+
+    /// <summary>
+    /// A second factor that happened, but too long ago to authorise anything now.
+    /// </summary>
+    public static string StepUpExpired(Guid subject, params string[] realmRoles) =>
+        Write(subject, realmRoles, DateTime.UtcNow.AddMinutes(15), DateTime.UtcNow,
+            new SigningCredentials(Key, SecurityAlgorithms.HmacSha256),
+            StepUpClaims(true, DateTimeOffset.UtcNow.AddHours(-1)).ToArray());
+
+    /// <summary>
+    /// The claims Keycloak's step-up produces: the level reached, and when.
+    /// "low"/"high" are the names from the realm's acr.loa.map, which is what
+    /// Keycloak emits — not the numbers behind them.
+    /// </summary>
+    private static IEnumerable<Claim> StepUpClaims(bool steppedUp, DateTimeOffset authTime) =>
+    [
+        new Claim("acr", steppedUp ? "high" : "low"),
+        new Claim("auth_time", authTime.ToUnixTimeSeconds().ToString()),
+    ];
 
     /// <summary>A token that has already expired, for testing that lifetime is checked.</summary>
     public static string Expired(Guid subject, params string[] realmRoles) =>

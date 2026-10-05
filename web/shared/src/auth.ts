@@ -45,6 +45,59 @@ const VERIFIER_KEY = 'eauction.pkce.verifier'
 const STATE_KEY = 'eauction.pkce.state'
 const RETURN_KEY = 'eauction.return'
 
+/**
+ * What the user was trying to do when a step-up was demanded.
+ *
+ * Remembered across the redirect because the redirect destroys the page: without it
+ * the user confirms their identity, lands back on the catalogue, and has to find
+ * their way to the payment again — at which point they are asked to confirm a
+ * second time. Only an opaque label, never the request itself, so nothing about the
+ * pending action ends up in storage.
+ */
+const PENDING_KEY = 'eauction.stepup.pending'
+
+/** The answer for this page load: undefined until storage has been read once. */
+let pendingAction: string | null | undefined
+
+export function rememberPendingAction(label: string): void {
+  // Forgets any answer already given in this page load: the next load is a
+  // different one, and in a test the same page may step up more than once.
+  pendingAction = undefined
+
+  try {
+    sessionStorage.setItem(PENDING_KEY, label)
+  } catch {
+    // Private mode, or storage disabled. The step-up still works; the user just
+    // has to press the button again afterwards.
+  }
+}
+
+/**
+ * Reads the remembered action, if this page load followed a step-up.
+ *
+ * Answers the same for the whole page load, however many times it is called. It
+ * reads once and keeps the answer rather than re-reading storage, because storage
+ * is cleared on that first read — and the natural call site is a React state
+ * initialiser, which StrictMode invokes twice. A plain read-and-clear returns the
+ * label to one of those two invocations and null to the other, and the portal
+ * silently loses the acknowledgement it exists to show.
+ *
+ * The clear still happens immediately, so a later load — a refresh, a second
+ * step-up — starts from nothing.
+ */
+export function takePendingAction(): string | null {
+  if (pendingAction !== undefined) return pendingAction
+
+  try {
+    pendingAction = sessionStorage.getItem(PENDING_KEY)
+    sessionStorage.removeItem(PENDING_KEY)
+  } catch {
+    pendingAction = null
+  }
+
+  return pendingAction
+}
+
 let discovery: Discovery | null = null
 
 async function discover(issuer: string): Promise<Discovery> {
@@ -84,6 +137,27 @@ export interface LoginOptions {
    * of any storage: the token is gone, but the identity provider's session is not.
    */
   silent?: boolean
+
+  /**
+   * The Level of Authentication to ask for, from the realm's `acr.loa.map`.
+   *
+   * Asking is only half of it: `acr_values` is a *voluntary* claims request in
+   * OIDC, so a provider that cannot satisfy it still issues a token at a lower
+   * level. The services therefore check what the token says rather than what was
+   * asked for, and this is only how the user gets the chance to satisfy them.
+   */
+  acrValues?: string[]
+
+  /**
+   * `prompt=login` forces the identity provider to authenticate again even though
+   * it has a session.
+   *
+   * Needed for a *repeat* step-up: Keycloak considers a level already reached for
+   * the life of the session, so without this a user whose confirmation has gone
+   * stale is handed the same stale `auth_time` back and the gate stays shut — a
+   * loop the user cannot escape.
+   */
+  reauthenticate?: boolean
 }
 
 /** Sends the browser to Keycloak. Does not return. */
@@ -105,6 +179,8 @@ export async function login(config: AuthConfig, options: LoginOptions = {}): Pro
   url.searchParams.set('code_challenge', await challengeFor(verifier))
   url.searchParams.set('code_challenge_method', 'S256')
   if (options.silent) url.searchParams.set('prompt', 'none')
+  else if (options.reauthenticate) url.searchParams.set('prompt', 'login')
+  if (options.acrValues?.length) url.searchParams.set('acr_values', options.acrValues.join(' '))
 
   location.assign(url.toString())
   return new Promise<never>(() => {})
@@ -132,6 +208,7 @@ let exchange: { code: string; promise: Promise<Session | null> } | null = null
 export function resetAuthStateForTests(): void {
   exchange = null
   discovery = null
+  pendingAction = undefined
 }
 
 /**

@@ -61,6 +61,7 @@ builder.Services.AddHostedService<OutboxRelayService<ParticipantDbContext>>();
 builder.Services.AddHostedService<CatalogConsumer>();
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+builder.Services.AddEAuctionStepUp(builder.Configuration);
 builder.Services.AddEAuctionCors(builder.Configuration);
 
 // Enums as names, both ways. Responses already hand back "Online" and "Eligible" as
@@ -157,7 +158,10 @@ app.MapPost("/bidders/register", async (
                              + "It has to be re-linked before this one can be used." }
         });
     }
-}).RequireAuthorization();
+})
+    // KYC. Registration binds a national identity to an account for good, and
+    // every later act in the platform rests on that binding being right.
+    .RequireAuthorization(Policies.BidderStepUp);
 
 app.MapPost("/bidders/{id:guid}/profile", async (
     HttpContext http, Guid id, CompleteProfileRequest r,
@@ -244,14 +248,16 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit", 
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
         (s, bidder, _) => s.ConfirmDepositPayment(r.PaymentRef, bidder, DateTimeOffset.UtcNow), http))
-    .RequireAuthorization(Policies.Bidder);
+    // Money. A second factor, confirmed within the last few minutes.
+    .RequireAuthorization(Policies.BidderStepUp);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee", (
     HttpContext http, Guid auctionId, Guid bidderId, BankGuaranteeRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
         (s, _, terms) => s.SubmitBankGuarantee(r.DocumentId, r.ExpiresAt, terms), http))
-    .RequireAuthorization(Policies.Bidder);
+    // A bank guarantee stands in for the deposit, so it is the same gate.
+    .RequireAuthorization(Policies.BidderStepUp);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/verify", (
     HttpContext http, Guid auctionId, Guid bidderId, VerifyGuaranteeRequest r,

@@ -214,6 +214,11 @@
           "type": "password",
           "value": "dev-only-password",
           "temporary": false
+        },
+        {
+          "type": "otp",
+          "secretData": "{\"value\": \"eauctiondevsecret1234567890\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
         }
       ],
       "realmRoles": [
@@ -240,6 +245,11 @@
           "type": "password",
           "value": "dev-only-password",
           "temporary": false
+        },
+        {
+          "type": "otp",
+          "secretData": "{\"value\": \"eauctiondevsecret1234567890\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
         }
       ],
       "realmRoles": [
@@ -276,6 +286,11 @@
           "type": "password",
           "value": "dev-only-password",
           "temporary": false
+        },
+        {
+          "type": "otp",
+          "secretData": "{\"value\": \"eauctiondevsecret1234567890\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
         }
       ],
       "realmRoles": [
@@ -283,5 +298,126 @@
       ]
     }
   ],
-  "identityProviders": []
+  "identityProviders": [],
+  "attributes": {
+    "acr.loa.map": "{\"low\": 1, \"high\": 2}"
+  },
+  "authenticatorConfig": [
+    {
+      "alias": "eauction-loa-1",
+      "config": {
+        "loa-condition-level": "1"
+      }
+    },
+    {
+      "alias": "eauction-loa-2",
+      "config": {
+        "loa-condition-level": "2"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "eauction-browser",
+      "description": "Browser flow with a step-up second factor at LoA 2.",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false
+        },
+        {
+          "authenticator": "identity-provider-redirector",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false
+        },
+        {
+          "flowAlias": "eauction-browser-forms",
+          "requirement": "ALTERNATIVE",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "autheticatorFlow": true
+        }
+      ]
+    },
+    {
+      "alias": "eauction-browser-forms",
+      "description": "Password at level 1, a second factor at level 2.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "flowAlias": "eauction-browser-loa-1",
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "autheticatorFlow": true
+        },
+        {
+          "flowAlias": "eauction-browser-loa-2",
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "autheticatorFlow": true
+        }
+      ]
+    },
+    {
+      "alias": "eauction-browser-loa-1",
+      "description": "Ordinary sign-in.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false,
+          "authenticatorConfig": "eauction-loa-1"
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false
+        }
+      ]
+    },
+    {
+      "alias": "eauction-browser-loa-2",
+      "description": "The step-up. Nafath's 2-digit confirmation goes here.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false,
+          "authenticatorConfig": "eauction-loa-2"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "autheticatorFlow": false
+        }
+      ]
+    }
+  ],
+  "browserFlow": "eauction-browser"
 }

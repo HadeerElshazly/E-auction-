@@ -1460,9 +1460,9 @@ maps to the same 409 instead of a 500.
 ### Still not verified
 
 - The Nafath identity provider itself — no contract, so no endpoints to point at.
-- The `acr` step-up check at KYC, deposit and award acceptance. The realm can
-  express the flow; the three endpoints still require only the `bidder` role and
-  do not inspect `acr`. This is the largest remaining gap in §9.
+- ~~The `acr` step-up check at KYC, deposit and award acceptance.~~ **Done** —
+  see §25, which also records what the realm's step-up flow actually does when a
+  signed-in session asks for a higher level.
 - Keycloak behind the chart's issuer URL. The chart points at an external
   issuer by design and was not run against a clustered Keycloak.
 
@@ -1571,8 +1571,8 @@ the judge — and asserting otherwise would have encoded a race as a requirement
   relay; the Debezium connector config exists but the two were never compared.
 - The cascade path end to end. `DisqualifyWinner` → next candidate is covered by
   48 unit tests in the admin service but the smoke test stops at the first award.
-- The `acr` step-up check at KYC, deposit and award acceptance — still the largest
-  gap in §9.
+- ~~The `acr` step-up check at KYC, deposit and award acceptance.~~ **Done** —
+  see §25. The walk-through now asserts the gate refuses an ordinary token.
 - Anything in the chart. The smoke test runs the services directly, so the Helm
   templates, the migration hook that should run `tools/migrate`, and the topic
   provisioning Job are all still unexercised.
@@ -1773,8 +1773,8 @@ Worth recording because both would have passed for ever:
 - **No payment gateway and no document service.** The booklet, the deposit and
   every award letter are a reference string or a `Guid` the portals generate. The
   portals say so on screen rather than implying money moved.
-- **The `acr` step-up is still unimplemented** at KYC, deposit and award acceptance —
-  unchanged from §20, and now the largest security gap.
+- ~~**The `acr` step-up is still unimplemented**~~ **Done** — see §25, including
+  why the portal must resume the refused action without reloading the page.
 - **One browser, one viewport.** Chromium headless at desktop size. No Safari, no
   Firefox, no phone, and the mobile app does not exist.
 - **No accessibility audit.** The portals use real labels and roles, which is what
@@ -1922,3 +1922,183 @@ Three of the assertions written for this were wrong in ways worth recording:
 - **The portal's fallback is untested in anger.** Polling is still there and
   `transport` reports which path is live, but no test forces the stream to fail and
   checks the portal degrades rather than going blank.
+
+## 25. The second factor, and what Keycloak actually does
+
+D-15 promised a Nafath two-digit step-up at KYC, at deposit payment and at award
+acceptance, and never on the bid path. §20 built a realm that can express it. The
+endpoints still required only a role: a token good enough to read an auction was
+good enough to pay a hundred thousand riyals against it. §21, §22 and §24 each
+closed with the same line — the `acr` check is the largest remaining gap in §9.
+This closes it.
+
+Four things about Keycloak had to be measured rather than read, and three of them
+change the design.
+
+### What it gates, and what it does not
+
+| Endpoint | Why |
+|---|---|
+| `POST /bidders/register` | Binds a national identity to an account permanently. D-25 makes one national ID one bidder forever, so a mistake here is not correctable |
+| `POST /auctions/{id}/subscriptions/{bidderId}/deposit` | Money |
+| `POST /auctions/{id}/subscriptions/{bidderId}/guarantee` | Money |
+| `POST /auctions/{id}/award` | A parcel of state land |
+
+Not the bid path. A step-up takes seconds and needs a phone; a bidding war is
+decided inside ten milliseconds. D-15 said so from the start and nothing found
+here argues with it — the bid path has its own integrity story in D-20 and D-21.
+
+### D-33: the service checks the token, never the request
+
+`acr_values` is a *voluntary* claims request in OIDC. A provider that cannot
+satisfy it is not obliged to refuse — it issues a token at whatever level it
+reached. So a client asking for a level proves nothing, and a service that treats
+the asking as the answer has a gate that opens for anyone who knows to ask.
+
+`StepUpHandler.Evaluate` reads the `acr` claim out of the validated token and
+compares it against a configured list of accepted values, by ordinal equality.
+Not a substring test and not a numeric comparison: `"HIGH"`, `"high2"` and `"2"`
+all fail, so a realm renumbering its map or a provider inventing a level cannot
+accidentally satisfy the gate. An empty accepted list refuses everything, because
+a typo in a values file should not read as "anything goes".
+
+### D-34: a step-up expires, and the expiry is half the control
+
+The half usually left out. A confirmation at sign-in that authorised every
+payment for the rest of the session would pass a test suite that only checked
+`acr` — the claim is still there, the token is still inside its fifteen-minute
+life, and the person at the keyboard is no longer necessarily the person who
+confirmed.
+
+So `auth_time` must be recent as well as `acr` sufficient: five minutes by
+default, plus thirty seconds of clock skew. Three details carry weight:
+
+- **A missing or unparseable `auth_time` is refused, not waved through.** An
+  undateable confirmation cannot be shown to be recent. Keycloak omits the claim
+  on a direct grant — which, see below, is exactly the path that can never step
+  up at all.
+- **A slightly future `auth_time` is allowed, a far-future one is not.** The
+  provider's clock running a few seconds ahead must not reject a confirmation
+  that just succeeded; an `auth_time` an hour ahead would otherwise never age out
+  and would satisfy the gate indefinitely.
+- **The two failures are different answers.** `StepUpRequired` means ask for a
+  level; `StepUpStale` means ask again, and the portal has to send `prompt=login`
+  for it — Keycloak treats a level as reached for the life of the session, so a
+  stale confirmation handed back unchanged is a redirect loop with no way out.
+
+### The challenge is a body, not a bare 403
+
+The framework's answer to a failed policy is an empty 403, which tells a portal
+nothing. It cannot distinguish "you are the wrong person", where retrying is
+pointless, from "confirm it is you and try again", where retrying is the entire
+remedy. So a step-up failure answers with the reason, the `acr` values to ask for
+— sent, so the portal does not hard-code a level the realm can renumber under it
+— the freshness window, and an Arabic sentence for the user. Every other
+authorization failure keeps the default.
+
+### What Keycloak actually does
+
+The realm's flow is Keycloak's own documented step-up shape: `auth-cookie` and
+the forms subflow as alternatives, and inside the forms subflow two CONDITIONAL
+subflows each guarded by a `conditional-level-of-authentication` condition —
+level 1 holding the password form, level 2 holding the second factor. None of
+what follows is a misconfiguration of it.
+
+**`acr` is a name, not a number.** It comes from the realm's `acr.loa.map`
+(`{"low": 1, "high": 2}`), so the token says `"high"`, not `2`. A service
+comparing numbers reads nothing at all — and reads it as a failure, which is the
+safe direction but for the wrong reason.
+
+**A direct grant is always level 1.** `grant_type=password` ignores `acr_values`
+entirely, and supplying the one-time code does not raise the level either. So no
+token minted by a password grant can ever pass this gate, however it was
+obtained. That is a useful property rather than a limitation — it is why the API
+smoke test can assert the gate by presenting exactly those tokens and expecting
+403 — but it means a stepped-up token can only be minted through a browser, which
+is what `web/e2e/stepup-token.mjs` exists for.
+
+**A user holding a TOTP credential must supply it on every grant, including a
+direct one.** Seeding the dev users with an OTP credential made `otp` mandatory
+on their password grants, which bought no `acr` and broke every direct grant in
+the smoke test until they sent one. And a code is single-use: Keycloak remembers
+the counter it last accepted and refuses a replay, so two authentications for the
+same user inside one thirty-second window cannot both succeed. The smoke test
+mints its stepped-up tokens moments before its password grants, so it waits for
+the next window and retries — the same remedy a human with an authenticator app
+has.
+
+**Stepping up re-runs the whole ladder.** This is the one that cost the most. The
+conditional Level-of-Authentication condition compares the configured level
+against the level reached by the authentication *now in progress*, which starts
+at zero — not against the level the SSO session already holds. So a user who is
+signed in at level 1 and asks for level 2 is shown the password form again (with
+the username field absent: Keycloak knows who they are) and only then the second
+factor. Measured three ways, including with `acr_values=low` on the original
+sign-in, in case the level had simply never been recorded; it makes no
+difference.
+
+It is left alone. The documentation implies one prompt and Keycloak gives two,
+but two is the safer behaviour: a stolen session cookie cannot step itself up.
+The browser test completes both.
+
+### D-35: the stepped-up token lives in the tab, so the retry must not reload
+
+§23 keeps the access token in React state and nowhere else — not
+`localStorage`, not a cookie — because in this system a bidder's token can commit
+money and a committee member's can award land. The cost is that a page load has
+no token and silently acquires one from Keycloak's session with `prompt=none`.
+
+Put that together with the fact above and there is a trap. A reload after a
+confirmation throws the stepped-up token away, and the silent re-acquisition
+brings back a *level 1* one, because Keycloak does not carry the level across
+authentications. The gated action is then refused again, the portal redirects
+again, and the user is in a loop they cannot escape by pressing harder.
+
+So the step-up resumes in place. The portal remembers an opaque label — what the
+user was doing, never the request itself — across the redirect, shows it when the
+user lands back, and the user presses the button again on the page that is
+already loaded. The browser walk-through navigates inside the single-page app for
+the same reason, which is also what a real user does.
+
+The pending action is deliberately **not** resumed automatically. A payment
+should be the result of someone pressing a button, not of a redirect completing,
+and a user who confirmed their identity for one purpose has not thereby agreed to
+whatever happened to be pending.
+
+### Three faults this found
+
+- **The acknowledgement was read in a React state initialiser.** Reading the
+  pending label cleared it, and StrictMode invokes an initialiser twice — so the
+  label went to one invocation and `null` to the other, and the portal came back
+  from a confirmation showing no sign that anything had happened. `takePendingAction`
+  now answers the same for the whole page load. This is the second bug of exactly
+  this shape in the portals (§23 had the PKCE code redeemed twice); an impure
+  state initialiser is the standing hazard in this codebase.
+- **The browser test concluded "no second factor was demanded" while the redirect
+  was still in flight.** The challenge only arrives after the service has refused
+  the action, so the portal is still on its own origin for a moment after the
+  click. The assertion that the gate engaged could therefore pass with the gate
+  wide open. It now waits for the identity provider before judging.
+- **The test counted the challenge itself as a page fault.** The honest fix is
+  not to ignore 403s from the gated endpoints but to count them: the walk-through
+  now asserts that both bidders and the committee were each challenged at least
+  once, and that the auction admin — who prepares auctions and commits nothing —
+  never was. A gate that stopped engaging would otherwise leave a green suite.
+
+### Still not verified
+
+- **Nafath itself.** The OTP authenticator stands in the slot the two-digit
+  confirmation will occupy; it has the same shape — an out-of-band confirmation
+  of a login already in progress — but it is not the same thing, and the real one
+  needs the Elm/NIC contract.
+- **The gate is at the HTTP boundary only.** Nothing re-checks freshness part-way
+  through a multi-step flow. The award is a single call, so this is sound today;
+  the letter steps that follow it are not gated at all, on the grounds that the
+  award was the decision.
+- **Five minutes is a judgement, not a measurement.** Long enough to fill in a
+  payment form, short enough that a walk-away does not hand someone else a
+  deposit. No one has watched a real bidder do it.
+- **The mobile client has never stepped up.** `bidder-mobile` is in the realm with
+  the same PKCE settings; nothing has driven a step-up through it.
+- **No revocation path.** Nothing listens for back-channel logout, so a session
+  ended at Keycloak keeps working here until the fifteen-minute token expires.

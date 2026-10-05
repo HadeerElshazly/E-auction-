@@ -56,6 +56,7 @@ var complianceWindow = TimeSpan.FromDays(
     builder.Configuration.GetValue("Award:ComplianceWindowDays", 5));
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
+builder.Services.AddEAuctionStepUp(builder.Configuration);
 builder.Services.AddEAuctionCors(builder.Configuration);
 
 // Enums as names, both ways. Responses already hand back "Online" and "Eligible" as
@@ -167,7 +168,11 @@ app.MapPost("/auctions/{id:guid}/candidate", (Guid id, OfferCandidateRequest r, 
 
 app.MapPost("/auctions/{id:guid}/award", (Guid id, ConfirmAwardRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)))
-    .RequireAuthorization(Policies.AwardCommittee);
+    // The single most consequential act in the platform: it transfers a parcel of
+    // state land to a named person. A committee member's role is not enough on its
+    // own — the second factor is what ties the decision to the person, which is
+    // what the minutes of an award have to be able to claim.
+    .RequireAuthorization(Policies.AwardCommitteeStepUp);
 
 app.MapPost("/auctions/{id:guid}/award/letter", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.GenerateAwardLetter(r.DocumentId)))

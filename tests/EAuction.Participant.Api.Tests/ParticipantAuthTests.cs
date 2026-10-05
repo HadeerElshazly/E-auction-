@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using EAuction.Participant.Domain;
 using EAuction.Participant.Persistence;
 using EAuction.Security;
 using Microsoft.EntityFrameworkCore;
@@ -210,5 +211,225 @@ public class ParticipantAuthTests : IDisposable
             .GetAsync(Sub(Sara, "/signing-key"));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+}
+
+/// <summary>
+/// The second factor, at the endpoints that move money.
+///
+/// These assert the HTTP contract rather than the decision — StepUpTests covers the
+/// decision — because the contract is what the portal has to act on: a bare 403 and
+/// a step-up challenge look identical to a browser, and only one of them is worth
+/// retrying.
+/// </summary>
+public class StepUpEndpointTests : IDisposable
+{
+    private readonly AuthenticatedFactory<Program> _factory = new();
+
+    public void Dispose() => _factory.Dispose();
+
+    private static string FreshNationalId() =>
+        "1" + Random.Shared.NextInt64(100_000_000, 999_999_999);
+
+    /// <summary>
+    /// Seeds the auction's terms, which normally arrive from auctions.upcoming.
+    ///
+    /// Written straight to the table rather than published as an event and waited
+    /// for: the catalogue consumer is covered elsewhere, and a test that races a
+    /// background consumer to set up its fixture is a test that fails for reasons
+    /// unconnected to what it is checking.
+    /// </summary>
+    private async Task SeedAuctionAsync(Guid auctionId)
+    {
+        var factory = _factory.Services
+            .GetRequiredService<IDbContextFactory<ParticipantDbContext>>();
+
+        await using var db = await factory.CreateDbContextAsync();
+        if (await db.AuctionTerms.FindAsync(auctionId) is not null) return;
+
+        db.AuctionTerms.Add(new AuctionTerms(
+            auctionId,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow.AddHours(1),
+            depositMinorUnits: 100_000_00,
+            bookletPriceMinorUnits: 1_000_00));
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Carries a bidder to the point where only the deposit is left.</summary>
+    private async Task<(Guid Bidder, Guid Auction)> AwaitingDepositAsync()
+    {
+        var bidder = Guid.NewGuid();
+        var auction = Guid.NewGuid();
+        await SeedAuctionAsync(auction);
+
+        var client = _factory.CreateClient().WithToken(
+            TestJwt.FromNafath(bidder, FreshNationalId(), "سارة", "Sara", Roles.Bidder));
+
+        await client.PostAsync("/bidders/register", null);
+        await client.PostAsJsonAsync($"/bidders/{bidder}/profile",
+            new { phone = "+966500000001", email = "sara@example.sa" });
+        await client.PostAsJsonAsync($"/auctions/{auction}/subscriptions", new { bidderId = bidder });
+
+        var sub = $"/auctions/{auction}/subscriptions/{bidder}";
+        await client.PostAsJsonAsync($"{sub}/booklet", new { paymentRef = "BKLT-1" });
+        await client.PostAsync($"{sub}/terms", null);
+        await client.PostAsJsonAsync($"{sub}/deposit-method", new { method = "Payment" });
+
+        return (bidder, auction);
+    }
+
+    [Fact]
+    public async Task Registering_without_a_second_factor_is_refused()
+    {
+        // KYC binds a national identity to an account permanently, and every later
+        // act rests on that binding. An ordinary sign-in is not enough.
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.FromNafathWithoutStepUp(
+                Guid.NewGuid(), FreshNationalId(), "سارة", "Sara", Roles.Bidder))
+            .PostAsync("/bidders/register", null);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("StepUpRequired", body.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task The_challenge_says_what_to_ask_the_identity_provider_for()
+    {
+        // So the portal does not hard-code a level the realm can renumber beneath
+        // it. Without this the portal would guess, and a realm change would turn
+        // every payment into a dead end.
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.FromNafathWithoutStepUp(
+                Guid.NewGuid(), FreshNationalId(), "سارة", "Sara", Roles.Bidder))
+            .PostAsync("/bidders/register", null);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var acr = body.GetProperty("requiredAcr").EnumerateArray()
+            .Select(x => x.GetString()).ToArray();
+        Assert.Contains("high", acr);
+        Assert.True(body.GetProperty("maxAgeSeconds").GetInt32() > 0);
+    }
+
+    [Fact]
+    public async Task Paying_the_deposit_without_a_second_factor_is_refused()
+    {
+        var (bidder, auction) = await AwaitingDepositAsync();
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.For(bidder, Roles.Bidder))
+            .PostAsJsonAsync(
+                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
+                new { paymentRef = "DEP-1" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("StepUpRequired", body.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task A_stale_second_factor_is_refused_and_says_so()
+    {
+        // The distinction that matters to a user: "confirm again" rather than "you
+        // are not allowed". A token still inside its own lifetime, carrying a
+        // genuine high acr from an hour ago.
+        var (bidder, auction) = await AwaitingDepositAsync();
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.StepUpExpired(bidder, Roles.Bidder))
+            .PostAsJsonAsync(
+                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
+                new { paymentRef = "DEP-1" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("StepUpStale", body.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Paying_the_deposit_with_a_fresh_second_factor_succeeds()
+    {
+        // The gate has to open, or it is just an outage.
+        var (bidder, auction) = await AwaitingDepositAsync();
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.SteppedUp(bidder, Roles.Bidder))
+            .PostAsJsonAsync(
+                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
+                new { paymentRef = "DEP-1" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Eligible", body.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task A_second_factor_does_not_substitute_for_the_role()
+    {
+        // The policies compose; they do not replace. A stepped-up token from
+        // someone who is not a bidder is still not a bidder.
+        var (bidder, auction) = await AwaitingDepositAsync();
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.SteppedUp(bidder, Roles.Operator))
+            .PostAsJsonAsync(
+                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
+                new { paymentRef = "DEP-1" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        // And it is NOT reported as a step-up problem: retrying the confirmation
+        // would be pointless, and telling the user to try would be a lie.
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("StepUp", body);
+    }
+
+    [Fact]
+    public async Task A_second_factor_does_not_let_one_bidder_act_for_another()
+    {
+        // Ownership is checked before anything else. A step-up proves who you are,
+        // not that you may spend someone else's deposit.
+        var (bidder, auction) = await AwaitingDepositAsync();
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.SteppedUp(Guid.NewGuid(), Roles.Bidder))
+            .PostAsJsonAsync(
+                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
+                new { paymentRef = "DEP-1" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_steps_before_the_money_do_not_require_a_second_factor()
+    {
+        // Buying the booklet and accepting the terms commit nothing irreversible,
+        // and asking for a confirmation at every click trains people to approve
+        // without reading. The gate is where it costs something.
+        var bidder = Guid.NewGuid();
+        var auction = Guid.NewGuid();
+        await SeedAuctionAsync(auction);
+
+        var steppedUp = _factory.CreateClient().WithToken(
+            TestJwt.FromNafath(bidder, FreshNationalId(), "سارة", "Sara", Roles.Bidder));
+        await steppedUp.PostAsync("/bidders/register", null);
+        await steppedUp.PostAsJsonAsync($"/bidders/{bidder}/profile",
+            new { phone = "+966500000001", email = "sara@example.sa" });
+
+        // From here on, an ordinary token.
+        var ordinary = _factory.CreateClient().WithToken(TestJwt.For(bidder, Roles.Bidder));
+        var sub = $"/auctions/{auction}/subscriptions/{bidder}";
+
+        Assert.Equal(HttpStatusCode.Created,
+            (await ordinary.PostAsJsonAsync(
+                $"/auctions/{auction}/subscriptions", new { bidderId = bidder })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,
+            (await ordinary.PostAsJsonAsync($"{sub}/booklet", new { paymentRef = "BKLT-1" })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,
+            (await ordinary.PostAsync($"{sub}/terms", null)).StatusCode);
     }
 }

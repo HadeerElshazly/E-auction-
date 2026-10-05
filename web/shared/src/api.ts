@@ -15,6 +15,8 @@ export class ApiError extends Error {
     readonly reason: string | null,
     readonly problems: string[],
     message: string,
+    /** Present when the service answered with a step-up challenge. */
+    readonly stepUp?: StepUpChallenge,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -24,6 +26,26 @@ export class ApiError extends Error {
   get isRejection(): boolean {
     return this.status >= 400 && this.status < 500
   }
+
+  /**
+   * True when confirming identity again and retrying would work.
+   *
+   * The distinction a bare 403 cannot make: "you are the wrong person", where
+   * retrying is pointless, versus "confirm it is you", where retrying is the whole
+   * remedy.
+   */
+  get needsStepUp(): boolean {
+    return this.stepUp !== undefined
+  }
+}
+
+/** What the service says to ask the identity provider for. */
+export interface StepUpChallenge {
+  /** Whether a confirmation is missing altogether, or simply too old. */
+  stale: boolean
+  /** Values for `acr_values`, so the portal does not hard-code a level. */
+  requiredAcr: string[]
+  maxAgeSeconds: number
 }
 
 export interface ApiOptions {
@@ -71,10 +93,24 @@ async function send<T>(
       reason,
       problems,
       problems[0] ?? reason ?? `${method} ${path} failed (${response.status})`,
+      stepUpFrom(response.status, parsed),
     )
   }
 
   return parsed as T
+}
+
+function stepUpFrom(status: number, body: Record<string, unknown> | null): StepUpChallenge | undefined {
+  if (status !== 403 || body === null) return undefined
+
+  const reason = body.reason
+  if (reason !== 'StepUpRequired' && reason !== 'StepUpStale') return undefined
+
+  return {
+    stale: reason === 'StepUpStale',
+    requiredAcr: Array.isArray(body.requiredAcr) ? (body.requiredAcr as string[]) : ['high'],
+    maxAgeSeconds: typeof body.maxAgeSeconds === 'number' ? body.maxAgeSeconds : 300,
+  }
 }
 
 function safeJson(text: string): Record<string, unknown> | null {

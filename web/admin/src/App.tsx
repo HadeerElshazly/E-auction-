@@ -1,19 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, has, Roles, useSession } from '@eauction/shared'
+import {
+  ApiError,
+  api,
+  config,
+  has,
+  Roles,
+  takePendingAction,
+  useSession,
+  useStepUp,
+} from '@eauction/shared'
+import { authConfig } from './authConfig'
 import type { Auction, AuctionListItem } from './types'
 import { AuctionList } from './AuctionList'
 import { AuctionEditor } from './AuctionEditor'
 import { AwardPanel } from './AwardPanel'
 
-const authConfig = {
-  issuer: config.issuer,
-  clientId: 'admin-web',
-  redirectUri: window.location.origin + '/',
-}
 
 export function App() {
   const { session, loading, error: authError, signIn, signOut } = useSession(authConfig)
   const client = useMemo(() => api({ baseUrl: config.adminApi, session }), [session])
+
+  // Whether this load followed a second-factor confirmation. Not resumed
+  // automatically: awarding land should be the result of someone pressing a
+  // button, not of a redirect completing.
+  const [confirmed] = useState(() => takePendingAction())
 
   const [auctions, setAuctions] = useState<AuctionListItem[]>([])
   const [selected, setSelected] = useState<Auction | null>(null)
@@ -53,12 +63,17 @@ export function App() {
     await refreshList()
   }, [open, refreshList, selected])
 
+  // Confirming an award requires a second factor confirmed in the last few
+  // minutes. The runner turns the service's refusal into a confirmation the
+  // committee member can complete, rather than a 403 they can do nothing about.
+  const stepUp = useStepUp(authConfig)
+
   const act = useCallback(
     async (work: () => Promise<unknown>) => {
       setBusy(true)
       setError(null)
       try {
-        await work()
+        await stepUp.run('admin-action', work)
         await reload()
       } catch (e) {
         setError(describe(e))
@@ -66,7 +81,7 @@ export function App() {
         setBusy(false)
       }
     },
-    [reload],
+    [reload, stepUp],
   )
 
   useEffect(() => {
@@ -145,6 +160,12 @@ export function App() {
       <div className="app">
         {error && <div className="notice error">{error}</div>}
 
+        {confirmed && (
+          <div className="notice ok">
+            تم التحقق من هويتك. يمكنك الآن إكمال الإجراء الذي كنت عليه.
+          </div>
+        )}
+
         {selected ? (
           <>
             <div className="row" style={{ marginBottom: 14 }}>
@@ -199,6 +220,12 @@ export function App() {
  */
 function describe(e: unknown): string {
   if (e instanceof ApiError) {
+    // A step-up challenge is not an error the user can act on by reading it: the
+    // runner has already sent them to confirm their identity, so by the time this
+    // renders the browser is navigating away. Say what is happening rather than
+    // showing a 403.
+    if (e.needsStepUp) return 'يتطلب هذا الإجراء تأكيد هويتك — جارٍ التحويل…'
+
     if (e.problems.length > 1) return e.problems.join(' · ')
     if (e.status === 403) return 'هذا الإجراء يتطلب صلاحية أخرى (٤٠٣).'
     if (e.status === 401) return 'انتهت الجلسة. أعد تسجيل الدخول.'

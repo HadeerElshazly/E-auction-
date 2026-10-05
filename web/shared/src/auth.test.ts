@@ -8,9 +8,11 @@ import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
 import {
   completeLogin,
+  rememberPendingAction,
   resetAuthStateForTests,
   sessionFrom,
   silentLoginWasRefused,
+  takePendingAction,
 } from './auth.ts'
 
 // A browser's worth of globals, just enough for the callback path. Lighter than a
@@ -166,4 +168,37 @@ test('a real authorization error is still an error', async () => {
 
   assert.equal(silentLoginWasRefused(), false)
   await assert.rejects(() => completeLogin(config), /invalid_scope/)
+})
+
+test('the pending action survives being read twice', () => {
+  // React's StrictMode invokes a state initialiser twice, and the natural place to
+  // read this is a state initialiser. A plain read-and-clear would hand the label
+  // to one invocation and null to the other, and the portal would come back from a
+  // step-up with no sign that anything had happened.
+  installBrowser('')
+  rememberPendingAction('سداد التأمين')
+
+  assert.equal(takePendingAction(), 'سداد التأمين')
+  assert.equal(takePendingAction(), 'سداد التأمين')
+
+  // Read once from storage, and cleared there, so the next page load starts clean.
+  assert.equal(store.get('eauction.stepup.pending'), undefined)
+})
+
+test('a page load that did not follow a step-up has nothing pending', () => {
+  installBrowser('')
+
+  assert.equal(takePendingAction(), null)
+  assert.equal(takePendingAction(), null)
+})
+
+test('a second step-up in the same page load is remembered again', () => {
+  // The label is read when the portal mounts; a step-up started afterwards has to
+  // replace it rather than be swallowed by the answer already given.
+  installBrowser('')
+  rememberPendingAction('التسجيل بالهوية الوطنية')
+  assert.equal(takePendingAction(), 'التسجيل بالهوية الوطنية')
+
+  rememberPendingAction('تأكيد الترسية')
+  assert.equal(takePendingAction(), 'تأكيد الترسية')
 })

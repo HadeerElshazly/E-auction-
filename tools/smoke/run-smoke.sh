@@ -219,7 +219,40 @@ fi
 
 # --- the walk-through ------------------------------------------------------
 
+# --- stepped-up tokens -----------------------------------------------------
+#
+# Paying a deposit, registering a national identity and confirming an award all
+# require a second factor confirmed in the last few minutes. Keycloak only issues
+# that through the authorization-code flow — a password grant is always level 1 —
+# so these are obtained by completing a real browser login, which is also the
+# honest model: an API client cannot confirm that a human is present, and that is
+# the entire point of the gate.
+say "Minting stepped-up tokens…"
+[ -d "$REPO/web/node_modules" ] || (cd "$REPO/web" && npm install --no-audit --no-fund >/dev/null)
+
+# Lives in the web workspace because node resolves its imports relative to the
+# script's own directory, and @playwright/test is only installed there.
+mint() {
+  (cd "$REPO/web/e2e" && SMOKE_ISSUER="$ISSUER" NO_PROXY='*' no_proxy='*' \
+    node ./stepup-token.mjs "$1" "$2" 2>"$RUN/stepup-$1.log")
+}
+
+SARA_STEPUP="$(mint sara bidder-web)"
+KHALID_STEPUP="$(mint khalid bidder-web)"
+COMMITTEE_STEPUP="$(mint committee-user admin-web)"
+
+for pair in "sara:$SARA_STEPUP" "khalid:$KHALID_STEPUP" "committee-user:$COMMITTEE_STEPUP"; do
+  if [ -z "${pair#*:}" ]; then
+    tail -5 "$RUN/stepup-${pair%%:*}.log" 2>/dev/null
+    die "could not mint a stepped-up token for ${pair%%:*}"
+  fi
+done
+echo "  three stepped-up tokens"
+
 echo
+SMOKE_SARA_STEPUP="$SARA_STEPUP" \
+SMOKE_KHALID_STEPUP="$KHALID_STEPUP" \
+SMOKE_COMMITTEE_STEPUP="$COMMITTEE_STEPUP" \
 SMOKE_ISSUER="$ISSUER" \
 SMOKE_KAFKA="$KAFKA" \
 SMOKE_ADMIN_URL=http://127.0.0.1:5101 \

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { sar, type Api, type Session } from '@eauction/shared'
+import { sar, useStepUp, type Api, type Session } from '@eauction/shared'
+import { authConfig } from './authConfig'
 import type { AuctionDetail, Bidder, Subscription } from './types'
 
 interface Props {
@@ -31,11 +32,16 @@ export function SubscriptionSteps({
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
 
-  const act = async (work: () => Promise<unknown>) => {
+  // Registration and the deposit require a second factor confirmed in the last few
+  // minutes. The runner turns the service's refusal into a confirmation the user
+  // can complete, rather than a 403 they can do nothing about.
+  const stepUp = useStepUp(authConfig)
+
+  const act = async (label: string, work: () => Promise<unknown>) => {
     setBusy(true)
     onError(null)
     try {
-      await work()
+      await stepUp.run(label, work)
       await onChanged()
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
@@ -139,7 +145,7 @@ export function SubscriptionSteps({
             disabled={busy}
             onClick={() =>
               // No body: identity comes from the Nafath claims in the token.
-              act(() => participant.post('/bidders/register'))
+              act('register', () => participant.post('/bidders/register'))
             }
           >
             التسجيل بالهوية الوطنية
@@ -151,7 +157,7 @@ export function SubscriptionSteps({
             className="primary"
             disabled={busy || phone.trim() === '' || !email.includes('@')}
             onClick={() =>
-              act(() =>
+              act('profile', () =>
                 participant.post(`/bidders/${session.subject}/profile`, {
                   phone: phone.trim(),
                   email: email.trim(),
@@ -168,7 +174,7 @@ export function SubscriptionSteps({
             className="primary"
             disabled={busy}
             onClick={() =>
-              act(() =>
+              act('subscribe', () =>
                 participant.post(`/auctions/${auction.id}/subscriptions`, {
                   bidderId: session.subject,
                 }),
@@ -184,7 +190,7 @@ export function SubscriptionSteps({
             className="primary"
             disabled={busy}
             onClick={() =>
-              act(() =>
+              act('booklet', () =>
                 participant.post(
                   `/auctions/${auction.id}/subscriptions/${session.subject}/booklet`,
                   { paymentRef: reference('BKLT') },
@@ -201,7 +207,7 @@ export function SubscriptionSteps({
             className="primary"
             disabled={busy}
             onClick={() =>
-              act(() =>
+              act('terms', () =>
                 participant.post(
                   `/auctions/${auction.id}/subscriptions/${session.subject}/terms`,
                 ),
@@ -218,7 +224,7 @@ export function SubscriptionSteps({
               className="primary"
               disabled={busy}
               onClick={() =>
-                act(() =>
+                act('deposit-method', () =>
                   participant.post(
                     `/auctions/${auction.id}/subscriptions/${session.subject}/deposit-method`,
                     { method: 'Payment' },
@@ -231,7 +237,7 @@ export function SubscriptionSteps({
             <button
               disabled={busy}
               onClick={() =>
-                act(() =>
+                act('deposit-method', () =>
                   participant.post(
                     `/auctions/${auction.id}/subscriptions/${session.subject}/deposit-method`,
                     { method: 'BankGuarantee' },
@@ -250,7 +256,7 @@ export function SubscriptionSteps({
               className="primary"
               disabled={busy}
               onClick={() =>
-                act(() =>
+                act('deposit', () =>
                   participant.post(
                     `/auctions/${auction.id}/subscriptions/${session.subject}/deposit`,
                     { paymentRef: reference('DEP') },
@@ -265,7 +271,7 @@ export function SubscriptionSteps({
               className="primary"
               disabled={busy}
               onClick={() =>
-                act(() =>
+                act('guarantee', () =>
                   participant.post(
                     `/auctions/${auction.id}/subscriptions/${session.subject}/guarantee`,
                     {
