@@ -94,7 +94,7 @@ app.MapPost("/auctions", async (CreateAuctionRequest r, IDbContextFactory<AdminD
 
 app.MapPut("/auctions/{id:guid}", (Guid id, UpdateAuctionRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.UpdateDetails(
-        r.NameAr, r.NameEn, r.Channel, r.StartsAt, r.EndsAt,
+        r.NameAr, r.NameEn, r.Channel, r.BidderVisibility, r.StartsAt, r.EndsAt,
         r.OpeningPriceMinorUnits, r.ReservePriceMinorUnits, r.MinIncrementMinorUnits,
         r.DepositMinorUnits, r.BrokerageFeePercent, r.BookletPriceMinorUnits,
         r.QuietPeriodSeconds, r.MaxExtensions, r.Phase)))
@@ -236,6 +236,7 @@ app.MapGet("/auctions", async (
         .Skip(offset).Take(page)
         .Select(a => new AuctionListItem(
             a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
+            a.BidderVisibility.ToString(),
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.DepositMinorUnits,
             a.Plots.Count, a.CreatedAt))
         .ToListAsync(ct);
@@ -303,6 +304,8 @@ public sealed record CreateAuctionRequest(Guid CreatedByUserId, string NameAr, s
 
 public sealed record UpdateAuctionRequest(
     string NameAr, string NameEn, BidChannel Channel,
+    /// <summary>Masked unless the administrator says otherwise (D-22).</summary>
+    BidderVisibility BidderVisibility,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt,
     long OpeningPriceMinorUnits,
     /// <summary>Omit or null to leave the reserve unchanged; it is never readable back.</summary>
@@ -334,13 +337,14 @@ public sealed record DisqualifyRequest(string Reason, bool ForfeitDeposit);
 /// auctions does not need every award and plot on each one.
 /// </summary>
 public sealed record AuctionListItem(
-    Guid Id, string Status, string NameAr, string NameEn, string Channel,
+    Guid Id, string Status, string NameAr, string NameEn, string Channel, string BidderVisibility,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long DepositMinorUnits,
     int PlotCount, DateTimeOffset CreatedAt);
 
 public sealed record AuctionResponse(
-    Guid Id, string Status, string NameAr, string NameEn, string Channel, string? Phase,
+    Guid Id, string Status, string NameAr, string NameEn, string Channel,
+    string BidderVisibility, string? Phase,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long MinIncrementMinorUnits, long DepositMinorUnits,
     decimal BrokerageFeePercent, long BookletPriceMinorUnits,
@@ -353,7 +357,8 @@ public sealed record AuctionResponse(
     AwardResponse? CurrentAward)
 {
     public static AuctionResponse From(Auction a) => new(
-        a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(), a.Phase,
+        a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
+        a.BidderVisibility.ToString(), a.Phase,
         a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
         a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
         a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,

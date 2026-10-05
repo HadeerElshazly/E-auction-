@@ -19,7 +19,8 @@ namespace EAuction.QueryBff;
 /// </summary>
 public sealed class CatalogueConsumer(
     CatalogueState state,
-    BidderAliases aliases,
+    BidderNames names,
+    LeaderLabels labels,
     FanOut fanOut,
     IEventStream events,
     ILogger<CatalogueConsumer> logger) : BackgroundService
@@ -116,6 +117,7 @@ public sealed class CatalogueConsumer(
             NameAr = p.NameAr,
             NameEn = p.NameEn,
             Channel = p.Channel,
+            BidderVisibility = p.BidderVisibility ?? "Masked",
             StartsAt = p.StartsAt,
             EndsAt = p.EndsAt,
             OpeningPriceMinorUnits = p.OpeningPriceMinorUnits,
@@ -135,6 +137,37 @@ public sealed class CatalogueConsumer(
         // The compacted topics replay concurrently, so this may be the record that
         // completes an auction whose price arrived first.
         if (state.TryGet(p.AuctionId, out var entry)) Push(entry);
+    }
+
+    /// <summary>
+    /// Who may bid, and — only for an auction that names its bidders — what they are
+    /// called (D-22).
+    ///
+    /// This service consumes <c>auctions.participants</c> for the name and nothing
+    /// else; eligibility is the bid catcher's business, not the read path's. The
+    /// name is dropped unless the auction says otherwise, which is the second of two
+    /// locks: the participant service does not publish one for a masked auction in
+    /// the first place.
+    ///
+    /// An eligibility for an auction this service has not seen yet is dropped rather
+    /// than buffered. Registration follows approval, so the definition arrives first
+    /// in practice — and on a replay both topics are read from offset 0, so a
+    /// restart recovers anything a live race lost.
+    /// </summary>
+    private void ApplyParticipant(StreamEvent record)
+    {
+        if (record.EventType != "ParticipantEligibilityChanged") return;
+
+        var p = JsonSerializer.Deserialize<ParticipantPayload>(record.Payload, Json);
+        if (p is null) return;
+
+        if (!p.Eligible || !state.TryGet(p.AuctionId, out var auction))
+        {
+            names.Forget(p.AuctionId, p.BidderId);
+            return;
+        }
+
+        names.Remember(auction, p.BidderId, p.DisplayNameAr);
     }
 
     private void ApplyPrice(StreamEvent record)
@@ -162,14 +195,12 @@ public sealed class CatalogueConsumer(
     private void Push(AuctionEntry entry)
     {
         var now = DateTimeOffset.UtcNow;
-        var alias = entry.LeaderBidderId is null
-            ? null
-            : aliases.For(entry.AuctionId, entry.LeaderBidderId.Value);
+        var label = labels.For(entry);
 
         fanOut.PublishPrice(
             entry.AuctionId,
-            LiveViews.Serialise(LiveViews.ForOthers(entry, alias, now)),
-            LiveViews.Serialise(LiveViews.ForLeader(entry, alias, now)),
+            LiveViews.Serialise(LiveViews.ForOthers(entry, label, now)),
+            LiveViews.Serialise(LiveViews.ForLeader(entry, label, now)),
             entry.LeaderBidderId);
     }
 
@@ -227,6 +258,7 @@ public sealed class CatalogueConsumer(
         public string NameAr { get; init; } = "";
         public string NameEn { get; init; } = "";
         public string Channel { get; init; } = "";
+        public string? BidderVisibility { get; init; }
         public DateTimeOffset StartsAt { get; init; }
         public DateTimeOffset EndsAt { get; init; }
         public long OpeningPriceMinorUnits { get; init; }
@@ -267,6 +299,14 @@ public sealed class CatalogueConsumer(
         public Guid ClientBidId { get; init; }
         public string Reason { get; init; } = "";
         public long CurrentPriceMinorUnits { get; init; }
+    }
+
+    private sealed record ParticipantPayload
+    {
+        public Guid AuctionId { get; init; }
+        public Guid BidderId { get; init; }
+        public bool Eligible { get; init; }
+        public string? DisplayNameAr { get; init; }
     }
 
     private sealed record LifecyclePayload

@@ -6,6 +6,7 @@ export interface AuctionListItem {
   nameAr: string
   nameEn: string
   channel: string
+  bidderVisibility: string
   startsAt: string | null
   endsAt: string | null
   openingPriceMinorUnits: number
@@ -32,6 +33,7 @@ export interface Auction {
   nameAr: string
   nameEn: string
   channel: string
+  bidderVisibility: string
   phase: string | null
   startsAt: string | null
   endsAt: string | null

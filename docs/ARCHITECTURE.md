@@ -78,7 +78,7 @@ design change, not a configuration change.
 | D-19 | **JWT via Keycloak**, verified offline against cached JWKS. No introspection call in the hot path | |
 | D-20 | **HMAC-signed bids.** Each bid carries `nonce + ts + HMAC(secret, payload)`; the secret never goes on the wire | ~200ns to verify. Gives replay protection and non-repudiation |
 | D-21 | **Hash-chained append-only bid ledger** + signed receipt to the bidder | Slide 5: منع التلاعب بسجلات العروض والمزايدات |
-| D-22 | **Leading bidder identity is masked** in public views (`مزايد #4`) | Privacy, anti-collusion, PDPL |
+| D-22 | **Leading bidder identity is masked** in public views (`مزايد #4`) — the default, which the administrator may override per auction (§27) | Privacy, anti-collusion, PDPL. A hall auction is held in public, so masking is the right default rather than the only answer |
 | D-23 | **The reserve price travels on its own topic** (`auctions.sealed`), never inside the public auction definition | Added while building auction-admin. The catcher and the query BFF both consume `auctions.upcoming`, and the BFF feeds public APIs — so a misconfigured BFF could leak the reserve. Splitting it makes D-06 an ACL guarantee instead of a thing every developer must remember |
 
 ### Performance target
@@ -2251,3 +2251,88 @@ in its own `Program` body. A test setting a key, a URL or a feature flag would
 have seen it ignored by everything read at startup and honoured by everything
 resolved later: the same test passing for the wrong reason. The harness uses
 `UseSetting`, which lands before the entry point runs.
+
+## 27. Masked or named: the administrator's choice
+
+D-22 masked the leading bidder as `مزايد #4` everywhere, unconditionally. That is
+the right default and it is not the only lawful answer. A hall auction is held in
+public and everybody in the room can see who raised their paddle, so a masked
+onsite auction is a fiction; and the client may have a legal basis for naming
+bidders in some sales and not others. So the question is now the
+administrator's, per auction.
+
+`BidderVisibility` is `Masked` or `Named`, and three properties shape how it is
+built.
+
+**Masked is what happens when nobody decided.** A new draft is masked. An event
+with no visibility field is masked. A value this system does not recognise —
+`Public`, `true`, `1`, a future spelling — is masked. The only thing that names
+a bidder is an administrator who chose to, and the read path parses the value
+case-insensitively but will not guess at it.
+
+**It is settable only while the auction is a draft.** A bidder puts down a
+hundred thousand riyals having been told who else will see them; changing that
+afterwards is not an edit, it is a different auction. The same rule the dates and
+the deposit already have, and the bidder portal says which answer applies before
+the sign-in button rather than after the deposit.
+
+**A masked auction's names never leave the participant service.** This is the
+part worth the plumbing. The obvious design publishes every bidder's name on
+`auctions.participants` and lets the read path show it or not. That topic is
+compacted and ACL-restricted, but compaction has no deadline and a name on a log
+outlives the auction that justified it — the same argument D-23 makes for the
+reserve price, applied to a citizen's name. So the participant service holds the
+auction's visibility (from `auctions.upcoming`, alongside the deposit and the
+dates it already keeps) and simply does not put a name in the event for a masked
+auction. The query BFF then drops any name it is sent for a masked auction
+anyway: two services would have to fail together for a name to surface.
+
+### One slot, one decision
+
+The live views had a `LeaderAlias` field. Naming bidders could have been a second
+field beside it — and that is exactly what D-22's "masking is a property of the
+shape" was written to prevent, because two fields mean two things to leave out.
+
+So there is still one slot, renamed `LeaderLabel`, and it carries the complete
+string to display: `مزايد #4` or `سارة الحربي`. `LeaderLabels` is the only thing
+that fills it. The Arabic noun moved out of the portal and into the alias for the
+same reason — a portal that rendered `مزايد {label}` itself would read
+`مزايد سارة الحربي` the day an auction named her, and that is a decision living
+in a second place.
+
+A named auction whose name has not arrived yet falls back to the pseudonym. The
+topics are followed independently, so a price can beat an eligibility; a view
+that is briefly less revealing is harmless, and one that throws or renders an
+empty label is not.
+
+### What this does not change
+
+Naming the leader is a decision about a label. The view still carries no bidder
+id, no winning-bid id for anyone but its owner, and no reserve price — the
+`MaskingTests` assertions that enforce D-22's other half and all of D-23 hold
+under both answers, and there is a test saying so out loud, because the next
+person to change one of these will be reading them together.
+
+### A test that could not fail
+
+Worth recording, because it is the third time this shape of mistake has appeared
+here. The first version of the naming test asserted that the serialised view
+*contained* `سارة الحربي`. It does not: `JsonSerializerDefaults.Web` escapes
+non-ASCII, so every Arabic string reaches the wire as `\uXXXX`. Searching the
+JSON for Arabic finds nothing whether the feature works or not — the same trap as
+the D-23 leak check that looked for Latin digits on an Arabic-Indic page. The
+label is now asserted on the view, and the serialised form is used only for what
+it is good for: proving something is absent.
+
+### Still not verified
+
+- **Only the leader is labelled.** "Who is participating" today means "who is
+  leading", because that is the only identity any view carries. A full roster of
+  registered bidders is a different feature and a larger privacy question.
+- **The name-publishing path is covered unit by unit, not end to end.** The
+  smoke test asserts the visibility field crosses `auctions.upcoming` to the
+  public catalogue; that a *name* crosses `auctions.participants` is proven by
+  tests either side of the topic rather than through a real broker.
+- **No audit record of who chose `Named`.** The auction records its creator, not
+  the administrator who set this particular field, and publishing a citizen's name
+  is the kind of decision that should name its author.

@@ -6,6 +6,7 @@ export interface AuctionSummary {
   nameAr: string
   nameEn: string
   channel: string
+  bidderVisibility: string
   startsAt: string
   endsAt: string
   openingPriceMinorUnits: number
@@ -53,7 +54,7 @@ export interface LivePrice {
   priceMinorUnits: number | null
   minimumNextBidMinorUnits: number
   /** A per-auction pseudonym, never an id or a name (D-22). */
-  leaderAlias: string | null
+  leaderLabel: string | null
   leaderIsYou: boolean
   /** Set only on the copy sent to the leader, so they know which of their bids won. */
   yourWinningBidId: string | null

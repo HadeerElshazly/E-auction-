@@ -84,6 +84,22 @@ public sealed record AuctionEntry
     public required string NameAr { get; init; }
     public required string NameEn { get; init; }
     public required string Channel { get; init; }
+
+    /// <summary>
+    /// "Masked" or "Named", from the auction's own definition (D-22). A string
+    /// rather than an enum because this service reads the topic as a stranger: a
+    /// value it has never heard of must mean masked, not throw.
+    /// </summary>
+    public string BidderVisibility { get; init; } = "Masked";
+
+    /// <summary>
+    /// Whether this auction may show a bidder's name. The comparison lives here so
+    /// there is one of it, and so "anything unrecognised is masked" is a property of
+    /// the model rather than of each caller.
+    /// </summary>
+    public bool NamesBidders =>
+        string.Equals(BidderVisibility, "Named", StringComparison.OrdinalIgnoreCase);
+
     public required DateTimeOffset StartsAt { get; init; }
     public required DateTimeOffset EndsAt { get; init; }
     public required long OpeningPriceMinorUnits { get; init; }

@@ -45,14 +45,15 @@ public sealed class CatalogConsumer(
         {
             db.AuctionTerms.Add(new AuctionTerms(
                 payload.AuctionId, payload.StartsAt, payload.EndsAt,
-                payload.DepositMinorUnits, payload.BookletPriceMinorUnits));
+                payload.DepositMinorUnits, payload.BookletPriceMinorUnits,
+                Visibility(payload.BidderVisibility)));
         }
         else
         {
             existing.Update(
                 payload.StartsAt, payload.EndsAt,
                 payload.DepositMinorUnits, payload.BookletPriceMinorUnits,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow, Visibility(payload.BidderVisibility));
         }
 
         await db.SaveChangesAsync(ct);
@@ -107,9 +108,20 @@ public sealed class CatalogConsumer(
 
     // This service's own view of auction-admin's contracts.
 
+    /// <summary>
+    /// Anything this service does not recognise is masked. An auction published by
+    /// an older admin service, or with a value nobody here has heard of, must not
+    /// end up naming people because the parse fell through.
+    /// </summary>
+    private static BidderVisibility Visibility(string? value) =>
+        Enum.TryParse<BidderVisibility>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : BidderVisibility.Masked;
+
     private sealed record AuctionApprovedPayload
     {
         public Guid AuctionId { get; init; }
+        public string? BidderVisibility { get; init; }
         public DateTimeOffset StartsAt { get; init; }
         public DateTimeOffset EndsAt { get; init; }
         public long DepositMinorUnits { get; init; }

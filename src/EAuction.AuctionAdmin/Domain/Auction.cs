@@ -27,6 +27,14 @@ public sealed class Auction
     public string NameEn { get; private set; } = "";
     public BidChannel Channel { get; private set; } = BidChannel.Online;
 
+    /// <summary>
+    /// Whether bidders are named to each other, or masked (D-22). Masked unless an
+    /// administrator says otherwise, and settable only while this is a draft — a
+    /// bidder who paid a deposit under one answer must not find it changed to the
+    /// other.
+    /// </summary>
+    public BidderVisibility BidderVisibility { get; private set; } = BidderVisibility.Masked;
+
     public DateTimeOffset? StartsAt { get; private set; }
     public DateTimeOffset? EndsAt { get; private set; }
 
@@ -95,7 +103,7 @@ public sealed class Auction
     }
 
     public void UpdateDetails(
-        string nameAr, string nameEn, BidChannel channel,
+        string nameAr, string nameEn, BidChannel channel, BidderVisibility bidderVisibility,
         DateTimeOffset startsAt, DateTimeOffset endsAt,
         long openingPriceMinorUnits, long? reservePriceMinorUnits,
         long minIncrementMinorUnits, long depositMinorUnits,
@@ -107,6 +115,7 @@ public sealed class Auction
         NameAr = nameAr?.Trim() ?? "";
         NameEn = nameEn?.Trim() ?? "";
         Channel = channel;
+        BidderVisibility = bidderVisibility;
         StartsAt = startsAt;
         EndsAt = endsAt;
         OpeningPriceMinorUnits = openingPriceMinorUnits;
@@ -243,6 +252,7 @@ public sealed class Auction
             QuietPeriodSeconds = QuietPeriodSeconds,
             MaxExtensions = MaxExtensions,
             Channel = Channel.ToString(),
+            BidderVisibility = BidderVisibility.ToString(),
             PlotCount = _plots.Count,
             TotalAreaSqm = TotalAreaSqm,
             Plots = _plots

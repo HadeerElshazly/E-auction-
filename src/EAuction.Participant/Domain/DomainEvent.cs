@@ -31,6 +31,16 @@ public sealed record ParticipantEligibilityChanged : DomainEvent
     public required bool Eligible { get; init; }
     public required int KeyEpoch { get; init; }
 
+    /// <summary>
+    /// The bidder's name, and only when the auction names its bidders (D-22).
+    ///
+    /// Null on a masked auction — not blanked downstream, never put on the topic at
+    /// all. A name on a compacted topic outlives the auction that justified it, and
+    /// compaction has no deadline; the same reasoning that moved the reserve price
+    /// onto its own topic applies to a citizen's name.
+    /// </summary>
+    public string? DisplayNameAr { get; init; }
+
     public override string AggregateType => "participant-eligibility";
     public override string AggregateId => $"{AuctionId}:{BidderId}";
 }

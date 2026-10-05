@@ -143,7 +143,9 @@ public class AdmissionPathTests(PostgresFixture pg) : IAsyncDisposable
         {
             var subscription = await db.Subscriptions
                 .FirstAsync(s => s.AuctionId == auctionId && s.BidderId == bidderId);
-            subscription.Revoke("شيك مرتجع", DateTimeOffset.UtcNow);
+            var bidder = await db.Bidders.FirstAsync(b => b.Id == bidderId);
+            var terms = await db.AuctionTerms.FirstAsync(t => t.AuctionId == auctionId);
+            subscription.Revoke("شيك مرتجع", bidder, terms, DateTimeOffset.UtcNow);
             await db.SaveChangesAsync();
         }
 
@@ -173,7 +175,9 @@ public class AdmissionPathTests(PostgresFixture pg) : IAsyncDisposable
         {
             var subscription = await db.Subscriptions
                 .FirstAsync(s => s.AuctionId == auctionId && s.BidderId == bidderId);
-            subscription.RotateKey();
+            var bidder = await db.Bidders.FirstAsync(b => b.Id == bidderId);
+            var terms = await db.AuctionTerms.FirstAsync(t => t.AuctionId == auctionId);
+            subscription.RotateKey(bidder, terms);
             await db.SaveChangesAsync();
         }
 

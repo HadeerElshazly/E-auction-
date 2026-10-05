@@ -1,3 +1,4 @@
+using EAuction.Core;
 namespace EAuction.Participant.Domain;
 
 /// <summary>
@@ -103,7 +104,8 @@ public sealed class Subscription
     }
 
     /// <summary>دفع مبلغ التأمين إلكترونيا — confirmed by the payment service.</summary>
-    public void ConfirmDepositPayment(string paymentRef, Bidder bidder, DateTimeOffset now)
+    public void ConfirmDepositPayment(
+        string paymentRef, Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.AwaitingDeposit, "confirm a deposit payment for");
         if (DepositMethod != Domain.DepositMethod.Payment)
@@ -114,7 +116,7 @@ public sealed class Subscription
 
         DepositPaymentRef = paymentRef.Trim();
         DepositPaidAt = now;
-        BecomeEligible(bidder, now);
+        BecomeEligible(bidder, terms, now);
     }
 
     /// <summary>
@@ -144,7 +146,8 @@ public sealed class Subscription
     }
 
     /// <summary>Manual verification by an administrator — no bank integration in v1.</summary>
-    public void VerifyBankGuarantee(Guid verifiedByUserId, Bidder bidder, DateTimeOffset now)
+    public void VerifyBankGuarantee(
+        Guid verifiedByUserId, Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.AwaitingDeposit, "verify a bank guarantee for");
         if (GuaranteeDocumentId is null)
@@ -152,7 +155,7 @@ public sealed class Subscription
 
         GuaranteeVerifiedAt = now;
         GuaranteeVerifiedByUserId = verifiedByUserId;
-        BecomeEligible(bidder, now);
+        BecomeEligible(bidder, terms, now);
     }
 
     /// <summary>
@@ -160,7 +163,7 @@ public sealed class Subscription
     /// re-checked here rather than trusted from the status, because this is
     /// the moment the catcher starts accepting the bidder's money.
     /// </summary>
-    private void BecomeEligible(Bidder bidder, DateTimeOffset now)
+    private void BecomeEligible(Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         var problems = new List<string>();
         if (!bidder.IsVerified) problems.Add("The bidder's identity is not verified by Nafath.");
@@ -175,10 +178,10 @@ public sealed class Subscription
         EligibleAt = now;
         RevokedAt = null;
         RevocationReason = null;
-        PublishEligibility(true);
+        PublishEligibility(true, bidder, terms);
     }
 
-    public void Revoke(string reason, DateTimeOffset now)
+    public void Revoke(string reason, Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.Eligible, "revoke");
         if (string.IsNullOrWhiteSpace(reason))
@@ -187,7 +190,7 @@ public sealed class Subscription
         Status = SubscriptionStatus.Revoked;
         RevokedAt = now;
         RevocationReason = reason.Trim();
-        PublishEligibility(false);
+        PublishEligibility(false, bidder, terms);
     }
 
     /// <summary>
@@ -195,11 +198,11 @@ public sealed class Subscription
     /// stays eligible and gets a new secret; anything signed with the old one
     /// stops verifying the moment the catcher sees the new epoch.
     /// </summary>
-    public void RotateKey()
+    public void RotateKey(Bidder bidder, AuctionTerms terms)
     {
         Require(SubscriptionStatus.Eligible, "rotate the key of");
         KeyEpoch++;
-        PublishEligibility(true);
+        PublishEligibility(true, bidder, terms);
     }
 
     /// <summary>
@@ -214,12 +217,25 @@ public sealed class Subscription
         DepositForfeited = forfeited;
     }
 
-    private void PublishEligibility(bool eligible) =>
+    /// <summary>
+    /// Publishes the eligibility fact, and the bidder's name only when this auction
+    /// names its bidders (D-22).
+    ///
+    /// The filter is here, at the point of publication, rather than in whoever reads
+    /// the topic. A masked auction's name is then not merely hidden — it never
+    /// leaves this service, and no downstream consumer, present or future, can
+    /// expose what it was never sent. The same argument as D-23 makes for the
+    /// reserve price, applied to a citizen's name.
+    /// </summary>
+    private void PublishEligibility(bool eligible, Bidder bidder, AuctionTerms terms) =>
         _events.Add(new ParticipantEligibilityChanged
         {
             AuctionId = AuctionId,
             BidderId = BidderId,
             Eligible = eligible,
-            KeyEpoch = KeyEpoch
+            KeyEpoch = KeyEpoch,
+            DisplayNameAr = terms.BidderVisibility == BidderVisibility.Named
+                ? bidder.NameAr
+                : null
         });
 }

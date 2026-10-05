@@ -143,6 +143,7 @@ try
         nameAr = "مخطط السعيد — المرحلة الأولى",
         nameEn = "Al-Saeed plan — phase one",
         channel = "Online",
+        bidderVisibility = "Masked",   // D-22 by default; asserted end to end below
         startsAt, endsAt,
         openingPriceMinorUnits = opening,
         reservePriceMinorUnits = reserve,
@@ -262,6 +263,14 @@ try
         n.Step("the auction is in the public catalogue", "anonymous, no token");
     else
         n.Fail("the auction is in the public catalogue", listed.ToString());
+
+    // The administrator's masking choice, carried on the public topic. A bidder
+    // deciding whether to register is entitled to know whether their name will be
+    // shown, so this is a field the read path has to publish, not one it may infer.
+    if (listed.GetProperty("bidderVisibility").GetString() == "Masked")
+        n.Step("the catalogue says whether bidders are named", "Masked — D-22 default");
+    else
+        n.Fail("the catalogue says whether bidders are named", listed.ToString());
 
     var detail = await anon.GetAsync($"/auctions/{auctionId}");
     var deeds = detail.GetProperty("plots").EnumerateArray()
@@ -486,14 +495,14 @@ try
         e => PriceIs(e, opening + 4 * increment));
 
     var khalidSawLeader = pushedToKhalid.GetProperty("leaderIsYou").GetBoolean();
-    var khalidAlias = pushedToKhalid.GetProperty("leaderAlias").GetString();
+    var khalidLabel = pushedToKhalid.GetProperty("leaderLabel").GetString();
     var khalidSawWinningBid = pushedToKhalid.GetProperty("yourWinningBidId").ValueKind;
 
-    if (!khalidSawLeader && khalidAlias is not null
+    if (!khalidSawLeader && khalidLabel is not null
         && khalidSawWinningBid == JsonValueKind.Null
         && !pushedToKhalid.ToString().Contains(sara.ToString())
         && !pushedToKhalid.ToString().Contains(saraLastBidId.ToString()))
-        n.Step("khalid is pushed the price, masked", $"leader is {khalidAlias} — D-22");
+        n.Step("khalid is pushed the price, masked", $"leader is {khalidLabel} — D-22");
     else
         n.Fail("khalid is pushed the price, masked", pushedToKhalid.ToString());
 
@@ -527,18 +536,18 @@ try
     var saraPrice = await WaitForPriceAsync(
         new Caller(http, bffUrl, saraToken, "sara"), auctionId, opening + 4 * increment);
     if (saraPrice.GetProperty("leaderIsYou").GetBoolean())
-        n.Step("sara is told she is leading", $"alias {saraPrice.GetProperty("leaderAlias").GetString()}");
+        n.Step("sara is told she is leading", saraPrice.GetProperty("leaderLabel").GetString() ?? "");
     else
         n.Fail("sara is told she is leading", saraPrice.ToString());
 
     var khalidPrice = await new Caller(http, bffUrl, khalidToken, "khalid")
         .GetAsync($"/auctions/{auctionId}/price");
     var khalidSeesLeader = khalidPrice.GetProperty("leaderIsYou").GetBoolean();
-    var alias = khalidPrice.GetProperty("leaderAlias").GetString();
+    var label = khalidPrice.GetProperty("leaderLabel").GetString();
 
-    if (!khalidSeesLeader && alias is not null
+    if (!khalidSeesLeader && label is not null
         && !khalidPrice.ToString().Contains(sara.ToString()))
-        n.Step("khalid sees the price but not who leads", $"leader is {alias} — D-22");
+        n.Step("khalid sees the price but not who leads", $"leader is {label} — D-22");
     else
         n.Fail("khalid sees the price but not who leads", khalidPrice.ToString());
 

@@ -1,3 +1,5 @@
+using EAuction.Core;
+
 namespace EAuction.Participant.Domain;
 
 /// <summary>
@@ -15,15 +17,26 @@ public sealed class AuctionTerms
     public DateTimeOffset EndsAt { get; private set; }
     public long DepositMinorUnits { get; private set; }
     public long BookletPriceMinorUnits { get; private set; }
+
+    /// <summary>
+    /// Whether this auction names its bidders (D-22). Held here, in the service that
+    /// knows people's names, so that a masked auction's eligibility event can be
+    /// published without a name in it at all — rather than published with one and
+    /// filtered out downstream by whoever remembers to.
+    /// </summary>
+    public BidderVisibility BidderVisibility { get; private set; } = BidderVisibility.Masked;
+
     public DateTimeOffset UpdatedAt { get; private set; } = DateTimeOffset.UtcNow;
 
     private AuctionTerms() { }
 
     public AuctionTerms(
         Guid auctionId, DateTimeOffset startsAt, DateTimeOffset endsAt,
-        long depositMinorUnits, long bookletPriceMinorUnits)
+        long depositMinorUnits, long bookletPriceMinorUnits,
+        BidderVisibility bidderVisibility = BidderVisibility.Masked)
     {
         AuctionId = auctionId;
+        BidderVisibility = bidderVisibility;
         StartsAt = startsAt;
         EndsAt = endsAt;
         DepositMinorUnits = depositMinorUnits;
@@ -32,8 +45,10 @@ public sealed class AuctionTerms
 
     public void Update(
         DateTimeOffset startsAt, DateTimeOffset endsAt,
-        long depositMinorUnits, long bookletPriceMinorUnits, DateTimeOffset now)
+        long depositMinorUnits, long bookletPriceMinorUnits, DateTimeOffset now,
+        BidderVisibility bidderVisibility = BidderVisibility.Masked)
     {
+        BidderVisibility = bidderVisibility;
         StartsAt = startsAt;
         EndsAt = endsAt;
         DepositMinorUnits = depositMinorUnits;

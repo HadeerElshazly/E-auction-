@@ -1,3 +1,4 @@
+using EAuction.Core;
 using EAuction.Participant.Domain;
 using EAuction.Participant.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -51,8 +52,9 @@ internal static class Build
         return bidder;
     }
 
-    public static AuctionTerms Terms(Guid auctionId) =>
-        new(auctionId, Now.AddDays(7), Now.AddDays(8), 100_000_00, 1_000_00);
+    public static AuctionTerms Terms(
+        Guid auctionId, BidderVisibility visibility = BidderVisibility.Masked) =>
+        new(auctionId, Now.AddDays(7), Now.AddDays(8), 100_000_00, 1_000_00, visibility);
 
     /// <summary>Carries a subscription all the way to eligible by payment.</summary>
     public static Subscription EligibleByPayment(
@@ -62,7 +64,7 @@ internal static class Build
         s.PurchaseBooklet("booklet-ref", Now);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.Payment, terms, Now);
-        s.ConfirmDepositPayment("deposit-ref", bidder, Now);
+        s.ConfirmDepositPayment("deposit-ref", bidder, terms, Now);
         return s;
     }
 }

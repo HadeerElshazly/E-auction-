@@ -58,6 +58,10 @@ function Summary({ auction }: { auction: Auction }) {
   return (
     <div className="grid">
       <Fact k="القناة" v={auction.channel === 'Online' ? 'إلكتروني' : 'حضوري'} />
+      <Fact
+        k="ظهور المزايدين"
+        v={auction.bidderVisibility === 'Named' ? 'بالاسم' : 'مُخفى'}
+      />
       <Fact k="سعر الافتتاح" v={sar(auction.openingPriceMinorUnits, 'ar')} />
       <Fact k="الحد الأدنى للمزايدة" v={sar(auction.minIncrementMinorUnits, 'ar')} />
       <Fact k="التأمين" v={sar(auction.depositMinorUnits, 'ar')} />
@@ -142,6 +146,7 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
         nameAr: form.nameAr,
         nameEn: form.nameEn,
         channel: form.channel,
+        bidderVisibility: form.bidderVisibility,
         startsAt: new Date(form.startsAt).toISOString(),
         endsAt: new Date(form.endsAt).toISOString(),
         openingPriceMinorUnits: money.opening,
@@ -190,6 +195,19 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
             <option value="Online">إلكتروني</option>
             <option value="Onsite">حضوري</option>
           </select>
+        </label>
+        <label>
+          <span>ظهور المزايدين</span>
+          <select
+            value={form.bidderVisibility}
+            onChange={(e) => setForm({ ...form, bidderVisibility: e.target.value })}
+          >
+            <option value="Masked">مُخفى — مزايد #1</option>
+            <option value="Named">بالاسم</option>
+          </select>
+          <span className="muted small">
+            بالاسم يعني نشر اسم المزايد الأعلى للجميع. لا يمكن تغييره بعد الاعتماد.
+          </span>
         </label>
         <label>
           <span>المرحلة</span>
@@ -305,6 +323,7 @@ interface FormState {
   nameAr: string
   nameEn: string
   channel: string
+  bidderVisibility: string
   phase: string
   startsAt: string
   endsAt: string
@@ -324,6 +343,7 @@ function toForm(a: Auction): FormState {
     nameAr: a.nameAr,
     nameEn: a.nameEn,
     channel: a.channel,
+    bidderVisibility: a.bidderVisibility ?? 'Masked',
     phase: a.phase ?? '',
     startsAt: forInput(a.startsAt) || forInput(new Date(Date.now() + 864e5).toISOString()),
     endsAt: forInput(a.endsAt) || forInput(new Date(Date.now() + 1728e5).toISOString()),

@@ -1,3 +1,4 @@
+using EAuction.Core;
 using EAuction.Participant.Domain;
 using Xunit;
 
@@ -96,7 +97,7 @@ public class SubscriptionTests
         s.ChooseDeposit(DepositMethod.Payment, terms, Now);
 
         var ex = Assert.Throws<ParticipantValidationException>(
-            () => s.ConfirmDepositPayment("deposit", unverified, Now));
+            () => s.ConfirmDepositPayment("deposit", unverified, terms, Now));
 
         Assert.Contains(ex.Problems, p => p.Contains("profile is incomplete"));
         Assert.NotEqual(SubscriptionStatus.Eligible, s.Status);
@@ -140,7 +141,7 @@ public class SubscriptionTests
         Assert.Equal(SubscriptionStatus.AwaitingDeposit, s.Status);
         Assert.Empty(s.Events.OfType<ParticipantEligibilityChanged>());
 
-        s.VerifyBankGuarantee(Guid.NewGuid(), bidder, Now);
+        s.VerifyBankGuarantee(Guid.NewGuid(), bidder, terms, Now);
 
         Assert.Equal(SubscriptionStatus.Eligible, s.Status);
         Assert.NotNull(s.GuaranteeVerifiedByUserId);
@@ -160,7 +161,7 @@ public class SubscriptionTests
         s.ChooseDeposit(DepositMethod.BankGuarantee, terms, Now);
 
         Assert.Throws<ParticipantValidationException>(
-            () => s.ConfirmDepositPayment("deposit", bidder, Now));
+            () => s.ConfirmDepositPayment("deposit", bidder, terms, Now));
     }
 
     [Fact]
@@ -168,10 +169,11 @@ public class SubscriptionTests
     {
         var auctionId = Guid.NewGuid();
         var bidder = Build.VerifiedBidder();
-        var s = Build.EligibleByPayment(auctionId, bidder, Build.Terms(auctionId));
+        var terms = Build.Terms(auctionId);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
         s.ClearEvents();
 
-        s.Revoke("شيك مرتجع", Now.AddDays(1));
+        s.Revoke("شيك مرتجع", bidder, terms, Now.AddDays(1));
 
         Assert.Equal(SubscriptionStatus.Revoked, s.Status);
         var published = Assert.Single(s.Events.OfType<ParticipantEligibilityChanged>());
@@ -183,10 +185,11 @@ public class SubscriptionTests
     {
         var auctionId = Guid.NewGuid();
         var bidder = Build.VerifiedBidder();
-        var s = Build.EligibleByPayment(auctionId, bidder, Build.Terms(auctionId));
+        var terms = Build.Terms(auctionId);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
         s.ClearEvents();
 
-        s.RotateKey();
+        s.RotateKey(bidder, terms);
 
         Assert.Equal(SubscriptionStatus.Eligible, s.Status);
         Assert.Equal(1, s.KeyEpoch);
@@ -237,5 +240,89 @@ public class SubscriptionTests
         Assert.DoesNotContain(properties,
             n => n.Contains("Secret", StringComparison.OrdinalIgnoreCase)
               || n.Contains("Key", StringComparison.OrdinalIgnoreCase) && n != "KeyEpoch");
+    }
+}
+
+/// <summary>
+/// Which auctions put a bidder's name on a topic, and which do not (D-22).
+///
+/// This is the first lock, and the one that matters most. A name filtered out by
+/// the service that reads the topic is still a name that was written to it —
+/// compacted, retained without a deadline, readable by anything with topic access.
+/// A name that was never published cannot leak from anywhere, which is the same
+/// argument D-23 makes for the reserve price.
+/// </summary>
+public class EligibilityNameTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 3, 1, 9, 0, 0, TimeSpan.Zero);
+
+    private static ParticipantEligibilityChanged Published(BidderVisibility visibility)
+    {
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId, visibility);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
+
+        return s.Events.OfType<ParticipantEligibilityChanged>().Last();
+    }
+
+    [Fact]
+    public void A_masked_auction_publishes_no_name_at_all()
+    {
+        Assert.Null(Published(BidderVisibility.Masked).DisplayNameAr);
+    }
+
+    [Fact]
+    public void A_named_auction_publishes_the_name_the_registry_gave()
+    {
+        // Not a name the bidder typed: it comes from Nafath through registration, so
+        // what is published is the verified one.
+        Assert.Equal(Build.VerifiedBidder().NameAr, Published(BidderVisibility.Named).DisplayNameAr);
+    }
+
+    [Fact]
+    public void A_revocation_carries_no_name_even_on_a_named_auction()
+    {
+        // Revocation only has to say "stop". Repeating the name on the way out puts
+        // it on the topic one more time for no reader's benefit.
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId, BidderVisibility.Named);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
+        s.ClearEvents();
+
+        s.Revoke("شيك مرتجع", bidder, terms, Now);
+
+        var published = Assert.Single(s.Events.OfType<ParticipantEligibilityChanged>());
+        Assert.False(published.Eligible);
+    }
+
+    [Fact]
+    public void A_rotated_key_still_carries_the_name_on_a_named_auction()
+    {
+        // Rotation republishes eligibility under a new epoch. If it dropped the name,
+        // the read path would lose it for a bidder who is still eligible and still
+        // named — a leader who silently turned back into مزايد #1 mid-auction.
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId, BidderVisibility.Named);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
+        s.ClearEvents();
+
+        s.RotateKey(bidder, terms);
+
+        var published = Assert.Single(s.Events.OfType<ParticipantEligibilityChanged>());
+        Assert.True(published.Eligible);
+        Assert.Equal(bidder.NameAr, published.DisplayNameAr);
+    }
+
+    [Fact]
+    public void Terms_with_no_visibility_stated_are_masked()
+    {
+        // The default on the constructor, so a path that has not thought about this
+        // does not name anybody.
+        Assert.Equal(
+            BidderVisibility.Masked,
+            Build.Terms(Guid.NewGuid()).BidderVisibility);
     }
 }

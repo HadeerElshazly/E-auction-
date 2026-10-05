@@ -14,13 +14,15 @@ namespace EAuction.QueryBff;
 
 public sealed record AuctionSummary(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,
+    /// <summary>"Masked" or "Named". A bidder is entitled to know before registering.</summary>
+    string BidderVisibility,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt,
     long OpeningPriceMinorUnits, long? PriceMinorUnits, long MinimumNextBidMinorUnits,
     long DepositMinorUnits, long BookletPriceMinorUnits,
     int PlotCount, decimal TotalAreaSqm)
 {
     public static AuctionSummary From(AuctionEntry a) => new(
-        a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel,
+        a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
         a.StartsAt, a.EndsAt,
         a.OpeningPriceMinorUnits, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
         a.DepositMinorUnits, a.BookletPriceMinorUnits,
@@ -29,6 +31,12 @@ public sealed record AuctionSummary(
 
 public sealed record AuctionDetail(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,
+    /// <summary>
+    /// "Masked" or "Named". Published because a bidder about to pay a deposit is
+    /// entitled to know whether their name will be shown to the other bidders — the
+    /// administrator's choice is not one they should discover after the fact.
+    /// </summary>
+    string BidderVisibility,
     DateTimeOffset StartsAt, DateTimeOffset EndsAt, DateTimeOffset? EffectiveEndsAt,
     long OpeningPriceMinorUnits, long MinIncrementMinorUnits,
     long? PriceMinorUnits, long MinimumNextBidMinorUnits,
@@ -37,7 +45,7 @@ public sealed record AuctionDetail(
     decimal TotalAreaSqm, IReadOnlyList<PlotEntry> Plots)
 {
     public static AuctionDetail From(AuctionEntry a) => new(
-        a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel,
+        a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
         a.StartsAt, a.EndsAt, a.EffectiveEndsAt,
         a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
         a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
@@ -49,7 +57,12 @@ public sealed record AuctionDetail(
 public sealed record LivePrice(
     Guid AuctionId, string Status,
     long? PriceMinorUnits, long MinimumNextBidMinorUnits,
-    string? LeaderAlias, bool LeaderIsYou,
+    /// <summary>
+    /// What this viewer may be told about the leader: a pseudonym on a masked
+    /// auction, the bidder's name on a named one (D-22). One slot, filled in one
+    /// place (<c>LeaderLabels</c>), so there is a single thing to get wrong.
+    /// </summary>
+    string? LeaderLabel, bool LeaderIsYou,
     /// <summary>Set only for the leader, so they know which of their bids won.</summary>
     Guid? YourWinningBidId,
     DateTimeOffset EffectiveEndsAt, int ExtensionsUsed, int MaxExtensions,
@@ -72,21 +85,21 @@ public static class LiveViews
 {
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public static LivePrice ForOthers(AuctionEntry a, string? alias, DateTimeOffset now) => new(
+    public static LivePrice ForOthers(AuctionEntry a, string? label, DateTimeOffset now) => new(
         a.AuctionId, a.Status, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
-        alias, LeaderIsYou: false, YourWinningBidId: null,
+        label, LeaderIsYou: false, YourWinningBidId: null,
         a.EffectiveEndsAt ?? a.EndsAt, a.ExtensionsUsed, a.MaxExtensions, now);
 
-    public static LivePrice ForLeader(AuctionEntry a, string? alias, DateTimeOffset now) => new(
+    public static LivePrice ForLeader(AuctionEntry a, string? label, DateTimeOffset now) => new(
         a.AuctionId, a.Status, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
-        alias, LeaderIsYou: true, a.LeaderClientBidId,
+        label, LeaderIsYou: true, a.LeaderClientBidId,
         a.EffectiveEndsAt ?? a.EndsAt, a.ExtensionsUsed, a.MaxExtensions, now);
 
     /// <summary>The view for one specific caller, for the request/response endpoint.</summary>
-    public static LivePrice For(AuctionEntry a, Guid? caller, string? alias, DateTimeOffset now) =>
+    public static LivePrice For(AuctionEntry a, Guid? caller, string? label, DateTimeOffset now) =>
         caller is not null && a.LeaderBidderId == caller
-            ? ForLeader(a, alias, now)
-            : ForOthers(a, alias, now);
+            ? ForLeader(a, label, now)
+            : ForOthers(a, label, now);
 
     public static string Serialise<T>(T view) => JsonSerializer.Serialize(view, Json);
 }

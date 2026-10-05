@@ -55,6 +55,14 @@ public sealed record AuctionApproved : DomainEvent
     public int? QuietPeriodSeconds { get; init; }
     public required int MaxExtensions { get; init; }
     public required string Channel { get; init; }
+
+    /// <summary>
+    /// "Masked" or "Named" (D-22). On the public topic because the read path has to
+    /// know which label it may build, and because a bidder deciding whether to
+    /// register is entitled to know whether their name will be shown.
+    /// </summary>
+    public required string BidderVisibility { get; init; }
+
     public required int PlotCount { get; init; }
     public required decimal TotalAreaSqm { get; init; }
 

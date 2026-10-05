@@ -99,13 +99,16 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
                 'ar',
               )}
             </div>
-            {price?.leaderAlias && (
+            {price?.leaderLabel && (
               <div className="small" style={{ marginTop: 4 }}>
                 {price.leaderIsYou ? (
                   <strong style={{ color: 'var(--accent)' }}>أنت الأعلى حالياً</strong>
                 ) : (
-                  // D-22: the server sends a per-auction pseudonym and no identity.
-                  <span className="muted">المزايد الأعلى: مزايد {price.leaderAlias}</span>
+                  // Rendered exactly as sent. The label is a pseudonym on a masked
+                  // auction and a name on a named one (D-22), and the server decides
+                  // which — a portal that assembled it from parts would be a second
+                  // place for that decision to be wrong.
+                  <span className="muted">المزايد الأعلى: {price.leaderLabel}</span>
                 )}
               </div>
             )}
@@ -146,6 +149,15 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           </div>
         </div>
       </div>
+
+      {auction.bidderVisibility === 'Named' && (
+        // Said before the deposit, not after. The administrator may run an auction
+        // in which bidders are named to each other (D-22), and someone about to
+        // commit a hundred thousand riyals is entitled to know that first.
+        <div className="notice info">
+          في هذا المزاد يظهر اسم المزايد الأعلى لبقية المزايدين وللعامة.
+        </div>
+      )}
 
       {!session && (
         <div className="card">

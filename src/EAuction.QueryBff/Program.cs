@@ -30,10 +30,13 @@ builder.Services.AddSingleton<IEventStream>(
 
 builder.Services.AddSingleton<CatalogueState>();
 builder.Services.AddSingleton<BidderAliases>();
+builder.Services.AddSingleton<BidderNames>();
+builder.Services.AddSingleton<LeaderLabels>();
 builder.Services.AddSingleton<FanOut>();
 builder.Services.AddSingleton(sp => new CatalogueConsumer(
     sp.GetRequiredService<CatalogueState>(),
-    sp.GetRequiredService<BidderAliases>(),
+    sp.GetRequiredService<BidderNames>(),
+    sp.GetRequiredService<LeaderLabels>(),
     sp.GetRequiredService<FanOut>(),
     sp.GetRequiredService<IEventStream>(),
     sp.GetRequiredService<ILogger<CatalogueConsumer>>())
@@ -104,7 +107,7 @@ app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
 // ---------------------------------------------------------------------------
 
 app.MapGet("/auctions/{id:guid}/price", (
-    Guid id, HttpContext http, CatalogueState catalogue, BidderAliases aliases) =>
+    Guid id, HttpContext http, CatalogueState catalogue, LeaderLabels labels) =>
 {
     if (!catalogue.TryGet(id, out var a)) return Results.NotFound();
 
@@ -112,9 +115,8 @@ app.MapGet("/auctions/{id:guid}/price", (
     // themselves. Anonymous callers learn nothing, which is correct — "am I
     // winning" is not a question an anonymous caller can be asking.
     var caller = http.User.SubjectId();
-    var alias = a.LeaderBidderId is null ? null : aliases.For(a.AuctionId, a.LeaderBidderId.Value);
 
-    return Results.Ok(LiveViews.For(a, caller, alias, DateTimeOffset.UtcNow));
+    return Results.Ok(LiveViews.For(a, caller, labels.For(a), DateTimeOffset.UtcNow));
 }).AllowAnonymous();
 
 // ---------------------------------------------------------------------------
@@ -131,7 +133,7 @@ app.MapGet("/auctions/{id:guid}/price", (
 // ---------------------------------------------------------------------------
 
 app.MapGet("/auctions/{id:guid}/stream", async (
-    Guid id, HttpContext http, CatalogueState catalogue, BidderAliases aliases,
+    Guid id, HttpContext http, CatalogueState catalogue, LeaderLabels labels,
     FanOut fanOut, CancellationToken ct) =>
 {
     // Returns Task, not IResult, and sets its own status code.
@@ -164,12 +166,9 @@ app.MapGet("/auctions/{id:guid}/stream", async (
 
     if (catalogue.TryGet(id, out var entry))
     {
-        var alias = entry.LeaderBidderId is null
-            ? null
-            : aliases.For(entry.AuctionId, entry.LeaderBidderId.Value);
-
         await WriteEventAsync(http.Response, "snapshot",
-            LiveViews.Serialise(LiveViews.For(entry, caller, alias, DateTimeOffset.UtcNow)), ct);
+            LiveViews.Serialise(
+                LiveViews.For(entry, caller, labels.For(entry), DateTimeOffset.UtcNow)), ct);
     }
 
     // Verdicts this bidder may not have seen. A verdict is an event, not state, so

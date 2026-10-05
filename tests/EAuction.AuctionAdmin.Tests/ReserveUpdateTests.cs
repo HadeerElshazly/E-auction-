@@ -23,6 +23,7 @@ public class ReserveUpdateTests
             nameAr: nameAr,
             nameEn: "Updated",
             channel: BidChannel.Online,
+            bidderVisibility: BidderVisibility.Masked,
             startsAt: Now.AddDays(7),
             endsAt: Now.AddDays(8),
             openingPriceMinorUnits: 1_000_000_00,

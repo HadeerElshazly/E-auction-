@@ -247,7 +247,8 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit", 
     HttpContext http, Guid auctionId, Guid bidderId, PaymentRefRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, bidder, _) => s.ConfirmDepositPayment(r.PaymentRef, bidder, DateTimeOffset.UtcNow), http))
+        (s, bidder, terms) => s.ConfirmDepositPayment(
+            r.PaymentRef, bidder, terms, DateTimeOffset.UtcNow), http))
     // Money. A second factor, confirmed within the last few minutes.
     .RequireAuthorization(Policies.BidderStepUp);
 
@@ -263,7 +264,8 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/
     HttpContext http, Guid auctionId, Guid bidderId, VerifyGuaranteeRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, bidder, _) => s.VerifyBankGuarantee(r.VerifiedByUserId, bidder, DateTimeOffset.UtcNow),
+        (s, bidder, terms) => s.VerifyBankGuarantee(
+            r.VerifiedByUserId, bidder, terms, DateTimeOffset.UtcNow),
         http, staffAction: true))
     .RequireAuthorization(Policies.AuctionAdmin);
 
@@ -271,13 +273,14 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/revoke", (
     HttpContext http, Guid auctionId, Guid bidderId, RevokeRequest r,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.Revoke(r.Reason, DateTimeOffset.UtcNow), http, staffAction: true))
+        (s, bidder, terms) => s.Revoke(r.Reason, bidder, terms, DateTimeOffset.UtcNow),
+        http, staffAction: true))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key", (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
-    Mutate(f, auctionId, bidderId, ct, (s, _, _) => s.RotateKey(), http,
+    Mutate(f, auctionId, bidderId, ct, (s, bidder, terms) => s.RotateKey(bidder, terms), http,
         staffAction: http.User.IsInRole(Roles.AuctionAdmin)))
     .RequireAuthorization();
 

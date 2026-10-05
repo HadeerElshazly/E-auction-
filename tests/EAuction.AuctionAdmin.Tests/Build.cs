@@ -9,7 +9,9 @@ internal static class Build
     public static readonly Guid Committee = Guid.NewGuid();
 
     /// <summary>An auction that passes validation — the baseline to break from.</summary>
-    public static Auction ReadyAuction(DateTimeOffset now, int? quietSeconds = 120)
+    public static Auction ReadyAuction(
+        DateTimeOffset now, int? quietSeconds = 120,
+        BidderVisibility visibility = BidderVisibility.Masked)
     {
         var auction = Auction.CreateDraft(Admin, "أراضي مجمع السعيد قطعة 1", "Al-Saeed Plot 1");
 
@@ -17,6 +19,7 @@ internal static class Build
             nameAr: "أراضي مجمع السعيد قطعة 1",
             nameEn: "Al-Saeed Plot 1",
             channel: BidChannel.Online,
+            bidderVisibility: visibility,
             startsAt: now.AddDays(7),
             endsAt: now.AddDays(8),
             openingPriceMinorUnits: 1_000_000_00,

@@ -44,7 +44,8 @@ public class PreparationWorkflowTests
         // so it does nothing at all. Almost always a data entry slip.
         var auction = Build.ReadyAuction(Now);
         auction.UpdateDetails(
-            "اسم", "Name", BidChannel.Online, Now.AddDays(7), Now.AddDays(8),
+            "اسم", "Name", BidChannel.Online, BidderVisibility.Masked,
+            Now.AddDays(7), Now.AddDays(8),
             openingPriceMinorUnits: 1_000_000_00,
             reservePriceMinorUnits: 900_000_00,
             minIncrementMinorUnits: 50_000_00, depositMinorUnits: 100_000_00,
@@ -59,7 +60,8 @@ public class PreparationWorkflowTests
     {
         var auction = Build.ReadyAuction(Now);
         auction.UpdateDetails(
-            "اسم", "Name", BidChannel.Online, Now.AddDays(-1), Now.AddDays(8),
+            "اسم", "Name", BidChannel.Online, BidderVisibility.Masked,
+            Now.AddDays(-1), Now.AddDays(8),
             1_000_000_00, 1_500_000_00, 50_000_00, 100_000_00, 2.5m, 1_000_00, 120, 3);
 
         Assert.Contains(auction.Validate(Now), p => p.Contains("Start must be in the future"));
@@ -134,7 +136,8 @@ public class PreparationWorkflowTests
         auction.Approve(Now);
 
         Assert.Throws<InvalidAuctionTransitionException>(() =>
-            auction.UpdateDetails("x", "x", BidChannel.Online, Now.AddDays(9), Now.AddDays(10),
+            auction.UpdateDetails("x", "x", BidChannel.Online, BidderVisibility.Masked,
+                Now.AddDays(9), Now.AddDays(10),
                 1, 2, 1, 1, 0m, 0, null, 3));
 
         Assert.Throws<InvalidAuctionTransitionException>(() =>
