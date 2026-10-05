@@ -15,6 +15,7 @@ PASS_THROUGH=()
 for a in "$@"; do
   case "$a" in
     --keep-up) KEEP_UP=1 ;;
+    --built) ;;  # handled below; run-smoke.sh has no use for it
     *) PASS_THROUGH+=("$a") ;;
   esac
 done
@@ -31,6 +32,7 @@ cleanup() {
   for pid in "${PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
   # The dev servers and the services that run-services.sh started.
   pkill -f '[v]ite --port 300' 2>/dev/null
+  pkill -f '[v]ite preview --port 300' 2>/dev/null
   pkill -f 'bin/Release/net8.0/EAuction\.' 2>/dev/null
   wait 2>/dev/null
 }
@@ -53,10 +55,44 @@ say "Bringing up the stack…"
   (cd "$REPO/web" && npm install --no-audit --no-fund) || die "npm install failed"
 }
 
+# The Content-Security-Policy is injected at build and not by the dev server, so a
+# policy that broke the portals would pass a walk-through driven against `vite dev`.
+# --built builds both bundles and serves those instead, which is the only way this
+# suite sees the thing that actually ships.
+BUILT=0
+for a in "$@"; do [ "$a" = "--built" ] && BUILT=1; done
+
+# vite build bakes these in, and config.ts refuses to start a production bundle
+# without them. They are the same addresses the dev server's fallbacks use.
+export VITE_ISSUER="${SMOKE_ISSUER:-http://localhost:8080/realms/eauction}"
+export VITE_ADMIN_API="${VITE_ADMIN_API:-http://localhost:5101}"
+export VITE_PARTICIPANT_API="${VITE_PARTICIPANT_API:-http://localhost:5102}"
+export VITE_CATCHER_API="${VITE_CATCHER_API:-http://localhost:5103}"
+export VITE_QUERY_API="${VITE_QUERY_API:-http://localhost:5105}"
+
+if [ "$BUILT" = 1 ]; then
+  say "Building the portals…"
+  (cd "$REPO/web" && npm run build --silent) > "$RUN/web-build.log" 2>&1 \
+    || { tail -30 "$RUN/web-build.log"; die "the portals did not build"; }
+
+  for portal in bidder admin; do
+    grep -q 'Content-Security-Policy' "$REPO/web/$portal/dist/index.html" \
+      || die "$portal built without a Content-Security-Policy"
+  done
+  echo "  both bundles carry a Content-Security-Policy"
+fi
+
 say "Starting the portals…"
 start_portal() {
   local name="$1" port="$2"
-  (cd "$REPO/web" && npm run "dev:$name" --silent) > "$RUN/$name-web.log" 2>&1 &
+  if [ "$BUILT" = 1 ]; then
+    # --strictPort for the same reason the dev server uses it: the port is a
+    # registered redirect URI, so drifting to another one breaks every login.
+    (cd "$REPO/web/$name" && npx vite preview --port "$port" --strictPort) \
+      > "$RUN/$name-web.log" 2>&1 &
+  else
+    (cd "$REPO/web" && npm run "dev:$name" --silent) > "$RUN/$name-web.log" 2>&1 &
+  fi
   PIDS+=($!)
 
   for _ in $(seq 1 60); do
@@ -68,8 +104,8 @@ start_portal() {
 }
 start_portal bidder 3000
 start_portal admin 3001
-echo "  bidder  http://localhost:3000"
-echo "  admin   http://localhost:3001"
+echo "  bidder  http://localhost:3000$([ "$BUILT" = 1 ] && echo '  (built)')"
+echo "  admin   http://localhost:3001$([ "$BUILT" = 1 ] && echo '  (built)')"
 
 # --- the walk-through ------------------------------------------------------
 

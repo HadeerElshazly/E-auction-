@@ -298,9 +298,14 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
 
 // The bidder's signing secret, handed over once they are eligible.
 //
-// It is derived, not stored, so it never sits in a database or on a topic.
-// This endpoint must be authenticated as the bidder before any real use —
-// right now it is open, like everything else in this service.
+// It is derived, not stored, so it never sits in a database or on a topic. It is
+// also the single most dangerous value this service can emit: whoever holds it
+// can produce bids indistinguishable from the bidder's own, which is the entire
+// evidential value of signing them.
+//
+// Three locks, and the role policy below is the outermost of them rather than
+// the only one. An endpoint this sensitive should not be reachable because a
+// fallback policy happens to be configured somewhere else.
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/signing-key", async (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
@@ -322,7 +327,7 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/signing-key
         Convert.ToHexString(
             BidderKeys.Derive(bidderMasterKey, auctionId, bidderId, subscription.KeyEpoch)),
         subscription.KeyEpoch));
-});
+}).RequireAuthorization(Policies.Bidder);
 
 app.Run();
 

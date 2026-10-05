@@ -139,6 +139,13 @@ bidCatcher:
     - name: Catcher__BidderMasterKeyHex
       secretName: eauction-bidder-master-key
       secretKey: master-key-hex
+    # Signs bid receipts (D-21). A separate secret from the master key: it has a
+    # different blast radius — leaking it forges evidence, leaking the master key
+    # forges bids — and a receipt key can be rotated without invalidating every
+    # bidder's signing key.
+    - name: Catcher__ReceiptKeyHex
+      secretName: eauction-bid-receipt-key
+      secretKey: receipt-key-hex
 
   env:
     - name: ASPNETCORE_URLS

@@ -41,6 +41,22 @@ and the schema applied:
   dotnet ef database update --project src/EAuction.AuctionAdmin
 {{- end }}
 
+{{- if .Values.bidCatcher.enabled }}
+
+The bid catcher needs two secrets, and refuses to start in production without
+either. The master key must be IDENTICAL to the participant service's — both
+derive the same per-bidder signing key from it, which is why no secret ever
+travels on a topic (D-20):
+
+  kubectl -n {{ .Release.Namespace }} create secret generic eauction-bidder-master-key     --from-literal=master-key-hex=$(openssl rand -hex 32)
+
+  kubectl -n {{ .Release.Namespace }} create secret generic eauction-bid-receipt-key     --from-literal=receipt-key-hex=$(openssl rand -hex 32)
+
+The receipt key signs the proof a bidder gets back (D-21) and is deliberately
+separate: leaking it forges evidence, leaking the master key forges bids, and
+rotating one should not invalidate the other.
+{{- end }}
+
 Check the rollout:
 
   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/part-of=e-auction

@@ -142,6 +142,30 @@ public class ParticipantAuthTests : IDisposable
     }
 
     [Fact]
+    public async Task A_token_with_no_bidder_role_cannot_read_a_signing_key_even_its_own()
+    {
+        // The ownership check above would let this through: the subject matches. The
+        // role policy is the outer lock, and it is on the endpoint itself rather than
+        // inherited from a fallback configured in another file — an endpoint that
+        // hands out bid-signing credentials should not be one `FallbackPolicy` edit
+        // away from being open to any authenticated caller.
+        var response = await _factory.CreateClient()
+            .As(Sara, Roles.Operator)
+            .GetAsync(Sub(Sara, "/signing-key"));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_anonymous_caller_cannot_read_a_signing_key()
+    {
+        var response = await _factory.CreateClient().Anonymous()
+            .GetAsync(Sub(Sara, "/signing-key"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task A_bidder_cannot_drive_another_bidder_s_subscription()
     {
         var client = _factory.CreateClient().As(Khalid, Roles.Bidder);

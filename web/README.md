@@ -44,7 +44,35 @@ asserts that property so nobody replaces them with palindromic ones.
 a ref, fetches it on the first bid rather than at page load, and scopes it to one
 auction. It is still a secret in a browser heap: an XSS on that page can bid as the
 user while the tab lives. That is the cost of the bidder holding their own key, and
-it argues for a strict CSP in front of this bundle.
+it is why the bundle ships a strict Content-Security-Policy.
+
+**The CSP is built, not written.** `shared/vite-csp.ts` injects it into `index.html`
+at build time, deriving `connect-src` from the same `shared/src/endpoints.ts` table
+the runtime config reads — a hand-maintained second list would drift the first time
+a service moved, and the failure would appear in a bidder's browser rather than in a
+build. `script-src` is `'self'` with no `'unsafe-inline'` and no `'unsafe-eval'`,
+which is the directive the signing key actually depends on. `style-src` keeps
+`'unsafe-inline'` because both portals use React `style` attributes throughout; a
+concession on styles is not a concession on scripts.
+
+Two things a `<meta>` policy cannot do, and the portals are static bundles with no
+server of ours in front of them:
+
+- **`frame-ancestors` is ignored in a meta element.** Clickjacking protection needs
+  a response header from whatever serves `dist/` — `Content-Security-Policy:
+  frame-ancestors 'none'`, or `X-Frame-Options: DENY`. Not yet configured anywhere,
+  because nothing in this repository serves these bundles.
+- **`report-uri` is ignored too**, so violations are visible in a browser console
+  and nowhere else.
+
+The policy is injected only on a build, because the dev server's React Refresh
+preamble is an inline script and a policy strict enough to be worth shipping would
+stop `npm run dev` working. That leaves a gap the walk-through would not see, so
+`tools/smoke/run-portals.sh --built` serves the built bundles instead of the dev
+server and drives the same walk-through against them. A CSP violation surfaces as a
+console error, which `watchPage` already collects and the test already asserts to be
+empty — verified by building with a deliberately narrowed `connect-src` and watching
+it fail.
 
 **The access token never touches storage either.** `shared/src/useSession.ts` keeps
 it in React state. A refresh therefore loses it, so a cold load tries `prompt=none`

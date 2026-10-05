@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
@@ -159,9 +160,27 @@ public sealed class AuthenticatedFactory<TEntryPoint>
     /// </summary>
     public Action<IServiceCollection>? ConfigureServices { get; init; }
 
+    /// <summary>
+    /// Configuration the host sees, for settings read at startup rather than from
+    /// a service. A key the service reads once into a local — a signing key, a
+    /// master key — cannot be replaced by registering a different service
+    /// afterwards, so a test that wants to know which key was used has to set it
+    /// before the host is built.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?>? Settings { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+
+        // UseSetting, not ConfigureAppConfiguration. A minimal-API entry point reads
+        // builder.Configuration while its own Program body runs, which is before any
+        // source added here would be in place — so a configured value would be seen
+        // by services resolved later and missed by everything read at startup, which
+        // is exactly the kind of setting worth overriding in a test.
+        if (Settings is not null)
+            foreach (var (key, value) in Settings)
+                builder.UseSetting(key, value);
 
         builder.ConfigureTestServices(services =>
         {

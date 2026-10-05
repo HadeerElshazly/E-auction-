@@ -1780,7 +1780,8 @@ Worth recording because both would have passed for ever:
 - **No accessibility audit.** The portals use real labels and roles, which is what
   let the walk-through address them by name, but nothing has been checked against
   WCAG or a screen reader.
-- **No CSP.** The argument in `web/README.md` for one is not yet acted on.
+- ~~**No CSP.**~~ **Done** — see §26. The walk-through can now run against the
+  built bundles, which is the only way it sees the policy at all.
 
 ## 24. The push channel
 
@@ -2102,3 +2103,151 @@ whatever happened to be pending.
   the same PKCE settings; nothing has driven a step-up through it.
 - **No revocation path.** Nothing listens for back-channel logout, so a session
   ended at Keycloak keeps working here until the fifteen-minute token expires.
+
+## 26. An adversarial pass over the bid path
+
+Everything up to here was built by asking "does this work?". This section is the
+other question, asked of the path that takes money: the signing key in a
+browser's heap, the master key it is derived from, the CORS posture, the
+validated-token cache, the push channel, and the screen the catcher runs before
+it writes to the ledger.
+
+Six findings. Four are fixed below; two are recorded because fixing them
+honestly means changing something this stage of the project should not change
+unilaterally.
+
+### Fixed: the receipt key had a default, and the default was in the repository
+
+D-21 says a bidder gets back a signed receipt: proof that a bid of this amount
+was accepted at this time and landed at this offset. The catcher read
+`Catcher:ReceiptKeyHex` from configuration and, when it was unset, fell back to a
+32-byte constant written in `Program.cs`.
+
+Nothing set it. Not the chart, not Compose, not an appsettings file — so every
+deployment signed every receipt with a key published in git, and anyone could
+forge one. The master key beside it has had a production guard since it was
+written; the receipt key had none, which is how a security control ends up
+load-bearing and unconfigured at the same time.
+
+The guard now matches the master key's: required in production, random in
+development, and the chart and Compose both carry it. It is a *separate* secret
+from the master key on purpose — the blast radius differs (one forges evidence,
+the other forges bids) and one should be rotatable without the other.
+
+Three tests pin it, and the shape of them matters more than the count. The first
+reconstructs the signed bytes exactly as a holder of a receipt would have to,
+which also pins the receipt as something checkable by someone other than the
+catcher. The second asserts the retired constant does *not* verify. The third
+asserts two bids get different signatures — without it, a signature that had
+stopped covering the frame would pass the other two.
+
+### Fixed: `/dev/seed` could be turned on in production
+
+The catcher has an anonymous seeding endpoint for the load test, behind
+`Catcher:EnableDevSeed`, off by default. It takes a bidder's signing secret as a
+parameter — so anyone who could reach it could grant themselves the right to bid
+as anyone at all.
+
+A flag that a stray environment variable can flip is not a lock. Production now
+refuses to start with it set, which is the same two-lock shape the master key
+has.
+
+### Fixed: the portals had no Content-Security-Policy
+
+The bidder portal holds the bidder's bid-signing key in the tab's heap. That is
+a deliberate choice — the alternative, a server signing on the bidder's behalf,
+would mean no bid could ever be attributed to the bidder rather than to the
+platform — and `useSigningKey.ts` names a strict CSP as the mitigation. §23
+recorded that there was none. There is now.
+
+`shared/vite-csp.ts` builds it and injects it at build time, with `connect-src`
+derived from the same `endpoints.ts` table the runtime config reads: a
+hand-maintained second list drifts the first time a service moves, and the
+failure shows up in a bidder's browser rather than in a build. `script-src` is
+`'self'`, which is the directive the key actually depends on; `style-src` keeps
+`'unsafe-inline'` because both portals use React `style` attributes throughout,
+and a concession on styles is not a concession on scripts. `base-uri 'none'` is
+there because without it an injected `<base>` redirects every relative script URL
+elsewhere while `script-src 'self'` still passes.
+
+The policy had a verification problem of its own. It is injected only on a build
+— the dev server's React Refresh preamble is an inline script — so the browser
+walk-through, which drives `vite dev`, would never have seen it. The honest fix
+was to make the walk-through able to see it: `run-portals.sh --built` serves the
+built bundles instead. A CSP violation surfaces as a console error, which the
+page watcher already collects and the test already asserts to be empty. That was
+confirmed by building with a deliberately narrowed `connect-src` and watching the
+check fail with *Refused to connect to http://localhost:5105/auctions* — a check
+nobody has seen fail is not yet a check.
+
+Two things a `<meta>` policy cannot carry: `frame-ancestors` and `report-uri` are
+ignored there. Clickjacking protection still needs a response header from
+whatever serves the bundles, and nothing in this repository does.
+
+### Fixed: the most dangerous endpoint relied on a policy configured elsewhere
+
+`GET /signing-key` hands over the credential that signs bids. It checked that the
+caller is the bidder — correctly — but carried no `RequireAuthorization` of its
+own, relying on the `FallbackPolicy` set in `JwtSetup`. It also still carried a
+comment saying it was open, which had stopped being true.
+
+The role policy is now on the endpoint. Nothing was reachable that should not
+have been, so this is defence in depth rather than a hole closed: an endpoint
+that emits bid-signing credentials should not be one edit in another file away
+from being open to any authenticated caller.
+
+### Recorded, not fixed: the nonce is not checked by anything
+
+The frame carries a `nonce` and a `clientTimestamp` (§5), and D-20 describes the
+signature as giving "replay protection and non-repudiation". Nothing on the
+server reads either field. Replay protection is real, but it comes from
+somewhere else: the processor keeps the `clientBidId` of every frame it has seen
+and rejects a repeat as `DuplicateBidId`.
+
+That difference matters in one place. The processor's check happens *after* the
+frame is in the ledger — deliberately, because the ledger records what was
+received, not only what won — so a replayed frame costs a ledger entry and a
+round trip before it is refused. The per-bidder rate limit bounds how many.
+
+Two things keep this from being worth a server-side freshness check today. A
+replay needs the frame, and anyone holding the frame has broken TLS or the
+client, in which case they hold the signing key and can mint fresh frames
+instead. And the obvious check — reject a `clientTimestamp` far from now — is a
+clock dependency on a phone, which in a live auction means locking a bidder out
+of their own bidding war because their handset's clock is wrong.
+
+So the finding is honest documentation rather than code: **the nonce is
+vestigial**, D-20's replay protection is the processor's `clientBidId` set, and
+the next person to read that frame layout should not assume a field is checked
+because it is there.
+
+### Recorded, not fixed: three sharp edges that are deployment decisions
+
+- **The rate limit is per pod and runs after signature verification.** Three
+  catcher replicas mean three buckets, so the effective per-bidder ceiling is
+  three times the configured one; and a flood of frames with bad signatures is
+  not rate-limited at all, because the bucket is only reached once the signature
+  has passed. Each bad frame costs one HMAC, so this is an ingress concern rather
+  than a service one — but the configured number is not the real number, and the
+  values file does not say so.
+- **The push channel has no per-caller connection limit.** It is anonymous by
+  design, a public auction price is public, and the measurement in §24 puts
+  10,000 streams at 565 MiB. One client opening ten thousand of them costs the
+  same. The defence is a connection limit at the ingress, which nothing
+  configures.
+- **An auction-admin can rotate any bidder's key.** That is the point — a lost
+  phone needs it — but doing it mid-auction silently invalidates the key the
+  bidder's tab is holding, and their next bid is refused as `BadSignature` with
+  nothing on screen explaining why. It takes one administrator and no second
+  factor.
+
+### What the pass found about the tests
+
+One fault was in the test harness rather than in the system, and it would have
+quietly weakened any future test of a startup-time setting. The harness
+originally overrode configuration with `ConfigureAppConfiguration` — which adds a
+source *after* a minimal-API entry point has already read `builder.Configuration`
+in its own `Program` body. A test setting a key, a URL or a feature flag would
+have seen it ignored by everything read at startup and honoured by everything
+resolved later: the same test passing for the wrong reason. The harness uses
+`UseSetting`, which lands before the entry point runs.

@@ -39,9 +39,24 @@ var podOrdinal = builder.Configuration.GetValue("Catcher:PodOrdinal", 0);
 
 // Signs the receipt handed back to the bidder, so they can later prove their
 // bid was accepted at time T for amount X (D-21).
-var receiptKey = Convert.FromHexString(
-    builder.Configuration["Catcher:ReceiptKeyHex"]
-    ?? "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
+//
+// Guarded exactly like the master key above, and for the same reason. A receipt
+// is evidence; a receipt signed with a key that is in this file is evidence of
+// nothing, because anyone reading the repository can forge one. A committed
+// fallback would also fail silently — every receipt would verify, against the
+// wrong key, and nobody would find out until a bidder disputed a bid.
+var receiptKeyHex = builder.Configuration["Catcher:ReceiptKeyHex"];
+if (string.IsNullOrWhiteSpace(receiptKeyHex))
+{
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(
+            "Catcher:ReceiptKeyHex is required. Without it bid receipts would be signed "
+            + "with a key nobody set, and could not be used as evidence.");
+
+    receiptKeyHex = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+}
+
+var receiptKey = Convert.FromHexString(receiptKeyHex);
 
 builder.Services.AddSingleton(state);
 builder.Services.AddSingleton(bidLog);
@@ -86,10 +101,19 @@ app.MapGet("/health/ready", (ControlPlane control) =>
 // ---------------------------------------------------------------------------
 // Development only. In deployment this state arrives from the compacted topics
 // auctions.upcoming and auctions.participants; there is no write API for it.
-// Guarded by configuration so it cannot be reached in a real environment.
+//
+// Two locks, not one. The flag is off by default, and production refuses it even
+// when set: this endpoint is anonymous and takes a signing secret as an argument,
+// so anyone who could reach it could grant themselves the right to bid as anyone.
+// A flag that can be turned on by a stray environment variable is not a lock.
 // ---------------------------------------------------------------------------
 if (builder.Configuration.GetValue("Catcher:EnableDevSeed", false))
 {
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(
+            "Catcher:EnableDevSeed cannot be used in production: /dev/seed is anonymous "
+            + "and accepts a bidder's signing secret as a parameter.");
+
     app.MapPost("/dev/seed", (SeedRequest request) =>
     {
         var now = DateTimeOffset.UtcNow;
