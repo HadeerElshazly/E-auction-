@@ -14,6 +14,13 @@ public enum RejectionReason
     NotEligible,
     RateLimited,
     BelowMinimumIncrement,
+
+    /// <summary>
+    /// Below the auction's opening price, before any bid has been judged. Distinct
+    /// from <see cref="BelowMinimumIncrement"/> so a bidder is told the right thing:
+    /// there is no current price to raise, there is a floor they are under.
+    /// </summary>
+    BelowOpeningPrice,
     SelfOutbid,
     DuplicateBidId,
     AuctionClosed

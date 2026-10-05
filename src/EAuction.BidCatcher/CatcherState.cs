@@ -102,11 +102,21 @@ public sealed class CatcherState(byte[] bidderMasterKey)
         if (!bucket.TryTake(now))
             return RejectionReason.RateLimited;
 
+        // The floor is the opening price until the processor has judged a bid and
+        // published a winner. Without the else branch there is NO floor at all before
+        // the first verdict: a 1-halala bid on a million-riyal auction is accepted
+        // into the append-only ledger that is the legal record, and the only thing
+        // stopping a flood of them is the per-bidder rate limit. The opening price is
+        // in this service's own state and costs nothing to check.
         if (_currentPrice.TryGetValue(auctionId, out var price))
         {
             var required = price + auction.Increment.MinimumRaise(price);
             if (BidFrame.Amount(frame) < required)
                 return RejectionReason.BelowMinimumIncrement;
+        }
+        else if (BidFrame.Amount(frame) < auction.OpeningPriceMinorUnits)
+        {
+            return RejectionReason.BelowOpeningPrice;
         }
 
         return RejectionReason.None;

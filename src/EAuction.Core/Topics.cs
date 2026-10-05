@@ -30,6 +30,15 @@ public static class Topics
 
     public const string Deposits = "auctions.deposits";
 
+    /// <summary>
+    /// Booklet and deposit payments, from the participant service. Nothing consumes
+    /// it yet — payment reconciliation and finance reporting will. It is here rather
+    /// than in the router that publishes to it because a topic name that lives in one
+    /// service's string constant is invisible to the provisioning tool, and an
+    /// unprovisioned topic stalls that service's entire outbox.
+    /// </summary>
+    public const string ParticipantPayments = "participants.payments";
+
     /// <summary>Compacted. Current price per auction, for the catcher and the fan-out.</summary>
     public const string CurrentWinner = "auctions.current-winner";
 

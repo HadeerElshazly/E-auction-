@@ -1465,3 +1465,114 @@ maps to the same 409 instead of a 500.
   do not inspect `acr`. This is the largest remaining gap in §9.
 - Keycloak behind the chart's issuer URL. The chart points at an external
   issuer by design and was not run against a clustered Keycloak.
+
+## 21. The smoke test, and the seven faults it found
+
+`tools/smoke/run-smoke.sh` drives one complete auction through all four services
+against real Keycloak, real Kafka and real Postgres — 33 checks, no stubs, no
+state seeded behind a service's back. `tools/smoke/README.md` has the walk-through
+and how to run it.
+
+It exists for the faults that live *between* services, where each side is
+separately correct and the suite is green. Every one of the following was found by
+running it, after 190 tests passed.
+
+### D-26: the catcher's price floor before the first verdict
+
+The screen applied a floor only when `auctions.current-winner` had already given it
+a price, and that topic is empty until the processor judges the first bid. So for
+the opening moments of every auction there was **no floor at all**: a bid of one
+halala on a million-riyal auction was accepted, signed, and appended to the
+hash-chained ledger that is the legal record of the sale.
+
+The processor would never have let it win. But "keep junk out of the log" is the
+screen's stated purpose, the ledger is evidence, and the opening price was sitting
+in the catcher's own `AuctionDefinition` the whole time. The floor is now the
+opening price until a verdict exists, with `BelowOpeningPrice` as its own rejection
+reason so a bidder is told the right thing. It is still checked *after* eligibility:
+the difference between `BelowOpeningPrice` and `NotEligible` would otherwise let
+anyone with a token binary-search the opening price of an auction they are not in.
+
+### D-27: topics are provisioned, never auto-created
+
+Nothing created the control topics. Five of them must be compacted, and an
+auto-created topic gets `cleanup.policy=delete` — which works perfectly until
+retention expires, at which point a restarting bid-catcher replays a topic with
+the eligibility rows aged out of it, comes up *warm* with empty state, and rejects
+every bid in the auction. Nothing logs an error, because from Kafka's point of view
+nothing is wrong.
+
+`ControlTopics.All` in `EAuction.Core` now holds every control topic with the shape
+it needs and why, and `tools/topics` creates (or `--verify`s) them from that list.
+Brokers should run with `auto.create.topics.enable=false`.
+
+`auctions.lifecycle` is explicitly **not** compacted. The processor recovers by
+replaying `AuctionStarted`, `AuctionClosed` and `CandidateOffered`, all keyed by
+auction id, so compaction would erase the history it recovers from and the
+processor would re-announce work consumers had already seen.
+
+### One unprovisioned topic stalled an entire service
+
+`participants.payments` existed only as a string constant inside the participant
+service's own router, so it was invisible to anything that might have created it.
+The outbox relay is ordered and cannot skip a failing message without losing
+ordering — correctly — so that one missing topic stalled the whole relay. Both
+bidders reported `Eligible` through the participant API while the catcher never
+learned either of them existed.
+
+The name moved into `Topics`, and `ControlTopicsTests` now fails the build if any
+topic declared there is missing from `ControlTopics.All`. The class of bug is worth
+naming: a topic name that lives in one service's constant is a topic nothing
+provisions.
+
+### D-28: migrations are a step, not a startup side effect
+
+No service applied its own migrations; only the test fixtures did, so a fresh
+deployment started against an empty database and every write failed with
+`relation "outbox" does not exist`. Doing it at startup would be worse — several
+replicas would race, and a schema change would run while the previous version was
+still serving. `tools/migrate` is the step a Helm `pre-install`/`pre-upgrade` hook
+or a Kubernetes Job runs once, before the new pods roll. It reports pending
+migrations before applying them and is a no-op when current.
+
+### `min.insync.replicas` must follow the replication factor
+
+The bid-topic creation hard-coded `min.insync.replicas=2` while the replication
+factor was configurable. With `acks=all` that makes **every bid fail** with
+`NOT_ENOUGH_REPLICAS` on any single-broker cluster — which is exactly what a small
+client, a pilot, or a test environment is. It is now `max(1, replication - 1)`,
+still 2 on the three-broker cluster the chart defaults to.
+
+### The API could not round-trip its own responses
+
+Responses serialised enums as names (`"Online"`, `"Eligible"`) while request
+binding accepted only the ordinal, so a portal that read an auction and PUT it back
+got a 400. Both services now register `JsonStringEnumConverter`, which still
+accepts numbers — this widens the contract rather than changing it.
+
+`AuctionResponse` also exposed `PendingCandidateBidderId` without
+`PendingCandidateAmountMinorUnits`, which would have asked the award committee to
+approve a sum it could not see.
+
+### What the smoke test deliberately does not assert
+
+That the catcher refuses a bid below the *current* price. Its price view is
+milliseconds stale by design, so it may accept one; the check allows either
+outcome and, when the catcher accepts, waits for the processor's `BidRejected`.
+This is D-03 working as intended — the catcher is a cheap filter, the processor is
+the judge — and asserting otherwise would have encoded a race as a requirement.
+
+### Still not verified
+
+- A multi-broker cluster. Replication, leader failover and the ISR behaviour above
+  are reasoned about, not measured; `tools/topics` refuses a replication factor
+  larger than the cluster, which is the only part that is checked.
+- Debezium as the outbox transport. The smoke test runs the in-process polling
+  relay; the Debezium connector config exists but the two were never compared.
+- The cascade path end to end. `DisqualifyWinner` → next candidate is covered by
+  48 unit tests in the admin service but the smoke test stops at the first award.
+- The `acr` step-up check at KYC, deposit and award acceptance — still the largest
+  gap in §9.
+- Anything in the chart. The smoke test runs the services directly, so the Helm
+  templates, the migration hook that should run `tools/migrate`, and the topic
+  provisioning Job are all still unexercised.

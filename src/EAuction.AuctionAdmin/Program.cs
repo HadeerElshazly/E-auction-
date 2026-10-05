@@ -57,6 +57,14 @@ var complianceWindow = TimeSpan.FromDays(
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
 
+// Enums as names, both ways. Responses already hand back "Online" and "Eligible" as
+// strings, so without this a portal cannot PUT back what it just read: the request
+// side would only accept the ordinal. The converter still accepts numbers, so this
+// widens the contract rather than changing it.
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
 var app = builder.Build();
 
 app.UseAuthentication();
@@ -274,7 +282,10 @@ public sealed record AuctionResponse(
     int? QuietPeriodSeconds, int MaxExtensions,
     Guid? BookletDocumentId, Guid? CoverImageDocumentId,
     int PlotCount, decimal TotalAreaSqm, string? RejectionReason,
-    Guid? PendingCandidateBidderId, AwardResponse? CurrentAward)
+    // Both halves of the pending candidate. The id alone would ask the committee to
+    // approve an unknown sum.
+    Guid? PendingCandidateBidderId, long? PendingCandidateAmountMinorUnits,
+    AwardResponse? CurrentAward)
 {
     public static AuctionResponse From(Auction a) => new(
         a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(), a.Phase,
@@ -282,7 +293,7 @@ public sealed record AuctionResponse(
         a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
         a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,
         a.Plots.Count, a.TotalAreaSqm, a.RejectionReason,
-        a.PendingCandidateBidderId,
+        a.PendingCandidateBidderId, a.PendingCandidateAmountMinorUnits,
         a.CurrentAward is null ? null : AwardResponse.From(a.CurrentAward));
 }
 

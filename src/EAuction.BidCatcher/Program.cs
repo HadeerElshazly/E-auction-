@@ -109,10 +109,11 @@ if (builder.Configuration.GetValue("Catcher:EnableDevSeed", false))
 // ---------------------------------------------------------------------------
 // The hot path.
 //
-// Nothing below makes a network call to another service. JWT verification
-// (D-19) belongs between the read and the screen, against cached JWKS —
-// offline, no call to Keycloak. It is not wired in this slice; the HMAC
-// signature (D-20) is, and is what binds the bid to the bidder.
+// Nothing below makes a network call to another service. JWT verification (D-19)
+// happens in the authentication middleware above, offline against cached JWKS with
+// a validated-token cache in front of it — no call to Keycloak, per request or ever,
+// on this path. The HMAC signature (D-20) is what binds the bid to the bidder, and
+// the token is what binds the caller to the bidder id in the frame.
 // ---------------------------------------------------------------------------
 app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
 {

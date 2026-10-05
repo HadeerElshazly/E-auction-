@@ -9,7 +9,7 @@ namespace EAuction.Participant.Integration;
 /// </summary>
 public sealed class ParticipantOutboxRouter : IOutboxRouter
 {
-    public const string Payments = "participants.payments";
+    public const string Payments = Topics.ParticipantPayments;
 
     public string? Resolve(string aggregateType) => aggregateType switch
     {

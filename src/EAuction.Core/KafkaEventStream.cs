@@ -12,10 +12,9 @@ public sealed record KafkaEventStreamOptions
 /// Kafka-backed control-plane stream.
 /// </summary>
 /// <remarks>
-/// NOT YET EXERCISED AGAINST A LIVE BROKER — no Docker daemon in the build
-/// environment. Behaviour is validated through <see cref="InMemoryEventStream"/>,
-/// which mirrors the same ordering contract. Run this against a real cluster
-/// before deployment.
+/// Exercised against a live single-node broker by EAuction.Kafka.Tests (which skip
+/// without KAFKA_BOOTSTRAP) and by the end-to-end smoke test. Not yet run against a
+/// multi-broker cluster, so replication and leader failover are still unverified.
 /// </remarks>
 public sealed class KafkaEventStream(KafkaEventStreamOptions options) : IEventStream
 {

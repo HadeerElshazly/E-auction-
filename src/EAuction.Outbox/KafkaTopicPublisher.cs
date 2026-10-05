@@ -64,7 +64,14 @@ public sealed class KafkaTopicPublisher : ITopicPublisher, IDisposable
                         // Bids are the legal record: never compact, never age
                         // out on a schedule shorter than retention allows.
                         ["cleanup.policy"] = "delete",
-                        ["min.insync.replicas"] = "2"
+
+                        // Derived, not fixed at 2. A fixed 2 with acks=all makes
+                        // every single-broker install reject every bid with
+                        // NOT_ENOUGH_REPLICAS — and a small client or a test
+                        // environment is exactly a single-broker install. On a
+                        // three-broker cluster this is still 2.
+                        ["min.insync.replicas"] =
+                            Math.Max(1, _options.ReplicationFactor - 1).ToString()
                     }
                 }
             });

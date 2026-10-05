@@ -62,6 +62,14 @@ builder.Services.AddHostedService<CatalogConsumer>();
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
 
+// Enums as names, both ways. Responses already hand back "Online" and "Eligible" as
+// strings, so without this a portal cannot PUT back what it just read: the request
+// side would only accept the ordinal. The converter still accepts numbers, so this
+// widens the contract rather than changing it.
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter()));
+
 var app = builder.Build();
 
 app.UseAuthentication();
