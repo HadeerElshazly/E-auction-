@@ -5,6 +5,7 @@ using EAuction.Participant.Integration;
 using EAuction.Participant.Persistence;
 using EAuction.Security;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
@@ -80,23 +81,45 @@ app.MapGet("/health/ready", async (IDbContextFactory<ParticipantDbContext> f, Ca
 // integration itself is not built, so this endpoint stands in for its
 // callback and must be gated before any real use.
 app.MapPost("/bidders/register", async (
-    HttpContext http, NafathAssertionRequest r,
+    HttpContext http,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
-    // The identity comes from the token, which Keycloak issued after Nafath
-    // verified it. Taking it from the request body would let anyone register
-    // as anyone.
+    // Every field comes from the token and the endpoint takes no body, because a
+    // body is a place a caller could put someone else's national ID. Keycloak put
+    // these claims there after Nafath verified them; see deploy/keycloak/README.md
+    // for the mappers that produce them.
     var subject = http.User.SubjectId();
     if (subject is null) return Results.Forbid();
 
-    var nationalId = http.User.FindFirst("national_id")?.Value ?? r.NationalId;
-    var nameAr = http.User.FindFirst("name_ar")?.Value ?? r.NameAr;
-    var nameEn = http.User.FindFirst("name")?.Value ?? r.NameEn;
+    var nationalId = http.User.FindFirst("national_id")?.Value;
+    if (string.IsNullOrWhiteSpace(nationalId))
+        return Results.Json(
+            new { problems = new[] { "The token carries no national_id claim. A bidder "
+                                   + "must reach this endpoint through Nafath." } },
+            statusCode: 403);
+
+    var nameAr = http.User.FindFirst("name_ar")?.Value ?? "";
+    var nameEn = http.User.FindFirst("name")?.Value ?? "";
 
     await using var db = await f.CreateDbContextAsync(ct);
 
     var existing = await db.Bidders.FindAsync(new object?[] { subject.Value }, ct);
     if (existing is not null) return Results.Ok(BidderResponse.From(existing));
+
+    // The same national ID under a different subject. A Keycloak account deleted and
+    // re-brokered gives the same citizen a new sub, and this is where that lands.
+    // It cannot create a second bidder: a deposit, a signing key, a subscription and
+    // a ladder position all hang off Bidder.Id, so two rows for one person would mean
+    // two places in the same auction. Nor can it quietly move the row to the new
+    // subject -- that is an account takeover if the claim is ever wrong. Operations
+    // re-link it deliberately.
+    if (await db.Bidders.AnyAsync(b => b.NationalId == nationalId, ct))
+        return Results.Conflict(new
+        {
+            reason = "NationalIdAlreadyRegistered",
+            problems = new[] { "This national ID is registered to a different account. "
+                             + "It has to be re-linked before this one can be used." }
+        });
 
     try
     {
@@ -109,6 +132,20 @@ app.MapPost("/bidders/register", async (
     catch (ParticipantValidationException ex)
     {
         return Results.BadRequest(new { problems = ex.Problems });
+    }
+    catch (DbUpdateException e) when (e.InnerException is PostgresException
+    {
+        SqlState: PostgresErrorCodes.UniqueViolation
+    })
+    {
+        // Two registrations for one national ID in flight at once: the check above
+        // passed for both and the index caught the loser. Same answer, not a 500.
+        return Results.Conflict(new
+        {
+            reason = "NationalIdAlreadyRegistered",
+            problems = new[] { "This national ID is registered to a different account. "
+                             + "It has to be re-linked before this one can be used." }
+        });
     }
 }).RequireAuthorization();
 
@@ -318,7 +355,6 @@ static async Task<IResult> Mutate(
 // Not `public partial class Program;` — it would collide with the other
 // services' Program in a test assembly referencing more than one.
 
-public sealed record NafathAssertionRequest(string NationalId, string NameAr, string NameEn);
 public sealed record CompleteProfileRequest(string Phone, string Email);
 public sealed record StartSubscriptionRequest(Guid BidderId);
 public sealed record PaymentRefRequest(string PaymentRef);

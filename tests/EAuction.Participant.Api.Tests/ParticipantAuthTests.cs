@@ -1,6 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using EAuction.Participant.Persistence;
 using EAuction.Security;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using EAuction.TestSupport;
 using Xunit;
 
@@ -22,6 +26,13 @@ public class ParticipantAuthTests : IDisposable
     private static readonly Guid Khalid = Guid.NewGuid();
     private static readonly Guid AuctionId = Guid.NewGuid();
 
+    /// <summary>
+    /// National ID is uniquely indexed and the test database outlives a run, so a
+    /// fixed value collides with the row the last run left behind.
+    /// </summary>
+    private static string FreshNationalId() =>
+        "1" + Random.Shared.NextInt64(100_000_000, 999_999_999);
+
     private string Sub(Guid bidder, string suffix = "") =>
         $"/auctions/{AuctionId}/subscriptions/{bidder}{suffix}";
 
@@ -32,6 +43,76 @@ public class ParticipantAuthTests : IDisposable
             .PostAsJsonAsync("/bidders/register", new { nationalId = "1", nameAr = "a", nameEn = "b" });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Registration_refuses_a_token_that_carries_no_national_id()
+    {
+        // A valid token is not enough. Without the Nafath claim there is no verified
+        // identity to register, and the endpoint must not fall back to anything the
+        // caller supplies.
+        var response = await _factory.CreateClient().As(Sara, Roles.Bidder)
+            .PostAsJsonAsync("/bidders/register", new { });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Registration_ignores_a_national_id_in_the_request_body()
+    {
+        // The hole this closes: the endpoint used to read the body when the claim was
+        // absent, so any bidder could register under anyone's national ID. It now
+        // takes no body at all, and a body naming someone else changes nothing.
+        var mine = FreshNationalId();
+        var client = _factory.CreateClient().WithToken(
+            TestJwt.FromNafath(Sara, mine, "سارة", "Sara", Roles.Bidder));
+
+        var response = await client.PostAsJsonAsync(
+            "/bidders/register", new { nationalId = "9999999999", nameAr = "x", nameEn = "y" });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(Sara, body.GetProperty("id").GetGuid());
+
+        // And the identity stored is the token's, not the body's. NationalId is not on
+        // the response (PDPL), so ask the endpoint that reports verification instead:
+        // registering again is idempotent and must still return the same bidder.
+        var again = await client.PostAsJsonAsync(
+            "/bidders/register", new { nationalId = "9999999999" });
+        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+
+        var stored = _factory.Services
+            .GetRequiredService<IDbContextFactory<ParticipantDbContext>>();
+        await using var db = await stored.CreateDbContextAsync();
+        var bidder = await db.Bidders.FindAsync(Sara);
+        Assert.NotNull(bidder);
+        Assert.Equal(mine, bidder!.NationalId);
+        Assert.Equal("سارة", bidder.NameAr);
+    }
+
+    [Fact]
+    public async Task One_national_id_cannot_become_two_bidders()
+    {
+        // A Keycloak account deleted and re-brokered hands the same citizen a new
+        // subject. Letting that register a second bidder would put one person twice
+        // in the same auction, with two deposits and two signing keys.
+        var sharedId = FreshNationalId();
+
+        var first = await _factory.CreateClient()
+            .WithToken(TestJwt.FromNafath(Guid.NewGuid(), sharedId, "خالد", "Khalid", Roles.Bidder))
+            .PostAsJsonAsync("/bidders/register", new { });
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+
+        var second = await _factory.CreateClient()
+            .WithToken(TestJwt.FromNafath(Guid.NewGuid(), sharedId, "خالد", "Khalid", Roles.Bidder))
+            .PostAsJsonAsync("/bidders/register", new { });
+
+        // A conflict the caller can act on, not the unique-index violation this used
+        // to surface as a 500.
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        var body = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("NationalIdAlreadyRegistered", body.GetProperty("reason").GetString());
     }
 
     [Fact]

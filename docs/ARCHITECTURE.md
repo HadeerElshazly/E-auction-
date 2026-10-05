@@ -1364,3 +1364,104 @@ more, and that has not been measured. If it stops fitting, the next move is
 terminating JWT validation at the Envoy ingress so the catcher reads a trusted
 header — which moves the cost rather than removing it, but moves it somewhere
 that scales independently of the bid path.
+
+## 20. The Keycloak realm, against a real Keycloak
+
+§19 built the token handling and tested it against a locally minted token. That
+proved the handler; it could not prove the realm, because the realm did not
+exist yet. `deploy/keycloak/eauction-realm.json` is it, and running it surfaced
+two things the test suite could not have.
+
+### What the realm defines
+
+Realm `eauction`, bilingual with Arabic as the default locale, 15-minute access
+tokens, `registrationAllowed: false`, brute-force protection on. Realm roles
+`bidder`, `auction-admin`, `award-committee`, `operator` — realm rather than
+client roles, because a bidder is a bidder across the web portal, the mobile app
+and the onsite terminal alike. Three public clients, each requiring PKCE `S256`:
+`bidder-web`, `bidder-mobile`, `admin-web`. Four dev users, one per role.
+
+Nafath is deliberately absent. It needs a client id and secret issued by Elm/NIC
+under contract, and a secret does not belong in git.
+`deploy/keycloak/README.md` carries the identity-provider shape it takes and the
+two attribute mappers it must produce.
+
+### D-24: the extra claims ride on the clients, not on a realm client scope
+
+The realm adds three claims: `aud: eauction` (all clients), and `national_id`
+and `name_ar` (bidder clients only — staff are local users, not brokered
+citizens). The obvious way to do that is a realm-level `clientScopes` array
+holding two custom scopes.
+
+That is wrong, and silently so. **A realm-level `clientScopes` array replaces
+Keycloak's built-in scopes rather than adding to them.** The realm came up
+holding exactly three scopes — the two custom ones and `offline_access` — with
+no `basic` and no `roles`. Tokens were then issued happily, and carried:
+
+```json
+{ "aud": "eauction", "national_id": "1012345678", "name_ar": "سارة الحربي" }
+```
+
+No `sub`, and no `realm_access.roles`. Every `[Authorize]` in the platform
+would have refused every caller, and `SubjectId()` would have returned null on
+a token that validated perfectly. The import logged no warning. The only thing
+that showed it was decoding a token.
+
+So the three mappers are attached to the clients directly and Keycloak keeps
+its own defaults. The cost is the audience mapper repeated three times; the
+alternative was a realm that cannot authorize anybody.
+
+Verified against Keycloak 26.0.7 — all four dev users, both bidder clients and
+the admin client:
+
+| user | client | `sub` | `aud` | `realm_access.roles` | `national_id` | `name_ar` |
+|---|---|---|---|---|---|---|
+| sara | bidder-web | ✓ | eauction | `[bidder]` | 1012345678 | سارة الحربي |
+| khalid | bidder-web | ✓ | eauction | `[bidder]` | 1087654321 | خالد العتيبي |
+| admin-user | admin-web | ✓ | eauction | `[auction-admin]` | — | — |
+| committee-user | admin-web | ✓ | eauction | `[award-committee]` | — | — |
+
+### A realm import is not idempotent
+
+Against an existing realm, Keycloak logs "already exists", keeps the old realm,
+and the edited file has no effect. `deploy/keycloak/run-local.sh` wipes the
+dev database before importing for that reason, and validates the realm file
+first: the import rejects any field Keycloak does not know — including a key
+added as a comment, which is how the first version of the file failed — and
+that failure takes down the whole server start, 40 seconds in.
+
+### The registration hole, closed
+
+`POST /bidders/register` read `national_id` from the token **with a fallback to
+the request body**. Anyone holding a valid bidder token could register under
+anyone's national ID. The endpoint now takes no body at all; every field comes
+from the token, and a token without `national_id` is refused with 403 rather
+than registering a bidder with no verified identity. Both halves are pinned by
+tests that were confirmed to fail when the fallback is put back.
+
+### D-25: one national ID is one bidder, and a collision is a 409
+
+Closing that hole exposed a defect underneath it. `NationalId` is uniquely
+indexed, and the endpoint only checked for an existing row by *subject*. A
+Keycloak account deleted and re-brokered hands the same citizen a new `sub`, so
+the insert hit the index and the caller got a **500** — leaking the constraint
+name and leaving that person permanently unable to register.
+
+It cannot create a second bidder: a deposit, a signing key, a subscription and
+a ladder position all hang off `Bidder.Id`, so two rows for one person means one
+person standing twice in the same auction. Nor should it quietly move the row to
+the new subject — that is an account-takeover primitive if the claim is ever
+wrong, and `Bidder.Id` is an input to the signing-key derivation, so moving it
+silently re-keys their bids. It now answers `409 NationalIdAlreadyRegistered`,
+and operations re-link the account deliberately. The in-flight race is caught
+too: a concurrent pair both pass the pre-check, and the loser's unique violation
+maps to the same 409 instead of a 500.
+
+### Still not verified
+
+- The Nafath identity provider itself — no contract, so no endpoints to point at.
+- The `acr` step-up check at KYC, deposit and award acceptance. The realm can
+  express the flow; the three endpoints still require only the `bidder` role and
+  do not inspect `acr`. This is the largest remaining gap in §9.
+- Keycloak behind the chart's issuer URL. The chart points at an external
+  issuer by design and was not run against a clustered Keycloak.

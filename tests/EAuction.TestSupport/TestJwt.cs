@@ -46,6 +46,21 @@ public static class TestJwt
     public static string For(Guid subject, params string[] realmRoles) =>
         Build(subject, realmRoles, DateTime.UtcNow.AddMinutes(15));
 
+    /// <summary>
+    /// A token shaped like one Keycloak issues after a Nafath login: it carries the
+    /// identity claims the <c>nafath-identity</c> mappers produce. Registration
+    /// accepts nothing else, so a test that registers a bidder needs this and not
+    /// <see cref="For"/>.
+    /// </summary>
+    public static string FromNafath(
+        Guid subject, string nationalId, string nameAr, string nameEn,
+        params string[] realmRoles) =>
+        Write(subject, realmRoles, DateTime.UtcNow.AddMinutes(15), DateTime.UtcNow,
+            new SigningCredentials(Key, SecurityAlgorithms.HmacSha256),
+            new Claim("national_id", nationalId),
+            new Claim("name_ar", nameAr),
+            new Claim("name", nameEn));
+
     /// <summary>A token that has already expired, for testing that lifetime is checked.</summary>
     public static string Expired(Guid subject, params string[] realmRoles) =>
         Build(subject, realmRoles, DateTime.UtcNow.AddMinutes(-5), DateTime.UtcNow.AddMinutes(-10));
@@ -67,7 +82,7 @@ public static class TestJwt
 
     private static string Write(
         Guid subject, string[] realmRoles, DateTime expires, DateTime notBefore,
-        SigningCredentials credentials)
+        SigningCredentials credentials, params Claim[] extra)
     {
         var claims = new List<Claim>
         {
@@ -78,6 +93,7 @@ public static class TestJwt
                 JsonSerializer.Serialize(new { roles = realmRoles }),
                 JsonClaimValueTypes.Json)
         };
+        claims.AddRange(extra);
 
         var token = new JwtSecurityToken(
             issuer: Issuer, audience: Audience, claims: claims,
