@@ -190,3 +190,9 @@ tbody tr:hover { background: var(--bg); }
     display: none !important;
   }
 }
+
+/* The clerk's own user id in the portal header (§29). Not `.who`: that class is
+   the one identifying span a test can rely on, and a second match breaks it. */
+.bar .ltr-id {
+  margin-inline-end: 12px;
+}

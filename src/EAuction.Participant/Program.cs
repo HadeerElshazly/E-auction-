@@ -284,6 +284,38 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key
         staffAction: http.User.IsInRole(Roles.AuctionAdmin)))
     .RequireAuthorization();
 
+// The roster a clerk works from: who in the room is allowed to bid (§29).
+//
+// Staff only, and deliberately narrow — the eligible bidders and their names, no
+// deposit history, no payment references, no national id. A clerk picking a bidder
+// off a list needs to know who they are, and nothing else here is their business.
+//
+// It names people regardless of the auction's masking setting (D-22). That setting
+// governs what bidders and the public see of each other; a hall auction's clerk is
+// the person typing on their behalf and cannot do it from pseudonyms.
+app.MapGet("/auctions/{auctionId:guid}/subscriptions", async (
+    Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var roster = await db.Subscriptions
+        .Where(s => s.AuctionId == auctionId && s.Status == SubscriptionStatus.Eligible)
+        .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s.BidderId, b.NameAr })
+        .OrderBy(x => x.NameAr)
+        .ToListAsync(ct);
+
+    return Results.Ok(new
+    {
+        items = roster.Select((x, i) => new RosterEntry(
+            x.BidderId,
+            x.NameAr,
+            // A paddle number, so a clerk can work from what the room is holding up
+            // rather than reading a name off a screen. Positional and stable only
+            // for as long as the roster is: it is a convenience, not an identifier.
+            i + 1))
+    });
+}).RequireAuthorization(Policies.StaffOnTheFloor);
+
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
@@ -396,6 +428,9 @@ public sealed record BidderResponse(
     public static BidderResponse From(Bidder b) => new(
         b.Id, b.NameAr, b.NameEn, b.Phone, b.Email, b.IsVerified, b.IsProfileComplete);
 }
+
+/// <summary>One eligible bidder, as the clerk's terminal lists them.</summary>
+public sealed record RosterEntry(Guid BidderId, string NameAr, int PaddleNumber);
 
 public sealed record SubscriptionResponse(
     Guid Id, Guid AuctionId, Guid BidderId, string Status,

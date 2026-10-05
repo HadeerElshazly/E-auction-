@@ -17,6 +17,9 @@ PG="${SMOKE_PG:-Host=localhost;Username=eauction;Password=eauction}"
 WITH_DEPS=0
 for a in "$@"; do [ "$a" = "--with-deps" ] && WITH_DEPS=1; done
 
+KEEP_DATA=0
+for a in "$@"; do [ "$a" = "--keep-data" ] && KEEP_DATA=1; done
+
 # One master key for both the participant and the catcher. They derive the same
 # per-bidder secret from it independently, so no secret is ever published (D-18).
 MASTER_KEY="${SMOKE_MASTER_KEY:-$(openssl rand -hex 32)}"
@@ -52,11 +55,30 @@ if [ "$WITH_DEPS" = 1 ]; then
     echo "  Keycloak already up"
   fi
 
+  # The broker is wiped on the same terms as the databases, and for a stronger
+  # reason than hygiene.
+  #
+  # Auctions live on compacted topics, so every run's auctions are still there on
+  # the next one and the processor replays all of them. An ONSITE auction makes
+  # that cumulative rather than merely untidy: nothing closes one on a clock (§29),
+  # so each run leaves another permanently-running auction behind, and after a
+  # handful of runs the processor is driving a crowd of them and a new auction's
+  # AuctionStarted arrives too late for the walk-through to see. That is a real
+  # failure with a confusing message, and it took wiping the broker by hand to see
+  # what it was.
+  #
+  # run-local-broker.sh clears its data directory on start but refuses to restart a
+  # running broker, so stopping first is what actually resets it.
+  if [ "$KEEP_DATA" = 0 ]; then
+    "$REPO/tools/kafka/run-local-broker.sh" stop >/dev/null 2>&1 || true
+    sleep 2
+  fi
+
   if ! (exec 3<>/dev/tcp/${KAFKA%%:*}/${KAFKA##*:}) 2>/dev/null; then
     say "Starting Kafka…"
     "$REPO/tools/kafka/run-local-broker.sh" start || die "Kafka did not start"
   else
-    echo "  Kafka already up"
+    echo "  Kafka already up (--keep-data)"
   fi
 
   if ! pg_isready -q 2>/dev/null; then
@@ -94,9 +116,6 @@ echo "  Kafka      $KAFKA"
 # carried over from a previous run answers the registration with a correct 409 and
 # the walk-through cannot proceed. The identity store and the participant store are
 # coupled; they are reset together or not at all.
-KEEP_DATA=0
-for a in "$@"; do [ "$a" = "--keep-data" ] && KEEP_DATA=1; done
-
 # run-portals.sh uses this: bring everything up, then stop short of the API
 # walk-through and leave the services running for the browser to drive.
 SERVICES_ONLY=0

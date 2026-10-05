@@ -129,6 +129,9 @@ public static class JwtSetup
             auth.AddPolicy(Policies.SubmitsBids,
                 p => p.RequireRole(Roles.Bidder, Roles.Operator));
 
+            auth.AddPolicy(Policies.StaffOnTheFloor,
+                p => p.RequireRole(Roles.Operator, Roles.AuctionAdmin, Roles.AwardCommittee));
+
             // Nothing is reachable without a token unless it opts out.
             auth.FallbackPolicy = new AuthorizationPolicyBuilder()
                 .RequireAuthenticatedUser()

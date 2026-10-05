@@ -47,6 +47,12 @@ public static class Policies
     public const string SubmitsBids = "policy:submits-bids";
 
     /// <summary>
+    /// Staff who legitimately see who is in the room: the clerk running a hall
+    /// auction, and the administrators who prepare and supervise one (§29).
+    /// </summary>
+    public const string StaffOnTheFloor = "policy:staff-on-the-floor";
+
+    /// <summary>
     /// A role AND a recent second factor. For the endpoints that move money or land
     /// — see <see cref="StepUpOptions"/> for why the role alone is not enough.
     /// </summary>

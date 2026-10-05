@@ -1,13 +1,15 @@
-import { expect, test, type Browser, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import {
   ADMIN_URL,
+  actor,
+  openAuction,
+  openAuctionInPlace,
+  qualify,
   BIDDER_URL,
   arabicRiyals,
   completeStepUp,
   watchPage,
   localInput,
-  signIn,
-  type PageProblems,
 } from './helpers'
 
 /**
@@ -345,124 +347,3 @@ test('an auction runs from draft to award through the portals', async ({ browser
   }
 })
 
-/**
- * Registers, completes the profile, subscribes and pays, through the UI.
- *
- * Crosses two step-up gates on the way — registration and the deposit — and asserts
- * that each one actually demanded a second factor. Asserting that matters: a gate
- * that silently stopped engaging would leave this helper passing while the thing it
- * exists to protect was wide open.
- */
-async function qualify(page: Page, nameAr: string, email: string): Promise<void> {
-  await openPublicAuction(page, nameAr)
-
-  // --- KYC: binds a national identity to this account permanently -----------
-  await page.getByRole('button', { name: 'التسجيل بالهوية الوطنية' }).click()
-
-  expect(
-    await completeStepUp(page),
-    'registration should have demanded a second factor',
-  ).toBe(true)
-
-  // Back on the portal, with the confirmation acknowledged.
-  await expect(page.getByText('تم التحقق من هويتك')).toBeVisible({ timeout: 30_000 })
-
-  // The redirect landed back on the catalogue, so pick the auction up again and
-  // retry the action — which is what a real user does after confirming. Without a
-  // reload: the token carrying the confirmation is in this page's memory.
-  await openPublicAuctionInPlace(page, nameAr)
-  await page.getByRole('button', { name: 'التسجيل بالهوية الوطنية' }).click()
-
-  // Nafath establishes identity, not contact details, and the deposit cannot be
-  // confirmed without somewhere to send an award letter.
-  await page.getByLabel('رقم الجوال').fill('+966500000001')
-  await page.getByLabel('البريد الإلكتروني').fill(email)
-  await page.getByRole('button', { name: 'حفظ بيانات التواصل' }).click()
-
-  // --- the steps that commit nothing: no second factor expected -------------
-  await page.getByRole('button', { name: 'الاشتراك في المزاد' }).click()
-  await page.getByRole('button', { name: 'شراء كراسة الشروط' }).click()
-  await page.getByRole('button', { name: 'أوافق على الشروط والأحكام' }).click()
-  await page.getByRole('button', { name: 'سداد التأمين إلكترونياً' }).click()
-
-  // --- the deposit: money ---------------------------------------------------
-  await page.getByRole('button', { name: /تأكيد سداد التأمين/ }).click()
-
-  // The confirmation from registration is a minute old at most, so the gate lets
-  // this through on the same token and no form appears. Either outcome is correct —
-  // what matters is that the deposit goes through and was not taken on a token that
-  // never carried a second factor — so this handles the redirect if there is one and
-  // carries on if there is not.
-  if (await completeStepUp(page)) {
-    await expect(page.getByText('تم التحقق من هويتك')).toBeVisible({ timeout: 30_000 })
-    await openPublicAuctionInPlace(page, nameAr)
-  }
-
-  const confirmDeposit = page.getByRole('button', { name: /تأكيد سداد التأمين/ })
-  if (await confirmDeposit.isVisible().catch(() => false)) {
-    await confirmDeposit.click()
-  }
-
-  await expect(page.getByRole('heading', { name: 'مؤهّل للمزايدة ✓' })).toBeVisible({
-    timeout: 30_000,
-  })
-}
-
-interface Actor {
-  page: Page
-  problems: PageProblems
-  close: () => Promise<void>
-}
-
-async function actor(browser: Browser, portal: string, username: string): Promise<Actor> {
-  const context = await browser.newContext()
-  const page = await context.newPage()
-  const problems = watchPage(page)
-  await signIn(page, portal, username)
-  return { page, problems, close: () => context.close() }
-}
-
-/** Opens one auction in the admin portal by its id, rather than whatever is first. */
-async function openAuction(page: Page, auctionId: string): Promise<void> {
-  await page.goto(ADMIN_URL)
-  await openAuctionInPlace(page, auctionId)
-}
-
-/**
- * Opens the auction without reloading the page.
- *
- * Reaching for `page.goto` after a step-up would undo it. The token that carries the
- * second factor lives in the tab's memory and nowhere else — deliberately, so that
- * nothing on the page can read a committee member's token out of storage — so a
- * reload throws it away, and the portal quietly re-acquires a *level 1* token from
- * Keycloak's session. The action that demanded the confirmation is then refused
- * again, and the user is in a loop they cannot get out of by pressing harder.
- *
- * Staying inside the single-page application is both what a real user does after
- * confirming and the only thing that works.
- */
-async function openAuctionInPlace(page: Page, auctionId: string): Promise<void> {
-  const row = page.locator('tbody tr').filter({ hasNot: page.locator('_nonexistent') })
-  await expect(row.first()).toBeVisible({ timeout: 30_000 })
-
-  // The list shows no ids, so open rows until the editor shows the one wanted. The
-  // newest is first and that is this run's auction, but asserting the id means a
-  // stale auction from an earlier run cannot quietly stand in for it.
-  await page.getByRole('button', { name: 'فتح' }).first().click()
-  await expect(page.locator('code.muted.small').first()).toHaveText(auctionId, {
-    timeout: 20_000,
-  })
-}
-
-/** Opens one auction in the bidder portal by its Arabic name. */
-async function openPublicAuction(page: Page, nameAr: string): Promise<void> {
-  await page.goto(BIDDER_URL)
-  await openPublicAuctionInPlace(page, nameAr)
-}
-
-/** The same, without the reload — see openAuctionInPlace for why that matters. */
-async function openPublicAuctionInPlace(page: Page, nameAr: string): Promise<void> {
-  const card = page.locator('.card', { hasText: nameAr })
-  await expect(card).toBeVisible({ timeout: 90_000 })
-  await card.getByRole('button', { name: 'التفاصيل' }).click()
-}

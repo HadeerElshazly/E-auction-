@@ -7,6 +7,7 @@ export interface AuctionListItem {
   nameEn: string
   channel: string
   bidderVisibility: string
+  clerkUserId: string | null
   startsAt: string | null
   endsAt: string | null
   openingPriceMinorUnits: number
@@ -34,6 +35,7 @@ export interface Auction {
   nameEn: string
   channel: string
   bidderVisibility: string
+  clerkUserId: string | null
   phase: string | null
   startsAt: string | null
   endsAt: string | null
@@ -86,4 +88,15 @@ export const statusLabels: Record<string, { ar: string; tone: 'live' | 'wait' | 
 
 export function label(status: string): { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' } {
   return statusLabels[status] ?? { ar: status, tone: 'done' }
+}
+
+/**
+ * One eligible bidder as the clerk's terminal lists them (§29). A paddle number
+ * because that is what the room holds up; a name because the clerk confirms it out
+ * loud before entering a bid on somebody's behalf.
+ */
+export interface RosterEntry {
+  bidderId: string
+  nameAr: string
+  paddleNumber: number
 }

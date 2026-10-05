@@ -14,6 +14,7 @@ import type { Auction, AuctionListItem } from './types'
 import { AuctionList } from './AuctionList'
 import { AuctionEditor } from './AuctionEditor'
 import { AwardPanel } from './AwardPanel'
+import { ClerkTerminal } from './ClerkTerminal'
 
 
 export function App() {
@@ -32,6 +33,7 @@ export function App() {
 
   const isAdmin = has(session, Roles.auctionAdmin)
   const isCommittee = has(session, Roles.awardCommittee)
+  const isClerk = has(session, Roles.operator)
 
   const refreshList = useCallback(async () => {
     if (!session) return
@@ -127,14 +129,14 @@ export function App() {
     )
   }
 
-  if (!isAdmin && !isCommittee) {
+  if (!isAdmin && !isCommittee && !isClerk) {
     return (
       <div className="centre">
         <div className="notice error">
           لا تملك صلاحية الدخول إلى هذه البوابة.
           <div className="small" style={{ marginTop: 8 }}>
             هذا الحساب لا يحمل دور <code>auction-admin</code> ولا{' '}
-            <code>award-committee</code>.
+            <code>award-committee</code> ولا <code>operator</code>.
           </div>
         </div>
         <button onClick={signOut}>تسجيل الخروج</button>
@@ -153,7 +155,20 @@ export function App() {
           {isAdmin && 'إدارة'}
           {isAdmin && isCommittee && ' + '}
           {isCommittee && 'لجنة الترسية'}
+          {(isAdmin || isCommittee) && isClerk && ' + '}
+          {isClerk && 'قاعة المزاد'}
         </span>
+
+        {isClerk && (
+          // A clerk's own id, where they can read it out before they have been
+          // assigned to anything. An administrator has to be given it to put them
+          // on the floor, and nothing in this system can list municipal staff — so
+          // a clerk who could only see it from inside an auction they are already
+          // running could never be assigned to their first one.
+          <span className="muted small ltr-id">
+            معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
+          </span>
+        )}
         <button onClick={signOut}>خروج</button>
       </header>
 
@@ -180,6 +195,16 @@ export function App() {
               canApprove={isCommittee}
               onAct={act}
             />
+
+            {isClerk && selected.channel === 'Onsite' && (
+              <ClerkTerminal
+                auction={selected}
+                session={session}
+                client={client}
+                onAct={act}
+                busy={busy}
+              />
+            )}
 
             <AwardPanel
               auction={selected}

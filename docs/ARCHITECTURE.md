@@ -2542,20 +2542,57 @@ already spent.
   processor refuses before it looks at the amount: deterministic, and it exercises
   the idempotency rule as well.
 
+### The terminal
+
+The clerk's screen does three things and deliberately nothing else: enter a bid
+for somebody in the room, move the end time, bring the hammer down. It is used
+while an auctioneer is calling prices and a room is waiting, so anything else on
+it would be in the way.
+
+The clerk works from a **paddle number**, because that is what the room holds up.
+The roster behind it is a new, narrow endpoint — the eligible bidders and their
+names, no deposit history, no payment references, no national id — restricted to
+staff. It names people regardless of the auction's masking setting (§27): that
+setting governs what bidders and the public see of each other, and the clerk
+typing on their behalf cannot do it from pseudonyms.
+
+The bid is signed in the clerk's browser with the clerk's own key, the same way
+the bidder portal signs with a bidder's, and the key is fetched on the first bid
+rather than on load. Refusals are translated: `BadSignature` tells a developer
+something and tells a clerk nothing, so each one becomes an instruction — *your
+key has expired, reload the page*.
+
+Two smaller things the browser walk-through forced into the open. A clerk needs
+their own user id to be assigned to an auction, and nothing in this system can
+list municipal staff — so the id is in the portal header, where they can read it
+out before they have been assigned to anything. And an administrator needs
+somewhere to type it, which is a panel outside the draft-only editor, because a
+clerk is operational rather than a term of sale and can be put on the floor after
+approval.
+
+### What the test harness got wrong, three times
+
+The hall walk-through hung three times on the same mistake in different places:
+`isVisible()` answers for the instant it is called, and every one of those calls
+was made while a card was still rendering. Each produced a hang thirty seconds to
+eight minutes later, in a step that had nothing to do with the cause — a bidder
+who never registered, a deposit never confirmed, a click on a button that had
+already gone. All three now wait for one of the two states they are choosing
+between before reading either. It is worth recording as a shape rather than three
+bugs: a conditional branch on UI state is a race unless the wait comes first.
+
 ### Still not verified
 
-- **There is no clerk terminal.** The whole channel is reachable only over HTTP:
-  the admin portal has no screen for entering bids, extending or closing, so a
-  real clerk could not run an auction from it today. The pipeline underneath is
-  proven end to end by the smoke test's hall walk-through.
 - **One clerk per auction.** A long sale with a shift change means reassigning,
   which rotates the key and interrupts the terminal. A second clerk, or a
   handover, is not modelled.
-- **The smoke test does not reset Kafka.** It recreates both databases every run
-  but leaves the broker's topics, so auctions accumulate across runs — and a hall
-  auction, which nothing closes on a clock, accumulates as a *running* one. That
-  is what a long series of local runs eventually trips over, and it is the
-  databases-and-identity-store argument from §21 applied to one more store.
+- **No live price on the clerk's screen.** It shows what this clerk has entered
+  this session, not the auction's current state, so a clerk who reloads loses
+  their own list. The auctioneer has the price; the screen does not.
 - **Nothing reconciles the room with the record.** If the clerk mistypes an
   amount there is no correction path: the ledger is append-only by design, and a
   wrong bid can only be beaten by a right one or disqualified afterwards.
+- **The paddle number is positional.** It is the roster's own ordering, stable
+  only for as long as the roster is — a bidder qualifying mid-auction renumbers
+  everyone after them. Real paddle numbers are issued at the door and belong in
+  the subscription.

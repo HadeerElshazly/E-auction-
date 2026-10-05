@@ -38,6 +38,10 @@ export function AuctionEditor({ auction, client, busy, canEdit, canApprove, onAc
         <Summary auction={auction} />
       )}
 
+      {auction.channel === 'Onsite' && (
+        <Clerk auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
+      )}
+
       <Plots auction={auction} client={client} busy={busy} canEdit={open && canEdit} onAct={onAct} />
 
       <Documents auction={auction} client={client} busy={busy} canEdit={open && canEdit} onAct={onAct} />
@@ -96,6 +100,74 @@ function Fact({ k, v }: { k: string; v: string }) {
       <div className="muted small">{k}</div>
       <div className="num">{v}</div>
     </div>
+  )
+}
+
+/**
+ * Who runs this auction from the floor (§29).
+ *
+ * Deliberately outside the draft-only editor: a clerk is operational rather than a
+ * term of sale, so they can be put on the floor after approval — somebody falls
+ * ill, a shift changes, and an approved auction cannot be re-approved to deal with
+ * it. Replacing them rotates the signing key, which is why the warning is here and
+ * not only in the domain.
+ *
+ * The identifier is a user id because nothing in this system can list the
+ * municipality's staff; a directory lookup belongs here when there is one to call.
+ */
+function Clerk({ auction, client, busy, canEdit, onAct }: Omit<Props, 'canApprove'>) {
+  const [userId, setUserId] = useState(auction.clerkUserId ?? '')
+
+  return (
+    <section>
+      <h3>موظف القاعة</h3>
+
+      {auction.clerkUserId ? (
+        <p className="small">
+          معيَّن: <code className="ltr">{auction.clerkUserId}</code>
+        </p>
+      ) : (
+        <p className="muted small">لم يُعيَّن موظف قاعة بعد — لا يمكن إدخال مزايدات.</p>
+      )}
+
+      {canEdit && (
+        <>
+          <div className="row" style={{ alignItems: 'flex-end' }}>
+            <label style={{ flex: '1 1 320px', marginBottom: 0 }}>
+              <span>معرّف المستخدم (operator)</span>
+              <input
+                className="ltr num"
+                aria-label="معرّف موظف القاعة"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={busy || userId.trim() === ''}
+              onClick={() =>
+                void onAct(() =>
+                  client.put(`/auctions/${auction.id}/clerk`, { clerkUserId: userId.trim() }),
+                )
+              }
+            >
+              تعيين
+            </button>
+            {auction.clerkUserId && (
+              <button
+                disabled={busy}
+                onClick={() => void onAct(() => client.del(`/auctions/${auction.id}/clerk`))}
+              >
+                إلغاء التعيين
+              </button>
+            )}
+          </div>
+          <p className="muted small">
+            تغيير الموظف يُبطل مفتاح الموظف السابق فوراً، فتتوقف شاشته عن إدخال
+            المزايدات.
+          </p>
+        </>
+      )}
+    </section>
   )
 }
 

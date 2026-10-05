@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Browser, type Page } from '@playwright/test'
 import { createHmac } from 'node:crypto'
 
 export const ADMIN_URL = process.env.ADMIN_URL ?? 'http://localhost:3001'
@@ -239,4 +239,172 @@ export function arabicRiyals(minorUnits: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(minorUnits / 100)
+}
+
+// ---------------------------------------------------------------------------
+// The journeys both walk-throughs share.
+//
+// Lifted out of the online spec when the hall got one of its own: a bidder
+// qualifies the same way whichever channel will sell the land, and two copies of
+// a journey that crosses two step-up gates would drift on the first change to
+// either.
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers, completes the profile, subscribes and pays, through the UI.
+ *
+ * Crosses two step-up gates on the way — registration and the deposit — and asserts
+ * that each one actually demanded a second factor. Asserting that matters: a gate
+ * that silently stopped engaging would leave this helper passing while the thing it
+ * exists to protect was wide open.
+ */
+export async function qualify(page: Page, nameAr: string, email: string): Promise<void> {
+  await openPublicAuction(page, nameAr)
+
+  // --- KYC: binds a national identity to this account permanently -----------
+  //
+  // Done once per person, ever: D-25 makes one national ID one bidder, so a bidder
+  // who registered in an earlier auction — or an earlier walk-through — has no
+  // registration step here at all. Branching on the button rather than on a flag
+  // keeps this usable from both walk-throughs in either order.
+  const register = page.getByRole('button', { name: 'التسجيل بالهوية الوطنية' })
+  const subscribe = page.getByRole('button', { name: 'الاشتراك في المزاد' })
+
+  // Which half to run is decided by waiting for the "already registered" signal,
+  // not by asking whether a button happens to be on screen at this instant.
+  //
+  // `isVisible` answers for the moment it is called. Asking while the card is still
+  // rendering gets whichever answer the race produced — and both wrong answers are
+  // a hang: skip registration and the subscribe step never comes, or run it and the
+  // registration button is gone before the click lands.
+  let registered = true
+  try {
+    await subscribe.waitFor({ state: 'visible', timeout: 15_000 })
+  } catch {
+    registered = false
+  }
+
+  if (!registered) {
+    await expect(register).toBeVisible({ timeout: 45_000 })
+  }
+
+  const needsRegistration = !registered
+
+  if (needsRegistration) {
+    await register.click()
+
+    expect(
+      await completeStepUp(page),
+      'registration should have demanded a second factor',
+    ).toBe(true)
+
+    // Back on the portal, with the confirmation acknowledged.
+    await expect(page.getByText('تم التحقق من هويتك')).toBeVisible({ timeout: 30_000 })
+
+    // The redirect landed back on the catalogue, so pick the auction up again and
+    // retry the action — which is what a real user does after confirming. Without a
+    // reload: the token carrying the confirmation is in this page's memory.
+    await openPublicAuctionInPlace(page, nameAr)
+    await page.getByRole('button', { name: 'التسجيل بالهوية الوطنية' }).click()
+
+    // Nafath establishes identity, not contact details, and the deposit cannot be
+    // confirmed without somewhere to send an award letter.
+    await page.getByLabel('رقم الجوال').fill('+966500000001')
+    await page.getByLabel('البريد الإلكتروني').fill(email)
+    await page.getByRole('button', { name: 'حفظ بيانات التواصل' }).click()
+  }
+
+  // --- the steps that commit nothing: no second factor expected -------------
+  await page.getByRole('button', { name: 'الاشتراك في المزاد' }).click()
+  await page.getByRole('button', { name: 'شراء كراسة الشروط' }).click()
+  await page.getByRole('button', { name: 'أوافق على الشروط والأحكام' }).click()
+  await page.getByRole('button', { name: 'سداد التأمين إلكترونياً' }).click()
+
+  // --- the deposit: money ---------------------------------------------------
+  await page.getByRole('button', { name: /تأكيد سداد التأمين/ }).click()
+
+  // The confirmation from registration is a minute old at most, so the gate lets
+  // this through on the same token and no form appears. Either outcome is correct —
+  // what matters is that the deposit goes through and was not taken on a token that
+  // never carried a second factor — so this handles the redirect if there is one and
+  // carries on if there is not.
+  if (await completeStepUp(page)) {
+    await expect(page.getByText('تم التحقق من هويتك')).toBeVisible({ timeout: 30_000 })
+    await openPublicAuctionInPlace(page, nameAr)
+  }
+
+  // Waited for, not sampled. Re-opening the auction re-renders the whole card, so
+  // asking whether the button is on screen the instant afterwards gets an answer
+  // about a page that has not finished rendering — and a skipped click here shows
+  // up thirty seconds later as a bidder who never became eligible, with nothing
+  // pointing at the cause. The same mistake caused two other hangs in this file.
+  const eligible = page.getByRole('heading', { name: 'مؤهّل للمزايدة ✓' })
+  const confirmDeposit = page.getByRole('button', { name: /تأكيد سداد التأمين/ })
+
+  await expect(confirmDeposit.or(eligible).first()).toBeVisible({ timeout: 60_000 })
+
+  if (await confirmDeposit.isVisible()) {
+    await confirmDeposit.click()
+  }
+
+  await expect(eligible).toBeVisible({ timeout: 30_000 })
+}
+
+export interface Actor {
+  page: Page
+  problems: PageProblems
+  close: () => Promise<void>
+}
+
+export async function actor(browser: Browser, portal: string, username: string): Promise<Actor> {
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  const problems = watchPage(page)
+  await signIn(page, portal, username)
+  return { page, problems, close: () => context.close() }
+}
+
+/** Opens one auction in the admin portal by its id, rather than whatever is first. */
+export async function openAuction(page: Page, auctionId: string): Promise<void> {
+  await page.goto(ADMIN_URL)
+  await openAuctionInPlace(page, auctionId)
+}
+
+/**
+ * Opens the auction without reloading the page.
+ *
+ * Reaching for `page.goto` after a step-up would undo it. The token that carries the
+ * second factor lives in the tab's memory and nowhere else — deliberately, so that
+ * nothing on the page can read a committee member's token out of storage — so a
+ * reload throws it away, and the portal quietly re-acquires a *level 1* token from
+ * Keycloak's session. The action that demanded the confirmation is then refused
+ * again, and the user is in a loop they cannot get out of by pressing harder.
+ *
+ * Staying inside the single-page application is both what a real user does after
+ * confirming and the only thing that works.
+ */
+export async function openAuctionInPlace(page: Page, auctionId: string): Promise<void> {
+  const row = page.locator('tbody tr').filter({ hasNot: page.locator('_nonexistent') })
+  await expect(row.first()).toBeVisible({ timeout: 30_000 })
+
+  // The list shows no ids, so open rows until the editor shows the one wanted. The
+  // newest is first and that is this run's auction, but asserting the id means a
+  // stale auction from an earlier run cannot quietly stand in for it.
+  await page.getByRole('button', { name: 'فتح' }).first().click()
+  await expect(page.locator('code.muted.small').first()).toHaveText(auctionId, {
+    timeout: 20_000,
+  })
+}
+
+/** Opens one auction in the bidder portal by its Arabic name. */
+export async function openPublicAuction(page: Page, nameAr: string): Promise<void> {
+  await page.goto(BIDDER_URL)
+  await openPublicAuctionInPlace(page, nameAr)
+}
+
+/** The same, without the reload — see openAuctionInPlace for why that matters. */
+export async function openPublicAuctionInPlace(page: Page, nameAr: string): Promise<void> {
+  const card = page.locator('.card', { hasText: nameAr })
+  await expect(card).toBeVisible({ timeout: 90_000 })
+  await card.getByRole('button', { name: 'التفاصيل' }).click()
 }

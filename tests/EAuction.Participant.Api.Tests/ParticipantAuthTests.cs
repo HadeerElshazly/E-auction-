@@ -166,6 +166,53 @@ public class ParticipantAuthTests : IDisposable
     }
 
     [Fact]
+    public async Task A_bidder_cannot_read_the_room_s_roster()
+    {
+        // It names every eligible bidder in the auction. A bidder reading it would
+        // learn exactly what D-22 masks, from the endpoint next to the one that
+        // masks it.
+        var response = await _factory.CreateClient().As(Sara, Roles.Bidder)
+            .GetAsync($"/auctions/{AuctionId}/subscriptions");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_anonymous_caller_cannot_read_the_room_s_roster()
+    {
+        var response = await _factory.CreateClient().Anonymous()
+            .GetAsync($"/auctions/{AuctionId}/subscriptions");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_clerk_can_read_the_room_s_roster()
+    {
+        var response = await _factory.CreateClient().As(Guid.NewGuid(), Roles.Operator)
+            .GetAsync($"/auctions/{AuctionId}/subscriptions");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_roster_carries_no_national_id_and_no_payment_history()
+    {
+        // The clerk needs a name and a paddle number. Everything else on a
+        // subscription is the bidder's own business.
+        var response = await _factory.CreateClient().As(Guid.NewGuid(), Roles.Operator)
+            .GetAsync($"/auctions/{AuctionId}/subscriptions");
+
+        var body = await response.Content.ReadAsStringAsync();
+
+        foreach (var absent in new[]
+                 {
+                     "nationalId", "paymentRef", "depositPaidAt", "guarantee", "keyEpoch",
+                 })
+            Assert.DoesNotContain(absent, body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task A_bidder_cannot_drive_another_bidder_s_subscription()
     {
         var client = _factory.CreateClient().As(Khalid, Roles.Bidder);
