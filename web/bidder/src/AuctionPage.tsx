@@ -199,38 +199,40 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         <p className="muted small" style={{ marginTop: -8 }}>
           تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>رقم الصك</th>
-              <th>المساحة (م²)</th>
-              <th>الموقع</th>
-              <th>الوصف</th>
-            </tr>
-          </thead>
-          <tbody>
-            {auction.plots.map((p) => (
-              <tr key={p.id}>
-                <td className="num">{p.deedNumber}</td>
-                <td className="num">{p.areaSqm}</td>
-                <td className="num small">
-                  {p.latitude && p.longitude ? (
-                    <a
-                      href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      {p.latitude}, {p.longitude}
-                    </a>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td className="small">{p.descriptionAr ?? '—'}</td>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>رقم الصك</th>
+                <th>المساحة (م²)</th>
+                <th>الموقع</th>
+                <th>الوصف</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {auction.plots.map((p) => (
+                <tr key={p.id}>
+                  <td className="num">{p.deedNumber}</td>
+                  <td className="num">{p.areaSqm}</td>
+                  <td className="num small">
+                    {p.latitude && p.longitude ? (
+                      <a
+                        href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {p.latitude}, {p.longitude}
+                      </a>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className="small">{p.descriptionAr ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   )

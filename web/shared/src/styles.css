@@ -86,6 +86,16 @@ body {
   padding: 0 24px 64px;
 }
 
+/* Both tracks may shrink below their content.
+ *
+ * A grid item's `min-width` is `auto`, which resolves to its min-content size and
+ * so refuses to shrink past it. One table wider than the phone therefore widens its
+ * track, the grid, and finally the page — and on a phone that does not show a
+ * scrollbar, it widens the layout viewport and renders every screen zoomed out.
+ * The `.table-scroll` wrappers cannot help until the track is allowed to be
+ * narrower than what is inside it. */
+.shell > * { min-width: 0; }
+
 .rail {
   position: sticky;
   top: 84px;
@@ -261,7 +271,24 @@ input:disabled, select:disabled, textarea:disabled { background: var(--surface-s
 
 /* --- tables ---------------------------------------------------------------- */
 
+/* A table wider than the screen scrolls inside its own box.
+ *
+ * Without this the table widens the page, and on a phone that does not produce a
+ * horizontal scrollbar — it widens the *layout viewport*. التقارير has ten columns,
+ * so a 390px phone laid the whole page out at 1090px and rendered it zoomed out to
+ * about a third size: every screen in the portal, not just the table, unreadable.
+ *
+ * Not `overflow-x` on `.card`, which would have been one line and covered every
+ * table at once. `overflow-x: auto` forces `overflow-y` to compute as `auto` too,
+ * so cards would have gained vertical scrollbars and clipped their own content. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
+
+/* Columns size to their content inside the scroller rather than crushing to fit,
+   which is what makes the horizontal scroll meaningful instead of just a
+   narrower, more broken table. */
+.table-scroll > table { min-width: max-content; }
 th, td { text-align: start; padding: 12px 12px; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-size: 12px; font-weight: 650; }
 tbody tr:last-child td { border-bottom: 0; }

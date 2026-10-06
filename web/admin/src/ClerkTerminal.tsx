@@ -201,24 +201,26 @@ export function ClerkTerminal({ auction, session, client, onAct, busy }: Props) 
       {entered.length === 0 ? (
         <p className="muted small">لم تُدخل أي مزايدة بعد في هذه الجلسة.</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>المجداف</th>
-              <th>المبلغ</th>
-              <th>الترتيب في السجل</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entered.map((e) => (
-              <tr key={e.offset}>
-                <td className="num">{e.paddle}</td>
-                <td className="num">{sar(e.amount, 'ar')}</td>
-                <td className="num small">{e.offset}</td>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>المجداف</th>
+                <th>المبلغ</th>
+                <th>الترتيب في السجل</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {entered.map((e) => (
+                <tr key={e.offset}>
+                  <td className="num">{e.paddle}</td>
+                  <td className="num">{sar(e.amount, 'ar')}</td>
+                  <td className="num small">{e.offset}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

@@ -215,41 +215,43 @@ export function AuditTrail({ session }: { session: Session }) {
           <p className="muted small">
             {total} إجراء — يُعرض أحدث {entries.length}
           </p>
-          <table data-testid="audit-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>التاريخ</th>
-                <th>الإجراء</th>
-                <th>المحلّ</th>
-                <th>الموظّف</th>
-                <th>الأدوار</th>
-                <th>التفاصيل</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((e) => (
-                <tr key={e.offset}>
-                  <td className="num mono">{e.offset}</td>
-                  <td className="small muted">{when(e.at)}</td>
-                  <td>
-                    {e.malformed ? (
-                      <span className="pill bad">سجل غير مقروء</span>
-                    ) : (
-                      (ACTIONS[e.action ?? ''] ?? e.action ?? '—')
-                    )}
-                  </td>
-                  {/* The raw subject, deliberately. The audit service does not know
-                      what an auction is and should not — it stores "auction/<id>"
-                      and whoever is reading knows one when they see it. */}
-                  <td className="small ltr mono">{short(e.subject)}</td>
-                  <td className="small ltr mono">{short(e.actorSubject)}</td>
-                  <td className="small muted">{e.actorRoles ?? '—'}</td>
-                  <td className="small">{e.details ?? '—'}</td>
+          <div className="table-scroll">
+            <table data-testid="audit-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>التاريخ</th>
+                  <th>الإجراء</th>
+                  <th>المحلّ</th>
+                  <th>الموظّف</th>
+                  <th>الأدوار</th>
+                  <th>التفاصيل</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {entries.map((e) => (
+                  <tr key={e.offset}>
+                    <td className="num mono">{e.offset}</td>
+                    <td className="small muted">{when(e.at)}</td>
+                    <td>
+                      {e.malformed ? (
+                        <span className="pill bad">سجل غير مقروء</span>
+                      ) : (
+                        (ACTIONS[e.action ?? ''] ?? e.action ?? '—')
+                      )}
+                    </td>
+                    {/* The raw subject, deliberately. The audit service does not know
+                        what an auction is and should not — it stores "auction/<id>"
+                        and whoever is reading knows one when they see it. */}
+                    <td className="small ltr mono">{short(e.subject)}</td>
+                    <td className="small ltr mono">{short(e.actorSubject)}</td>
+                    <td className="small muted">{e.actorRoles ?? '—'}</td>
+                    <td className="small">{e.details ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </div>
