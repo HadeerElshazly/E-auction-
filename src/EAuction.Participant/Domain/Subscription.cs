@@ -279,12 +279,12 @@ public sealed class Subscription
     private void BecomeEligible(Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         var problems = new List<string>();
-        if (!bidder.IsVerified) problems.Add("The bidder's identity is not verified by Nafath.");
-        if (!bidder.IsProfileComplete) problems.Add("The bidder's profile is incomplete.");
-        if (BookletPurchasedAt is null) problems.Add("The terms booklet has not been purchased.");
-        if (TermsAcceptedAt is null) problems.Add("The terms and conditions have not been accepted.");
+        if (!bidder.IsVerified) problems.Add("لم يتم التحقق من هوية المزايد عبر نفاذ.");
+        if (!bidder.IsProfileComplete) problems.Add("بيانات المزايد غير مكتملة.");
+        if (BookletPurchasedAt is null) problems.Add("لم يتم شراء كراسة الشروط.");
+        if (TermsAcceptedAt is null) problems.Add("لم تتم الموافقة على الشروط والأحكام.");
         if (DepositPaidAt is null && GuaranteeVerifiedAt is null)
-            problems.Add("No deposit has been settled.");
+            problems.Add("لم يُسدَّد التأمين.");
         if (problems.Count > 0) throw new ParticipantValidationException(problems);
 
         Status = SubscriptionStatus.Eligible;

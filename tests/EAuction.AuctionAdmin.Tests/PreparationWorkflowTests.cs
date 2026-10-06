@@ -16,7 +16,7 @@ public class PreparationWorkflowTests
 
         Assert.Contains(problems, p => p.Contains("Arabic name"));
         Assert.Contains(problems, p => p.Contains("English name"));
-        Assert.Contains(problems, p => p.Contains("At least one plot"));
+        Assert.Contains(problems, p => p.Contains("قطعة أرض واحدة على الأقل"));
         Assert.Contains(problems, p => p.Contains("كراسة الشروط"));
         Assert.Contains(problems, p => p.Contains("Start and end"));
     }
@@ -64,7 +64,7 @@ public class PreparationWorkflowTests
             Now.AddDays(-1), Now.AddDays(8),
             1_000_000_00, 1_500_000_00, 50_000_00, 100_000_00, 2.5m, 1_000_00, 120, 3);
 
-        Assert.Contains(auction.Validate(Now), p => p.Contains("Start must be in the future"));
+        Assert.Contains(auction.Validate(Now), p => p.Contains("في المستقبل"));
     }
 
     [Fact]

@@ -184,43 +184,43 @@ public sealed class Auction
     {
         var problems = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(NameAr)) problems.Add("Arabic name is required.");
-        if (string.IsNullOrWhiteSpace(NameEn)) problems.Add("English name is required.");
-        if (_plots.Count == 0) problems.Add("At least one plot is required.");
-        if (BookletDocumentId is null) problems.Add("The terms booklet (كراسة الشروط) is required.");
+        if (string.IsNullOrWhiteSpace(NameAr)) problems.Add("اسم المزاد بالعربي مطلوب.");
+        if (string.IsNullOrWhiteSpace(NameEn)) problems.Add("اسم المزاد بالإنجليزي مطلوب.");
+        if (_plots.Count == 0) problems.Add("يجب إضافة قطعة أرض واحدة على الأقل.");
+        if (BookletDocumentId is null) problems.Add("كراسة الشروط مطلوبة.");
 
         if (StartsAt is null || EndsAt is null)
         {
-            problems.Add("Start and end date/time are required.");
+            problems.Add("تاريخ ووقت بداية المزاد ونهايته مطلوبان.");
         }
         else
         {
-            if (EndsAt <= StartsAt) problems.Add("End must be after start.");
-            if (StartsAt <= now) problems.Add("Start must be in the future.");
+            if (EndsAt <= StartsAt) problems.Add("وقت النهاية يجب أن يكون بعد وقت البداية.");
+            if (StartsAt <= now) problems.Add("وقت البداية يجب أن يكون في المستقبل.");
         }
 
-        if (OpeningPriceMinorUnits <= 0) problems.Add("Opening price must be positive.");
-        if (MinIncrementMinorUnits <= 0) problems.Add("Minimum increment must be positive.");
-        if (DepositMinorUnits <= 0) problems.Add("Deposit (التأمين) must be positive.");
+        if (OpeningPriceMinorUnits <= 0) problems.Add("سعر الافتتاح يجب أن يكون أكبر من صفر.");
+        if (MinIncrementMinorUnits <= 0) problems.Add("أقل مزايدة يجب أن تكون أكبر من صفر.");
+        if (DepositMinorUnits <= 0) problems.Add("مبلغ التأمين يجب أن يكون أكبر من صفر.");
 
         if (ReservePriceMinorUnits <= 0)
         {
-            problems.Add("Reserve price must be positive.");
+            problems.Add("السعر الاحتياطي يجب أن يكون أكبر من صفر.");
         }
         else if (ReservePriceMinorUnits < OpeningPriceMinorUnits)
         {
             // A reserve below the opening price is met by the first valid bid,
             // so it does nothing. Almost always a data entry slip.
-            problems.Add("Reserve price cannot be below the opening price.");
+            problems.Add("السعر الاحتياطي لا يمكن أن يقل عن سعر الافتتاح.");
         }
 
         if (BrokerageFeePercent is < 0 or > 100)
-            problems.Add("Brokerage fee must be between 0 and 100 percent.");
+            problems.Add("نسبة السعي يجب أن تكون بين صفر ومئة بالمئة.");
 
         if (QuietPeriodSeconds is not null)
         {
-            if (QuietPeriodSeconds <= 0) problems.Add("Quiet period must be positive when set.");
-            if (MaxExtensions < 1) problems.Add("Max extensions must be at least 1 when extension is enabled.");
+            if (QuietPeriodSeconds <= 0) problems.Add("مدة الهدوء يجب أن تكون أكبر من صفر عند تفعيلها.");
+            if (MaxExtensions < 1) problems.Add("عدد مرات التمديد يجب أن يكون واحدًا على الأقل عند تفعيل التمديد.");
         }
 
         return problems;

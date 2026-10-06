@@ -13,6 +13,7 @@ import {
   type Api,
   type Session,
 } from '@eauction/shared'
+import { reasons } from './reasons'
 import type { AuctionDetail, BidReceipt, BidVerdict, LivePrice } from './types'
 import { useSigningKey } from './useSigningKey'
 import { Certificate } from './Certificate'
@@ -35,19 +36,6 @@ interface Submitted {
 }
 
 /** What the services call a rejection, in Arabic a bidder can act on. */
-const reasons: Record<string, string> = {
-  BelowOpeningPrice: 'المبلغ أقل من سعر الافتتاح.',
-  BelowMinimumIncrement: 'المبلغ أقل من أقل مزايدة مقبولة — ارتفع السعر قبل إرسال مزايدتك.',
-  OutsideWindow: 'المزاد غير مفتوح للمزايدة الآن.',
-  NotEligible: 'اشتراكك غير مؤهّل للمزايدة في هذا المزاد.',
-  RateLimited: 'مزايدات كثيرة في وقت قصير — أعد المحاولة بعد لحظة.',
-  BadSignature: 'تعذّر التحقق من توقيع المزايدة. أعد تحميل الصفحة.',
-  BidderMismatch: 'المزايدة مُسجَّلة باسم مزايد آخر.',
-  UnknownAuction: 'المزاد غير معروف لخدمة المزايدة بعد.',
-  SelfOutbid: 'أنت الأعلى بالفعل.',
-  DuplicateBidId: 'أُرسلت هذه المزايدة مسبقاً.',
-  MalformedFrame: 'المزايدة غير مكتملة. أعد تحميل الصفحة.',
-}
 
 /**
  * The processor's actual ruling on one submitted bid.

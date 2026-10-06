@@ -121,8 +121,8 @@ app.MapPost("/bidders/register", async (
     var nationalId = http.User.FindFirst("national_id")?.Value;
     if (string.IsNullOrWhiteSpace(nationalId))
         return Results.Json(
-            new { problems = new[] { "The token carries no national_id claim. A bidder "
-                                   + "must reach this endpoint through Nafath." } },
+            new { problems = new[] { "لم تصل هويتك من نفاذ. يجب الدخول عبر نفاذ "
+                                   + "قبل التسجيل كمزايد." } },
             statusCode: 403);
 
     var nameAr = http.User.FindFirst("name_ar")?.Value ?? "";
@@ -144,8 +144,8 @@ app.MapPost("/bidders/register", async (
         return Results.Conflict(new
         {
             reason = "NationalIdAlreadyRegistered",
-            problems = new[] { "This national ID is registered to a different account. "
-                             + "It has to be re-linked before this one can be used." }
+            problems = new[] { "رقم الهوية مسجَّل بحساب آخر. يلزم ربطه من جديد "
+                             + "قبل استخدامه مع هذا الحساب." }
         });
 
     try
@@ -170,8 +170,8 @@ app.MapPost("/bidders/register", async (
         return Results.Conflict(new
         {
             reason = "NationalIdAlreadyRegistered",
-            problems = new[] { "This national ID is registered to a different account. "
-                             + "It has to be re-linked before this one can be used." }
+            problems = new[] { "رقم الهوية مسجَّل بحساب آخر. يلزم ربطه من جديد "
+                             + "قبل استخدامه مع هذا الحساب." }
         });
     }
 })
