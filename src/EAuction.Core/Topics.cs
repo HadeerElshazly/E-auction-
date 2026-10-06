@@ -31,11 +31,13 @@ public static class Topics
     public const string Deposits = "auctions.deposits";
 
     /// <summary>
-    /// Booklet and deposit payments, from the participant service. Nothing consumes
-    /// it yet — payment reconciliation and finance reporting will. It is here rather
-    /// than in the router that publishes to it because a topic name that lives in one
-    /// service's string constant is invisible to the provisioning tool, and an
-    /// unprovisioned topic stalls that service's entire outbox.
+    /// Requests for money, from the participant service: the booklet fee and the
+    /// deposit. The payment service consumes it and answers on
+    /// <see cref="Settlements"/>.
+    ///
+    /// It is here rather than in the router that publishes to it because a topic name
+    /// that lives in one service's string constant is invisible to the provisioning
+    /// tool, and an unprovisioned topic stalls that service's entire outbox.
     /// </summary>
     public const string ParticipantPayments = "participants.payments";
 
@@ -43,6 +45,16 @@ public static class Topics
     public const string CurrentWinner = "auctions.current-winner";
 
     public const string BidsRejected = "bids.rejected";
+
+    /// <summary>
+    /// Event log. What the payment service did with each bidder's money, keyed
+    /// auction:bidder:purpose — a charge, a refusal, a refund, a forfeiture.
+    ///
+    /// Not compacted, and the key is deliberately finer than the auction: this is
+    /// an audit trail, and compaction that collapsed a refund onto the charge it
+    /// reverses would erase the fact that money came back.
+    /// </summary>
+    public const string Settlements = "payments.settlements";
 
     /// <summary>
     /// Compacted. How far the processor has published side effects for each

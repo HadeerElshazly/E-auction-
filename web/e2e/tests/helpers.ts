@@ -1,4 +1,4 @@
-import { expect, type Browser, type Page } from '@playwright/test'
+import { expect, type Browser, type Locator, type Page } from '@playwright/test'
 import { createHmac } from 'node:crypto'
 
 export const ADMIN_URL = process.env.ADMIN_URL ?? 'http://localhost:3001'
@@ -314,40 +314,83 @@ export async function qualify(page: Page, nameAr: string, email: string): Promis
     await page.getByRole('button', { name: 'حفظ بيانات التواصل' }).click()
   }
 
-  // --- the steps that commit nothing: no second factor expected -------------
+  // --- the step that commits nothing: no second factor expected -------------
   await page.getByRole('button', { name: 'الاشتراك في المزاد' }).click()
-  await page.getByRole('button', { name: 'شراء كراسة الشروط' }).click()
+
+  // --- the booklet fee: money, and asynchronous -----------------------------
+  //
+  // Both money steps now only *ask* the payment service. The button returns 202 and
+  // the step completes when a settlement arrives on payments.settlements, which the
+  // portal picks up by polling — so each one is a click followed by a wait for the
+  // next step to appear, never a click whose reply is the answer.
+  await payAndWait(
+    page,
+    nameAr,
+    'شراء كراسة الشروط',
+    page.getByRole('button', { name: 'أوافق على الشروط والأحكام' }),
+    'the booklet fee',
+  )
+
   await page.getByRole('button', { name: 'أوافق على الشروط والأحكام' }).click()
   await page.getByRole('button', { name: 'سداد التأمين إلكترونياً' }).click()
 
-  // --- the deposit: money ---------------------------------------------------
-  await page.getByRole('button', { name: /تأكيد سداد التأمين/ }).click()
+  // --- the deposit: money, and asynchronous ---------------------------------
+  await payAndWait(
+    page,
+    nameAr,
+    /دفع مبلغ التأمين/,
+    page.getByRole('heading', { name: 'مؤهّل للمزايدة ✓' }),
+    'the deposit',
+  )
+}
 
-  // The confirmation from registration is a minute old at most, so the gate lets
-  // this through on the same token and no form appears. Either outcome is correct —
-  // what matters is that the deposit goes through and was not taken on a token that
-  // never carried a second factor — so this handles the redirect if there is one and
+/**
+ * Presses one of the two buttons that spend money, carries the second factor if the
+ * gate asks for one, and waits for the payment service to settle.
+ *
+ * The waiting is the part worth getting right. The click returns 202 and nothing on
+ * the page changes for a second or two; the outcome arrives through Kafka, two
+ * services and a poll. So the thing waited for is the *next* step appearing, with a
+ * timeout sized for that round trip — and a refusal from the gateway is caught
+ * explicitly, because its message is the one useful thing on screen and a bare
+ * timeout would throw it away.
+ */
+async function payAndWait(
+  page: Page,
+  nameAr: string,
+  button: string | RegExp,
+  next: Locator,
+  what: string,
+): Promise<void> {
+  await page.getByRole('button', { name: button }).click()
+
+  // The confirmation from registration is a minute old at most, so the gate often
+  // lets this through on the same token and no form appears. Either outcome is
+  // correct — what matters is that the money was not taken on a token that never
+  // carried a second factor — so this handles the redirect if there is one and
   // carries on if there is not.
   if (await completeStepUp(page)) {
     await expect(page.getByText('تم التحقق من هويتك')).toBeVisible({ timeout: 30_000 })
     await openPublicAuctionInPlace(page, nameAr)
+
+    // Re-rendered from scratch, so the button may be back: the 202 was never sent
+    // if the gate refused the first click. Waited for rather than sampled — asking
+    // whether a button is on screen the instant after a re-render gets an answer
+    // about a page that has not finished rendering, which is how three earlier
+    // hangs in this file started.
+    const retry = page.getByRole('button', { name: button })
+    await expect(retry.or(next).first()).toBeVisible({ timeout: 60_000 })
+    if (await retry.isVisible()) await retry.click()
   }
 
-  // Waited for, not sampled. Re-opening the auction re-renders the whole card, so
-  // asking whether the button is on screen the instant afterwards gets an answer
-  // about a page that has not finished rendering — and a skipped click here shows
-  // up thirty seconds later as a bidder who never became eligible, with nothing
-  // pointing at the cause. The same mistake caused two other hangs in this file.
-  const eligible = page.getByRole('heading', { name: 'مؤهّل للمزايدة ✓' })
-  const confirmDeposit = page.getByRole('button', { name: /تأكيد سداد التأمين/ })
+  const refused = page.getByText('تعذّر إتمام الدفع')
+  await expect(next.or(refused).first()).toBeVisible({ timeout: 90_000 })
 
-  await expect(confirmDeposit.or(eligible).first()).toBeVisible({ timeout: 60_000 })
-
-  if (await confirmDeposit.isVisible()) {
-    await confirmDeposit.click()
+  if (await refused.isVisible()) {
+    throw new Error(
+      `the payment gateway refused ${what}: ${await refused.textContent()}`,
+    )
   }
-
-  await expect(eligible).toBeVisible({ timeout: 30_000 })
 }
 
 export interface Actor {

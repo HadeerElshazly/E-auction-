@@ -18,13 +18,30 @@ public sealed class Subscription
     public Guid BidderId { get; private set; }
     public SubscriptionStatus Status { get; private set; } = SubscriptionStatus.Draft;
 
+    /// <summary>When the booklet fee was sent to the payment service, not when it was paid.</summary>
+    public DateTimeOffset? BookletRequestedAt { get; private set; }
     public DateTimeOffset? BookletPurchasedAt { get; private set; }
     public string? BookletPaymentRef { get; private set; }
     public DateTimeOffset? TermsAcceptedAt { get; private set; }
 
     public DepositMethod? DepositMethod { get; private set; }
+
+    /// <summary>When the deposit was sent to the payment service, not when it was paid.</summary>
+    public DateTimeOffset? DepositRequestedAt { get; private set; }
     public DateTimeOffset? DepositPaidAt { get; private set; }
     public string? DepositPaymentRef { get; private set; }
+
+    /// <summary>
+    /// The last refusal the gateway sent back, so the bidder is told why rather
+    /// than left looking at a button that did nothing.
+    ///
+    /// Overwritten rather than accumulated: what a bidder needs is the reason the
+    /// payment they just tried failed, and a growing list of past declines on a
+    /// citizen's record is data nobody asked this service to keep.
+    /// </summary>
+    public string? PaymentFailurePurpose { get; private set; }
+    public string? PaymentFailureReason { get; private set; }
+    public DateTimeOffset? PaymentFailedAt { get; private set; }
 
     public Guid? GuaranteeDocumentId { get; private set; }
     public DateTimeOffset? GuaranteeExpiresAt { get; private set; }
@@ -60,16 +77,52 @@ public sealed class Subscription
         if (Status != expected) throw new InvalidSubscriptionTransitionException(Status, action);
     }
 
-    /// <summary>شراء كراسة الشروط. Non-refundable, so it is recorded with its payment reference.</summary>
-    public void PurchaseBooklet(string paymentRef, DateTimeOffset now)
+    /// <summary>
+    /// شراء كراسة الشروط — asks the payment service to charge the booklet fee.
+    ///
+    /// It does not buy the booklet. Until this split the caller passed in a payment
+    /// reference of their own invention and the subscription believed it, which meant
+    /// a bidder could reach the terms, the deposit and eventually the bid floor
+    /// without a riyal having moved. The reference now comes back from the gateway on
+    /// <c>payments.settlements</c>, and <see cref="ConfirmBookletPayment"/> is the
+    /// only thing that advances the status.
+    /// </summary>
+    public void RequestBooklet(AuctionTerms terms, DateTimeOffset now)
     {
-        Require(SubscriptionStatus.Draft, "purchase a booklet for");
+        Require(SubscriptionStatus.Draft, "request a booklet for");
+
+        BookletRequestedAt = now;
+        ClearPaymentFailure();
+
+        _events.Add(new BookletFeeRequested
+        {
+            AuctionId = AuctionId,
+            BidderId = BidderId,
+            AmountMinorUnits = terms.BookletPriceMinorUnits
+        });
+    }
+
+    /// <summary>
+    /// The booklet fee was taken. Non-refundable, so it is recorded with the
+    /// gateway's reference.
+    ///
+    /// Idempotent: the settlements topic is replayed from offset 0 on every start,
+    /// so this is called again for every booklet ever paid for, each time this
+    /// service comes up.
+    /// </summary>
+    public void ConfirmBookletPayment(string paymentRef, DateTimeOffset now)
+    {
         if (string.IsNullOrWhiteSpace(paymentRef))
             throw new ParticipantValidationException(new[] { "A payment reference is required." });
+
+        if (BookletPurchasedAt is not null) return;
+
+        Require(SubscriptionStatus.Draft, "confirm a booklet payment for");
 
         BookletPaymentRef = paymentRef.Trim();
         BookletPurchasedAt = now;
         Status = SubscriptionStatus.BookletPurchased;
+        ClearPaymentFailure();
     }
 
     /// <summary>
@@ -84,6 +137,15 @@ public sealed class Subscription
         Status = SubscriptionStatus.TermsAccepted;
     }
 
+    /// <summary>
+    /// Picks how the deposit will be settled. Charges nothing.
+    ///
+    /// The charge moved out of here into <see cref="AuthoriseDeposit"/> for a reason
+    /// that is not tidiness: choosing a method is an ordinary click and is gated as
+    /// one, while taking a hundred thousand riyals off a citizen needs a second
+    /// factor. With the request raised here, the step-up on the deposit endpoint
+    /// guarded a confirmation of a charge that had already been sent.
+    /// </summary>
     public void ChooseDeposit(DepositMethod method, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.TermsAccepted, "choose a deposit method for");
@@ -93,30 +155,81 @@ public sealed class Subscription
 
         DepositMethod = method;
         Status = SubscriptionStatus.AwaitingDeposit;
+    }
+
+    /// <summary>
+    /// دفع مبلغ التأمين إلكترونيا — asks the payment service for the deposit.
+    ///
+    /// This is what the bidder's second factor actually authorises, and the reason
+    /// this method takes no reference: there is nothing for the caller to assert.
+    /// </summary>
+    public void AuthoriseDeposit(AuctionTerms terms, DateTimeOffset now)
+    {
+        Require(SubscriptionStatus.AwaitingDeposit, "authorise a deposit for");
+        if (DepositMethod != Domain.DepositMethod.Payment)
+            throw new ParticipantValidationException(
+                new[] { "This subscription is settling by bank guarantee, not payment." });
+        if (now >= terms.EndsAt)
+            throw new ParticipantValidationException(
+                new[] { "This auction has already ended." });
+
+        DepositRequestedAt = now;
+        ClearPaymentFailure();
 
         _events.Add(new DepositRequested
         {
             AuctionId = AuctionId,
             BidderId = BidderId,
             AmountMinorUnits = terms.DepositMinorUnits,
-            Method = method.ToString()
+            Method = DepositMethod.Value.ToString()
         });
     }
 
-    /// <summary>دفع مبلغ التأمين إلكترونيا — confirmed by the payment service.</summary>
+    /// <summary>
+    /// The deposit was taken, as reported by the payment service. Idempotent for
+    /// the same reason <see cref="ConfirmBookletPayment"/> is.
+    /// </summary>
     public void ConfirmDepositPayment(
         string paymentRef, Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
+        if (string.IsNullOrWhiteSpace(paymentRef))
+            throw new ParticipantValidationException(new[] { "A payment reference is required." });
+
+        if (DepositPaidAt is not null) return;
+
         Require(SubscriptionStatus.AwaitingDeposit, "confirm a deposit payment for");
         if (DepositMethod != Domain.DepositMethod.Payment)
             throw new ParticipantValidationException(
                 new[] { "This subscription is settling by bank guarantee, not payment." });
-        if (string.IsNullOrWhiteSpace(paymentRef))
-            throw new ParticipantValidationException(new[] { "A payment reference is required." });
 
         DepositPaymentRef = paymentRef.Trim();
         DepositPaidAt = now;
+        ClearPaymentFailure();
         BecomeEligible(bidder, terms, now);
+    }
+
+    /// <summary>
+    /// The gateway refused. Nothing moves backwards — the bidder stays where they
+    /// are and may try again — but the reason is kept so the portal can say what
+    /// happened instead of showing a step that quietly failed.
+    /// </summary>
+    public void RecordPaymentRefused(string purpose, string reason, DateTimeOffset now)
+    {
+        PaymentFailurePurpose = purpose;
+        PaymentFailureReason = string.IsNullOrWhiteSpace(reason) ? "Refused" : reason.Trim();
+        PaymentFailedAt = now;
+
+        // The request is no longer outstanding: leaving the timestamp set would
+        // leave the portal waiting on a gateway that has already answered.
+        if (purpose == nameof(PaymentPurposes.Deposit)) DepositRequestedAt = null;
+        if (purpose == nameof(PaymentPurposes.Booklet)) BookletRequestedAt = null;
+    }
+
+    private void ClearPaymentFailure()
+    {
+        PaymentFailurePurpose = null;
+        PaymentFailureReason = null;
+        PaymentFailedAt = null;
     }
 
     /// <summary>

@@ -59,9 +59,14 @@ public static class ControlTopics
         new(Topics.BidsRejected, TopicShape.EventLog,
             "Why a bid was refused, for the bidder's own feed and for dispute handling."),
 
+        new(Topics.Settlements, TopicShape.EventLog,
+            "What the payment service did with each bidder's money. The payment "
+            + "service replays it on start to know what it has already charged, so "
+            + "losing it means charging every bidder a second time."),
+
         new(Topics.ParticipantPayments, TopicShape.EventLog,
-            "Booklet and deposit payments, for reconciliation. Not yet consumed, but the "
-            + "participant service publishes to it: without the topic its outbox cannot "
-            + "drain, and eligibility never reaches the catcher.")
+            "Requests for the booklet fee and the deposit. The payment service consumes "
+            + "it; without the topic the participant outbox cannot drain, and eligibility "
+            + "never reaches the catcher.")
     ];
 }

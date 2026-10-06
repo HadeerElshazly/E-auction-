@@ -42,3 +42,18 @@ auctionAdmin:
       # Must match the كراسة الشروط the bidders accepted. Confirm with legal
       # before the first auction opens (§11, C-1).
       value: "5"
+
+payments:
+  # Payments__AllowSimulatedGateway is deliberately NOT set here.
+  #
+  # The simulator settles every charge without taking a riyal. Allowing it in
+  # Jeddah would qualify every registered bidder in the country to bid on state
+  # land, and would look exactly like a working deployment: deposits "paid",
+  # bidders eligible, auctions running. The service refuses to start instead, and
+  # that refusal is the only thing standing between a misconfigured install and
+  # an auction with no money behind it.
+  #
+  # So this install does not start until the PayTabs / SADAD adapter exists and
+  # its credentials are in a secret (P-3). The secretEnv below is the shape;
+  # the names come from the adapter.
+  secretEnv: []

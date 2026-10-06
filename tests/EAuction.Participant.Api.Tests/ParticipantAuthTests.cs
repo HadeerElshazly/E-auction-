@@ -215,19 +215,30 @@ public class ParticipantAuthTests : IDisposable
     [Fact]
     public async Task A_bidder_cannot_drive_another_bidder_s_subscription()
     {
-        var client = _factory.CreateClient().As(Khalid, Roles.Bidder);
+        // Stepped up on purpose. Three of these five endpoints are behind the
+        // second factor, so an ordinary token would be refused by the step-up
+        // handler before the ownership check ran — and this test would pass on a
+        // 403 that says nothing about ownership.
+        var client = _factory.CreateClient().WithToken(TestJwt.SteppedUp(Khalid, Roles.Bidder));
 
-        foreach (var (path, body) in new (string, object)[]
+        foreach (var (path, body) in new (string, object?)[]
         {
-            (Sub(Sara, "/booklet"), new { paymentRef = "x" }),
-            (Sub(Sara, "/terms"), new { }),
+            (Sub(Sara, "/booklet"), null),
+            (Sub(Sara, "/terms"), null),
             (Sub(Sara, "/deposit-method"), new { method = 0 }),
-            (Sub(Sara, "/deposit"), new { paymentRef = "x" }),
+            (Sub(Sara, "/deposit"), null),
             (Sub(Sara, "/guarantee"), new { documentId = Guid.NewGuid(), expiresAt = DateTimeOffset.UtcNow.AddYears(1) })
         })
         {
-            var response = await client.PostAsJsonAsync(path, body);
+            var response = body is null
+                ? await client.PostAsync(path, null)
+                : await client.PostAsJsonAsync(path, body);
+
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+            // And not as a step-up problem: retrying with a fresh second factor
+            // would be pointless, because the subscription is not theirs.
+            Assert.DoesNotContain("StepUp", await response.Content.ReadAsStringAsync());
         }
     }
 
@@ -328,7 +339,16 @@ public class StepUpEndpointTests : IDisposable
         await db.SaveChangesAsync();
     }
 
-    /// <summary>Carries a bidder to the point where only the deposit is left.</summary>
+    /// <summary>
+    /// Carries a bidder to the point where only the deposit is left.
+    ///
+    /// The booklet is settled straight on the aggregate rather than driven through
+    /// its endpoint, because that endpoint now only *asks* the payment service for
+    /// the fee: the status does not move until a settlement comes back on
+    /// <c>payments.settlements</c>, and no payment service runs in this fixture.
+    /// PaymentLoopTests covers that loop end to end; this file is about which token
+    /// opens which door.
+    /// </summary>
     private async Task<(Guid Bidder, Guid Auction)> AwaitingDepositAsync()
     {
         var bidder = Guid.NewGuid();
@@ -343,10 +363,20 @@ public class StepUpEndpointTests : IDisposable
             new { phone = "+966500000001", email = "sara@example.sa" });
         await client.PostAsJsonAsync($"/auctions/{auction}/subscriptions", new { bidderId = bidder });
 
-        var sub = $"/auctions/{auction}/subscriptions/{bidder}";
-        await client.PostAsJsonAsync($"{sub}/booklet", new { paymentRef = "BKLT-1" });
-        await client.PostAsync($"{sub}/terms", null);
-        await client.PostAsJsonAsync($"{sub}/deposit-method", new { method = "Payment" });
+        var factory = _factory.Services
+            .GetRequiredService<IDbContextFactory<ParticipantDbContext>>();
+
+        await using var db = await factory.CreateDbContextAsync();
+        var subscription = await db.Subscriptions
+            .FirstAsync(x => x.AuctionId == auction && x.BidderId == bidder);
+        var terms = await db.AuctionTerms.FirstAsync(t => t.AuctionId == auction);
+        var now = DateTimeOffset.UtcNow;
+
+        subscription.RequestBooklet(terms, now);
+        subscription.ConfirmBookletPayment("SIM-BOO-SEED", now);
+        subscription.AcceptTerms(now);
+        subscription.ChooseDeposit(DepositMethod.Payment, terms, now);
+        await db.SaveChangesAsync();
 
         return (bidder, auction);
     }
@@ -393,9 +423,7 @@ public class StepUpEndpointTests : IDisposable
 
         var response = await _factory.CreateClient()
             .WithToken(TestJwt.For(bidder, Roles.Bidder))
-            .PostAsJsonAsync(
-                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
-                new { paymentRef = "DEP-1" });
+            .PostAsync($"/auctions/{auction}/subscriptions/{bidder}/deposit", null);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -412,9 +440,7 @@ public class StepUpEndpointTests : IDisposable
 
         var response = await _factory.CreateClient()
             .WithToken(TestJwt.StepUpExpired(bidder, Roles.Bidder))
-            .PostAsJsonAsync(
-                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
-                new { paymentRef = "DEP-1" });
+            .PostAsync($"/auctions/{auction}/subscriptions/{bidder}/deposit", null);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -429,13 +455,30 @@ public class StepUpEndpointTests : IDisposable
 
         var response = await _factory.CreateClient()
             .WithToken(TestJwt.SteppedUp(bidder, Roles.Bidder))
-            .PostAsJsonAsync(
-                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
-                new { paymentRef = "DEP-1" });
+            .PostAsync($"/auctions/{auction}/subscriptions/{bidder}/deposit", null);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        // 202, and still awaiting: the bidder is eligible when the gateway settles,
+        // not when they asked. A 200 here would be the service claiming a payment
+        // it has not taken.
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal("Eligible", body.GetProperty("status").GetString());
+        Assert.Equal("AwaitingDeposit", body.GetProperty("status").GetString());
+
+        // What the open gate actually produced: a request for the auction's deposit
+        // amount, in the outbox, bound for the payment service. Without this the
+        // test would pass on an endpoint that returned 202 and did nothing.
+        var factory = _factory.Services
+            .GetRequiredService<IDbContextFactory<ParticipantDbContext>>();
+
+        await using var db = await factory.CreateDbContextAsync();
+        var requested = await db.Outbox
+            .Where(o => o.Type == nameof(DepositRequested)
+                        && o.AggregateId == $"{auction}:{bidder}")
+            .ToListAsync();
+
+        Assert.Single(requested);
+        Assert.Contains("10000000", requested[0].Payload);
     }
 
     [Fact]
@@ -447,9 +490,7 @@ public class StepUpEndpointTests : IDisposable
 
         var response = await _factory.CreateClient()
             .WithToken(TestJwt.SteppedUp(bidder, Roles.Operator))
-            .PostAsJsonAsync(
-                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
-                new { paymentRef = "DEP-1" });
+            .PostAsync($"/auctions/{auction}/subscriptions/{bidder}/deposit", null);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
 
@@ -468,19 +509,18 @@ public class StepUpEndpointTests : IDisposable
 
         var response = await _factory.CreateClient()
             .WithToken(TestJwt.SteppedUp(Guid.NewGuid(), Roles.Bidder))
-            .PostAsJsonAsync(
-                $"/auctions/{auction}/subscriptions/{bidder}/deposit",
-                new { paymentRef = "DEP-1" });
+            .PostAsync($"/auctions/{auction}/subscriptions/{bidder}/deposit", null);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
-    public async Task The_steps_before_the_money_do_not_require_a_second_factor()
+    public async Task The_clicks_that_cost_nothing_do_not_require_a_second_factor()
     {
-        // Buying the booklet and accepting the terms commit nothing irreversible,
-        // and asking for a confirmation at every click trains people to approve
-        // without reading. The gate is where it costs something.
+        // Subscribing, accepting the terms and picking a deposit method commit
+        // nothing irreversible, and asking for a confirmation at every click trains
+        // people to approve without reading. The gate is where money moves — which
+        // now includes the booklet fee, asserted below.
         var bidder = Guid.NewGuid();
         var auction = Guid.NewGuid();
         await SeedAuctionAsync(auction);
@@ -498,9 +538,28 @@ public class StepUpEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.Created,
             (await ordinary.PostAsJsonAsync(
                 $"/auctions/{auction}/subscriptions", new { bidderId = bidder })).StatusCode);
-        Assert.Equal(HttpStatusCode.OK,
-            (await ordinary.PostAsJsonAsync($"{sub}/booklet", new { paymentRef = "BKLT-1" })).StatusCode);
+        // The booklet fee is money, however little, so it is behind the gate.
+        var refused = await ordinary.PostAsync($"{sub}/booklet", null);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains("StepUpRequired", await refused.Content.ReadAsStringAsync());
+
+        // Settled out of band, as AwaitingDepositAsync explains.
+        var factory = _factory.Services
+            .GetRequiredService<IDbContextFactory<ParticipantDbContext>>();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var subscription = await db.Subscriptions
+                .FirstAsync(x => x.AuctionId == auction && x.BidderId == bidder);
+            var terms = await db.AuctionTerms.FirstAsync(t => t.AuctionId == auction);
+            subscription.RequestBooklet(terms, DateTimeOffset.UtcNow);
+            subscription.ConfirmBookletPayment("SIM-BOO-SEED", DateTimeOffset.UtcNow);
+            await db.SaveChangesAsync();
+        }
+
         Assert.Equal(HttpStatusCode.OK,
             (await ordinary.PostAsync($"{sub}/terms", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,
+            (await ordinary.PostAsJsonAsync(
+                $"{sub}/deposit-method", new { method = "Payment" })).StatusCode);
     }
 }

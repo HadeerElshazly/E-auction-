@@ -219,6 +219,15 @@ start bid-processor EAuction.BidProcessor 5104 \
 start query-bff EAuction.QueryBff 5105 \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
+# Without this nothing charges the booklet fee or the deposit, and every bidder
+# stalls at AwaitingDeposit — which is correct behaviour and a confusing failure,
+# so the walk-through names this service when it times out.
+#
+# The simulated gateway settles everything, so Payments__AllowSimulatedGateway is
+# how it is allowed to; in Production the service refuses to start without it.
+start payments EAuction.Payments 5106 \
+  Payments__AllowSimulatedGateway=true
+
 # --- wait for health -------------------------------------------------------
 
 for probe in "auction-admin 5101" "participant 5102" "query-bff 5105"; do

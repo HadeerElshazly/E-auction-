@@ -52,6 +52,18 @@ public sealed record AuctionApproved : DomainEvent
     public required long MinIncrementMinorUnits { get; init; }
     public required long DepositMinorUnits { get; init; }
     public required long BookletPriceMinorUnits { get; init; }
+
+    /// <summary>
+    /// نسبة السعي — the brokerage percentage, charged to the winner on the price
+    /// they won at.
+    ///
+    /// On the public topic because a bidder deciding what to bid needs to know what
+    /// the sale will cost them on top, and because the payment service computes the
+    /// fee from it. Not a reserve price: D-23 restricts what the auction is worth to
+    /// the municipality, not the published terms of sale.
+    /// </summary>
+    public required decimal BrokerageFeePercent { get; init; }
+
     public int? QuietPeriodSeconds { get; init; }
     public required int MaxExtensions { get; init; }
     public required string Channel { get; init; }

@@ -91,6 +91,34 @@ public sealed class TopicWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// Looks for an event and returns null if it never comes, rather than throwing.
+    ///
+    /// For the assertions that are about absence: that the winner was not refunded
+    /// as well as credited, for instance. Absence needs its own method because
+    /// <see cref="WaitForAsync"/> treats not finding something as the failure, and
+    /// here it is the pass.
+    /// </summary>
+    public async Task<string?> TryFindAsync(
+        string topic, string eventType, Func<string, bool> where, TimeSpan window)
+    {
+        var deadline = DateTime.UtcNow + window;
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (_gate)
+            {
+                foreach (var e in _seen)
+                    if (e.Topic == topic
+                        && (eventType.Length == 0 || e.Type == eventType)
+                        && where(e.Payload))
+                        return e.Payload;
+            }
+            await Task.Delay(250);
+        }
+
+        return null;
+    }
+
     /// <summary>Asserts an event did NOT arrive — the reserve price must never leave its topic.</summary>
     public bool SawAnythingOn(string topic)
     {

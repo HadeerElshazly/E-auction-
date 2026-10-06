@@ -293,6 +293,30 @@ services:
       kafka:
         condition: service_healthy
 
+  # The money: the booklet fee, the deposit, brokerage on the award, and the
+  # refunds and forfeitures at the end.
+  #
+  # Without it a bidder never becomes eligible — the deposit request sits on
+  # participants.payments with nothing to answer it — so this is not an optional
+  # component of a working stack.
+  payments:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.payments
+    container_name: eauction-payments
+    environment:
+      Kafka__BootstrapServers: kafka:9092
+      # PayTabs and SADAD need merchant accounts the contract has not produced
+      # (P-3), so a simulator stands behind the gateway seam. It settles
+      # everything without taking a riyal, which is why the service refuses to
+      # start on it in Production unless this says so explicitly.
+      Payments__AllowSimulatedGateway: "true"
+    depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   minio-data:

@@ -1,0 +1,6 @@
+{{- if .Values.payments.enabled }}
+{{- $ctx := dict "root" $ "name" "payments" "svc" .Values.payments }}
+{{ include "e-auction.serviceAccount" $ctx }}
+---
+{{ include "e-auction.deployment" $ctx }}
+{{- end }}

@@ -59,6 +59,7 @@ builder.Services.AddSingleton<IOutboxRouter, ParticipantOutboxRouter>();
 builder.Services.AddSingleton<OutboxRelay<ParticipantDbContext>>();
 builder.Services.AddHostedService<OutboxRelayService<ParticipantDbContext>>();
 builder.Services.AddHostedService<CatalogConsumer>();
+builder.Services.AddHostedService<SettlementConsumer>();
 
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
 builder.Services.AddEAuctionStepUp(builder.Configuration);
@@ -222,12 +223,17 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions", async (
         SubscriptionResponse.From(subscription));
 }).RequireAuthorization(Policies.Bidder);
 
+// Asks the payment service for the booklet fee. 202, not 200: the booklet is not
+// bought when this returns, and a response that said otherwise would be a lie the
+// portal then had to work around.
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/booklet", (
-    HttpContext http, Guid auctionId, Guid bidderId, PaymentRefRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.PurchaseBooklet(r.PaymentRef, DateTimeOffset.UtcNow), http))
-    .RequireAuthorization(Policies.Bidder);
+        (s, _, terms) => s.RequestBooklet(terms, DateTimeOffset.UtcNow), http,
+        accepted: true))
+    // Money, however little. The booklet fee is a card payment like any other.
+    .RequireAuthorization(Policies.BidderStepUp);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/terms", (
     HttpContext http, Guid auctionId, Guid bidderId,
@@ -243,12 +249,17 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit-me
         (s, _, terms) => s.ChooseDeposit(r.Method, terms, DateTimeOffset.UtcNow), http))
     .RequireAuthorization(Policies.Bidder);
 
+// Authorises the deposit — التأمين — and nothing more. The bidder becomes eligible
+// when the gateway settles it, never because they asked.
+//
+// It takes no body. It used to take a payment reference the caller made up, which
+// this service then recorded as proof of a payment nobody had taken.
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit", (
-    HttpContext http, Guid auctionId, Guid bidderId, PaymentRefRequest r,
+    HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, bidder, terms) => s.ConfirmDepositPayment(
-            r.PaymentRef, bidder, terms, DateTimeOffset.UtcNow), http))
+        (s, _, terms) => s.AuthoriseDeposit(terms, DateTimeOffset.UtcNow), http,
+        accepted: true))
     // Money. A second factor, confirmed within the last few minutes.
     .RequireAuthorization(Policies.BidderStepUp);
 
@@ -372,7 +383,7 @@ static async Task<IResult> Mutate(
     IDbContextFactory<ParticipantDbContext> factory,
     Guid auctionId, Guid bidderId, CancellationToken ct,
     Action<Subscription, Bidder, AuctionTerms> change,
-    HttpContext? http = null, bool staffAction = false)
+    HttpContext? http = null, bool staffAction = false, bool accepted = false)
 {
     // A bidder may act only on their own subscription. Staff actions —
     // verifying a guarantee, revoking — are gated by role instead, because
@@ -396,7 +407,11 @@ static async Task<IResult> Mutate(
     {
         change(subscription, bidder, terms);
         await db.SaveChangesAsync(ct);
-        return Results.Ok(SubscriptionResponse.From(subscription));
+
+        // 202 for the two steps that only ask the payment service for money: the
+        // state the caller will eventually see is not the state being returned.
+        var body = SubscriptionResponse.From(subscription);
+        return accepted ? Results.Accepted(value: body) : Results.Ok(body);
     }
     catch (ParticipantValidationException ex)
     {
@@ -413,7 +428,6 @@ static async Task<IResult> Mutate(
 
 public sealed record CompleteProfileRequest(string Phone, string Email);
 public sealed record StartSubscriptionRequest(Guid BidderId);
-public sealed record PaymentRefRequest(string PaymentRef);
 public sealed record DepositMethodRequest(DepositMethod Method);
 public sealed record BankGuaranteeRequest(Guid DocumentId, DateTimeOffset ExpiresAt);
 public sealed record VerifyGuaranteeRequest(Guid VerifiedByUserId);
@@ -432,20 +446,31 @@ public sealed record BidderResponse(
 /// <summary>One eligible bidder, as the clerk's terminal lists them.</summary>
 public sealed record RosterEntry(Guid BidderId, string NameAr, int PaddleNumber);
 
+/// <summary>
+/// Carries the two "requested at" timestamps and the last refusal as well as the
+/// status, because with payment asynchronous the status alone no longer tells a
+/// bidder what is happening: <c>Draft</c> means both "buy the booklet" and "we are
+/// waiting for your bank", and those need different screens.
+/// </summary>
 public sealed record SubscriptionResponse(
     Guid Id, Guid AuctionId, Guid BidderId, string Status,
+    DateTimeOffset? BookletRequestedAt,
     DateTimeOffset? BookletPurchasedAt, DateTimeOffset? TermsAcceptedAt,
-    string? DepositMethod, DateTimeOffset? DepositPaidAt,
+    string? DepositMethod,
+    DateTimeOffset? DepositRequestedAt, DateTimeOffset? DepositPaidAt,
     Guid? GuaranteeDocumentId, DateTimeOffset? GuaranteeExpiresAt,
     DateTimeOffset? GuaranteeVerifiedAt,
     int KeyEpoch, DateTimeOffset? EligibleAt, string? RevocationReason,
-    DateTimeOffset? DepositResolvedAt, bool DepositForfeited)
+    DateTimeOffset? DepositResolvedAt, bool DepositForfeited,
+    string? PaymentFailurePurpose, string? PaymentFailureReason,
+    DateTimeOffset? PaymentFailedAt)
 {
     public static SubscriptionResponse From(Subscription s) => new(
         s.Id, s.AuctionId, s.BidderId, s.Status.ToString(),
-        s.BookletPurchasedAt, s.TermsAcceptedAt,
-        s.DepositMethod?.ToString(), s.DepositPaidAt,
+        s.BookletRequestedAt, s.BookletPurchasedAt, s.TermsAcceptedAt,
+        s.DepositMethod?.ToString(), s.DepositRequestedAt, s.DepositPaidAt,
         s.GuaranteeDocumentId, s.GuaranteeExpiresAt, s.GuaranteeVerifiedAt,
         s.KeyEpoch, s.EligibleAt, s.RevocationReason,
-        s.DepositResolvedAt, s.DepositForfeited);
+        s.DepositResolvedAt, s.DepositForfeited,
+        s.PaymentFailurePurpose, s.PaymentFailureReason, s.PaymentFailedAt);
 }

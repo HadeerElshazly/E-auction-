@@ -336,6 +336,7 @@ public class ContractDriftTests
             MinIncrementMinorUnits = 50_000_00,
             DepositMinorUnits = 100_000_00,
             BookletPriceMinorUnits = 1_000_00,
+            BrokerageFeePercent = 2.5m,
             QuietPeriodSeconds = 120,
             MaxExtensions = 3,
             Channel = "Online",
@@ -377,7 +378,7 @@ public class ContractDriftTests
             StartsAt = DateTimeOffset.UtcNow.AddDays(1),
             EndsAt = DateTimeOffset.UtcNow.AddDays(2),
             OpeningPriceMinorUnits = 1, MinIncrementMinorUnits = 1,
-            DepositMinorUnits = 1, BookletPriceMinorUnits = 1,
+            DepositMinorUnits = 1, BookletPriceMinorUnits = 1, BrokerageFeePercent = 2.5m,
             MaxExtensions = 0, Channel = "Online", BidderVisibility = "Masked",
             PlotCount = 1, TotalAreaSqm = 600.25m,
             Plots = [new AuctionAdmin.Domain.PublicPlot(
@@ -407,7 +408,7 @@ public class ContractDriftTests
             NameAr = "أ", NameEn = "A",
             StartsAt = DateTimeOffset.UtcNow, EndsAt = DateTimeOffset.UtcNow.AddHours(1),
             OpeningPriceMinorUnits = 1_000_000_00, MinIncrementMinorUnits = 50_000_00,
-            DepositMinorUnits = 1, BookletPriceMinorUnits = 1,
+            DepositMinorUnits = 1, BookletPriceMinorUnits = 1, BrokerageFeePercent = 2.5m,
             MaxExtensions = 0, Channel = "Online", BidderVisibility = "Masked",
             PlotCount = 0, TotalAreaSqm = 0m, Plots = []
         };

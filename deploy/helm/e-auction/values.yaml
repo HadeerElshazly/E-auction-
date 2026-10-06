@@ -197,6 +197,64 @@ bidProcessor:
     - name: Processor__CheckpointEverySeconds
       value: "2"
 
+# The money: booklet fee, deposit, brokerage, refunds and forfeitures.
+#
+# Not optional. Without it a deposit request sits unanswered on
+# participants.payments and no bidder ever becomes eligible, so the auction opens
+# to an empty room.
+payments:
+  enabled: true
+  image: e-auction/payments
+
+  # One instance. Two would each replay the settlement log and then race on the
+  # same request: the gateway's idempotency key stops that becoming two charges,
+  # but it would still publish two settlements for one payment and leave the audit
+  # trail saying something that did not happen. Sharding by auction is the way to
+  # scale this, and it is not built.
+  replicas: 1
+  port: null
+
+  expose:
+    enabled: false
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: false
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  # Where the PayTabs / SADAD merchant credentials go when the contract produces
+  # them (P-3): a secret reference, never a value in this file.
+  #
+  #   secretEnv:
+  #     - name: Payments__PayTabs__ServerKey
+  #       secret: eauction-paytabs
+  #       key: server-key
+  secretEnv: []
+
+  env:
+    # Deliberately absent, so that a production install fails to start rather
+    # than settling every deposit without taking any money:
+    #
+    #   Payments__AllowSimulatedGateway: "true"
+    #
+    # Set it in a values override for a non-production environment. See
+    # values-jeddah.yaml for the comment that says why it is not set there.
+    []
+
 participant:
   enabled: true
   image: e-auction/participant

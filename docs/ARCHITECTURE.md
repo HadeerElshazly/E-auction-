@@ -68,6 +68,8 @@ design change, not a configuration change.
 | D-14 | **Keycloak** as IdP, federating Nafath via OIDC redirect | Lighter than WSO2 IS, strong k8s operator |
 | D-15 | **Nafath 2-digit step-up** at KYC, deposit payment and award acceptance — never on the bid path | Takes seconds and needs phone interaction |
 | D-36 | **An onsite bid is signed by the clerk, and the frame names both them and the bidder** (§29) | A bidder in the hall has a paddle, not a keyboard. An onsite record that looked identical to an online one would overstate what it proves |
+| D-37 | **Eligibility follows a settlement, so the deposit endpoint returns 202** (§30) | The caller used to invent the payment reference and the service believed it, so a bidder could reach the bid floor of a land auction without a riyal having moved |
+| D-38 | **The payment service proves its replay with a marker it writes, rather than a quiet period** (§30) | A quiet period is a guess about whether money has already been taken; a slow broker looks exactly like an empty topic, and an empty topic means charge everybody again |
 | D-16 | **Debezium for the transactional outbox only**, never raw table CDC | Raw CDC leaks internal schema into the public event contract |
 | D-17 | **Event-driven domain; WSO2 MI only at integration edges** (payment, SADAD, municipality systems) | MI is an ESB, not a human-workflow engine. Workflows are state machines in the owning service |
 | D-18 | **React (web) + React Native/Expo (mobile)**, shared TypeScript contracts | |
@@ -995,6 +997,7 @@ cluster as a pod that will not schedule.
 | No charts for Kafka, Postgres, Keycloak, MinIO | Strimzi and CloudNativePG have their own operators; these are dependencies to declare, not to reimplement |
 | No NetworkPolicy | `auctions.sealed` is ACL'd at the Kafka level (D-23), but pod-level isolation is not expressed |
 | No front-end charts | React apps and the mobile BFF are not built yet |
+| No chart for `payments` at the time | *Superseded by §30:* `templates/payments.yaml` exists, pinned to one replica, and `values-jeddah.yaml` deliberately withholds the simulator flag so a production install refuses to start without a real gateway |
 
 ---
 
@@ -1120,7 +1123,7 @@ the limit in tests that are not about rate limiting.
 |---|---|
 | **Nafath is not integrated** | `POST /bidders/nafath` stands in for the callback and is open. It must be gated before any real use — identity is the one thing a bidder cannot be allowed to assert about themselves |
 | **No authentication on any endpoint** | Including the signing-key endpoint, which hands out a bidder's credential to anyone who asks |
-| Payments are references, not integrations | `DepositRequested` is published; nothing consumes it. PayTabs and SADAD adapters are not built |
+| ~~Payments are references, not integrations~~ | *Superseded by §30.* `DepositRequested` now reaches a payment service, and the caller no longer supplies the reference. PayTabs and SADAD adapters are still not built |
 | Documents are ids only | The bank guarantee is a `Guid` validated against nothing |
 | Company bidders | Individuals only; Nafath's delegation path is a different integration |
 
@@ -2596,3 +2599,217 @@ bugs: a conditional branch on UI state is a race unless the wait comes first.
   only for as long as the roster is — a bidder qualifying mid-auction renumbers
   everyone after them. Real paddle numbers are issued at the door and belong in
   the subscription.
+
+---
+
+## 30. المدفوعات — the payment service, and what it replaced
+
+Four kinds of money move through a land auction, and until now none of them
+moved at all.
+
+| Arabic | What it is | When | Refundable |
+|---|---|---|---|
+| كراسة الشروط | the terms booklet fee | before reading the terms | no |
+| التأمين | the deposit | before bidding | yes, unless the bidder defaults |
+| مبلغ السعي | brokerage, a percentage of the price | on award | no |
+| — | the deposit, at the end | on settlement | refunded, forfeited, or applied |
+
+`EAuction.Payments` is a worker with no database and no HTTP surface. It
+consumes four events and publishes one.
+
+| It reads | It does |
+|---|---|
+| `BookletFeeRequested` | charges the booklet fee |
+| `DepositRequested` | charges the deposit |
+| `AwardConfirmed` | charges brokerage on the price actually won at |
+| `DepositsReleasable` | refunds the losers, forfeits the defaulters, applies the winner's |
+
+Everything it does lands on `payments.settlements` as one event type,
+`PaymentSettled`, keyed `auction:bidder:purpose`. One type rather than four
+because every consumer of that topic asks the same three questions — which
+bidder, what for, did it work — and a consumer that had to switch on four names
+to find out would get a new case wrong the first time one was added.
+
+### What this replaced
+
+`POST /auctions/{id}/subscriptions/{bidder}/deposit` used to take this:
+
+```json
+{ "paymentRef": "DEP-1" }
+```
+
+and record it. The caller invented the string; the participant service believed
+it. So a bidder could walk the entire admission path — booklet, terms, deposit —
+and reach the bid floor of a state land auction without a riyal having moved.
+The smoke test did it twice on every run and reported it as a pass, because
+there was nothing for it to check against.
+
+Both money endpoints now take no body at all. There is nothing for a caller to
+assert: the reference comes back from the gateway, on a topic the participant
+service does not write.
+
+### D-37: eligibility follows a settlement, so it is asynchronous
+
+`POST .../deposit` returns **202**, and the subscription stays at
+`AwaitingDeposit`. It becomes `Eligible` when `PaymentSettled` arrives with
+`Charged`, which travels the outbox → `participants.payments` → the payment
+service → the gateway → `payments.settlements` → the participant service.
+
+A 200 would have been a lie about a payment nobody had taken yet. The cost of
+telling the truth is real and is paid in three places: the bidder portal shows a
+waiting state and polls every two seconds while a payment is in flight, the
+smoke test waits for a stage instead of asserting one, and `qualify` in the
+Playwright helpers waits for the *next* step to appear rather than for a reply.
+
+This is also why `ChooseDeposit` no longer raises `DepositRequested`. Choosing a
+method is an ordinary click, gated as one; charging a hundred thousand riyals
+needs a second factor. With the request raised at the choice, the step-up on the
+deposit endpoint was guarding the confirmation of a charge that had already been
+sent. The booklet fee moved behind the gate for the same reason — it is money,
+however little.
+
+### D-38: the replay is proved with a marker, not guessed with a timer
+
+This service holds no database. What it has already charged is rebuilt by
+replaying its own output topic from offset 0, and that replay is the only thing
+standing between a pod restart and charging every bidder in the auction a second
+time.
+
+Every other service here decides it is caught up when a topic has been quiet for
+a while — `ProcessorService.DrainUntilQuietAsync` waits two seconds. For the
+auction catalogue that is the right call: being a little behind costs a retry.
+Here the same technique is a guess about whether money has already been taken,
+and the guess is wrong in the expensive direction. A slow broker, or a slow
+consumer-group assignment, looks exactly like an empty topic — and an empty
+topic means charge everybody.
+
+So the service writes a marker to the end of `payments.settlements` before it
+replays, and replays until it reads that marker back. The topic has one
+partition, so partition offset order is a total order over it (D-03): seeing the
+marker means every settlement written before this process started has already
+been applied. If the marker never comes back within two minutes the service
+throws and takes the host down with it, which is the correct outcome — a payment
+service that cannot tell what it has charged must not charge.
+
+It costs one record per restart on a topic that is never compacted. That is a
+fair price, and it doubles as a restart log.
+
+The first version of this used a quiet period with a 30-second initial deadline,
+which did not merely risk being wrong: it stalled every fresh deployment for
+thirty seconds, because an empty topic is silent and the initial deadline was
+the only timer running. The payments tests failed on it immediately.
+
+### Four places a double charge was possible, and what stops each
+
+| Where | What stops it |
+|---|---|
+| The same request delivered twice | `_settled`, rebuilt by the proved replay |
+| A restart between two deliveries | the same, which is why D-38 matters |
+| A crash between charging and publishing | the gateway's idempotency key, `auction:bidder:purpose` |
+| Two replicas | nothing — `payments.replicas` is 1, and the chart warns if it is not |
+
+The idempotency key is the one this service cannot handle alone. It can be sure
+it did not *publish* twice, but a crash between the charge and the publish
+leaves no local trace of either. Both PayTabs and SADAD support a
+merchant-supplied reference for exactly this; an adapter that drops it is not
+finished, and `SimulatedGateway` honours it so the stand-in keeps the promise
+the real ones will have to.
+
+### A refusal is not a settlement
+
+`Refused` is published like everything else, but it is deliberately *not*
+remembered. The bidder still owes the money, and remembering it would leave them
+stuck forever behind a card that was declined once. The subscription records the
+reason, clears the "requested at" timestamp so the portal stops waiting, and
+lets them try again.
+
+### Brokerage, and the award that arrives first
+
+`AwardConfirmed` carries the price. The percentage comes from `AuctionApproved`
+on `auctions.upcoming`, so `BrokerageFeePercent` was added to that event — it
+belongs on the public topic anyway, since a bidder deciding what to bid is
+entitled to know what the sale costs them on top. D-23 restricts what the land is
+worth to the municipality, not the published terms of sale.
+
+The two topics are followed concurrently and replayed independently, so an award
+can and does arrive before the definition it needs. The first version logged a
+warning and charged nothing, which is the worst shape a money bug can take:
+nothing fails, the number is just smaller. It now parks the award and charges
+when the percentage lands — under a lock, because without one the two handlers
+interleave into a lost update where the award parks itself a moment after the
+definition looked for a parked award and found none.
+
+Rounding is `MidpointRounding.AwayFromZero` at the halala, the direction a
+cashier rounds. Down, the municipality would be short on every single sale.
+
+### Three outcomes at the end, and none of them is "refund everything"
+
+`DepositsReleasable` is published when the award is **settled**, never at the
+gavel: while the cascade can still reach a losing bidder, their deposit is held
+through the compliance window of everyone above them (§8.3).
+
+- The defaulters' deposits are **forfeited** — kept. No money moves at this
+  instant, so the charge's own reference is kept rather than a refund reference
+  invented for it.
+- The winner's is **applied to the purchase**, not refunded. Reporting it as a
+  refund would overstate what went back to bidders by the largest deposit in the
+  auction.
+- Everyone else is **refunded**, against the original charge. A refund is always
+  against a charge, never a free-standing payment to a person — which is the
+  shape of every payments bug that ends up in a newspaper.
+
+The service knows who to release to because it took the deposits itself. Nobody
+has to be asked, and no list has to be passed in.
+
+### The gateway is a seam, and the simulator is not a placeholder
+
+PayTabs and SADAD both need merchant accounts, credentials and a sandbox, and
+P-3 records that the contract for them is still open. What can be built without
+them is the shape of the conversation, the idempotency contract, and everything
+upstream — which is most of the risk.
+
+`SimulatedGateway` honours the idempotency key and can refuse: an amount whose
+halalas are `13` comes back `InsufficientFunds`, chosen rather than random so a
+test can ask for a decline reproducibly on any machine. A gateway that always
+said yes would make the failure path unreachable, and the failure path is the one
+where a bidder is left awaiting a deposit they think they paid.
+
+Its references are random, not derived from the auction and bidder. References
+end up in emails, bank statements and support tickets; one that encodes who paid
+what is one that leaks it.
+
+**Production refuses to start on it.** `Payments:AllowSimulatedGateway` must be
+set explicitly, and `values-jeddah.yaml` deliberately does not set it. A
+deployment that silently settled every deposit without taking a riyal would
+qualify every registered bidder in the country to bid on state land, and would
+look exactly like success: deposits "paid", bidders eligible, auctions running.
+
+### What the tests cover
+
+`EAuction.Payments.Tests` (12) is mostly about charging *once*: the same request
+twice, a restart between deliveries, a release delivered twice, nothing refunded
+to a bidder who never paid. `PaymentLoopTests` (2, against Postgres and the
+catcher) is the one that proves the point of the whole change — a bidder becomes
+eligible only once the gateway has taken the deposit, and a refused deposit
+leaves them off the floor with the reason on their subscription. Removing the
+payment service from that test times out at the first wait, which is how it was
+checked to bite.
+
+### Still not verified
+
+- **No adapter exists.** Everything above is exercised against a simulator. The
+  real gateways bring 3-D Secure redirects, settlement that arrives tomorrow,
+  partial captures and webhooks, and none of that is modelled.
+- **A settled payment that cannot be qualified is logged, not resolved.** If the
+  deposit lands and the bidder turns out to have an incomplete profile, the money
+  is taken and the subscription stays put. The log says so loudly; nothing
+  refunds it.
+- **The bank-guarantee path takes no money and is still manual.** An
+  administrator verifies a PDF by eye. No bank integration.
+- **Nothing reconciles against the gateway.** There is no job that compares what
+  `payments.settlements` says to what the gateway's own statement says, which is
+  the control a finance department will ask for first.
+- **Brokerage is charged, never collected or chased.** There is no invoice, no
+  due date, and no consequence for not paying it.
+- **One replica, enforced only by a warning.** Sharding by auction is the way to
+  scale this and it is not built.

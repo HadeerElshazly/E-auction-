@@ -59,3 +59,40 @@ public sealed record DepositRequested : DomainEvent
     public override string AggregateType => "participant-payments";
     public override string AggregateId => $"{AuctionId}:{BidderId}";
 }
+
+/// <summary>
+/// The booklet fee is owed. Same topic as the deposit, same consumer: the payment
+/// service does not care which of the two it is being asked to take, only how much
+/// and from whom.
+/// </summary>
+public sealed record BookletFeeRequested : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid BidderId { get; init; }
+    public required long AmountMinorUnits { get; init; }
+
+    public override string AggregateType => "participant-payments";
+    public override string AggregateId => $"{AuctionId}:{BidderId}";
+}
+
+/// <summary>
+/// The purpose names as they appear on <c>payments.settlements</c>.
+///
+/// Duplicated here rather than referenced from the payment service, because the
+/// dependency runs the other way: that service consumes this one's events and must
+/// not be a build-time prerequisite for it. Two string constants are a smaller
+/// price than a cycle between two deployables.
+/// </summary>
+public static class PaymentPurposes
+{
+    public const string Booklet = nameof(Booklet);
+    public const string Deposit = nameof(Deposit);
+    public const string Brokerage = nameof(Brokerage);
+}
+
+/// <summary>Outcomes on <c>payments.settlements</c>. Same reasoning as <see cref="PaymentPurposes"/>.</summary>
+public static class PaymentOutcomeNames
+{
+    public const string Charged = nameof(Charged);
+    public const string Refused = nameof(Refused);
+}

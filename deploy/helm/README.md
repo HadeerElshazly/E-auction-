@@ -80,6 +80,8 @@ e-auction/
     ├── bid-processor.yaml
     ├── auction-admin.yaml
     ├── participant.yaml
+    ├── payments.yaml
+    ├── query-bff.yaml
     └── NOTES.txt
 ```
 

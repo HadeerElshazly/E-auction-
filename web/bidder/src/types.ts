@@ -81,9 +81,18 @@ export interface Subscription {
   auctionId: string
   bidderId: string
   status: SubscriptionStatus
+  /**
+   * When the fee was handed to the payment service — not when it was paid.
+   *
+   * Status alone no longer says what is happening now that payment is
+   * asynchronous: `Draft` means both "buy the booklet" and "your bank is being
+   * asked", and those are different screens.
+   */
+  bookletRequestedAt: string | null
   bookletPurchasedAt: string | null
   termsAcceptedAt: string | null
   depositMethod: string | null
+  depositRequestedAt: string | null
   depositPaidAt: string | null
   guaranteeDocumentId: string | null
   guaranteeExpiresAt: string | null
@@ -93,6 +102,10 @@ export interface Subscription {
   revocationReason: string | null
   depositResolvedAt: string | null
   depositForfeited: boolean
+  /** 'Booklet' or 'Deposit', when the gateway last refused one of them. */
+  paymentFailurePurpose: string | null
+  paymentFailureReason: string | null
+  paymentFailedAt: string | null
 }
 
 export type SubscriptionStatus =

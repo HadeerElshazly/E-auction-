@@ -56,15 +56,26 @@ internal static class Build
         Guid auctionId, BidderVisibility visibility = BidderVisibility.Masked) =>
         new(auctionId, Now.AddDays(7), Now.AddDays(8), 100_000_00, 1_000_00, visibility);
 
-    /// <summary>Carries a subscription all the way to eligible by payment.</summary>
+    /// <summary>
+    /// Carries a subscription all the way to eligible by payment, settlements and
+    /// all — because that is now the only way there.
+    /// </summary>
     public static Subscription EligibleByPayment(
         Guid auctionId, Bidder bidder, AuctionTerms terms)
     {
         var s = Subscription.Start(auctionId, bidder.Id);
-        s.PurchaseBooklet("booklet-ref", Now);
+        PayForBooklet(s, terms);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.Payment, terms, Now);
+        s.AuthoriseDeposit(terms, Now);
         s.ConfirmDepositPayment("deposit-ref", bidder, terms, Now);
         return s;
+    }
+
+    /// <summary>The booklet, asked for and then settled by the payment service.</summary>
+    public static void PayForBooklet(Subscription s, AuctionTerms terms)
+    {
+        s.RequestBooklet(terms, Now);
+        s.ConfirmBookletPayment("booklet-ref", Now);
     }
 }

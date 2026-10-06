@@ -20,6 +20,9 @@ Services:
 {{- if .Values.auctionAdmin.enabled }}
   auction-admin   {{ .Values.auctionAdmin.replicas }} replicas
 {{- end }}
+{{- if .Values.payments.enabled }}
+  payments        {{ .Values.payments.replicas }} replica
+{{- end }}
 
 {{- if gt (int .Values.bidProcessor.replicas) 1 }}
 
@@ -27,6 +30,16 @@ WARNING
   bidProcessor.replicas is {{ .Values.bidProcessor.replicas }}. Auctions are not yet sharded
   across processor instances, so every replica would drive every auction and
   publish duplicate winners. Set it back to 1.
+{{- end }}
+
+{{- if gt (int .Values.payments.replicas) 1 }}
+
+WARNING
+  payments.replicas is {{ .Values.payments.replicas }}. Each replica replays the whole
+  settlement log and then races the others on the same request. The gateway's
+  idempotency key stops that becoming two charges, but two settlements would be
+  published for one payment and the audit trail would say something that did not
+  happen. Set it back to 1.
 {{- end }}
 
 {{- if .Values.auctionAdmin.enabled }}

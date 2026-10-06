@@ -42,7 +42,7 @@ public class SubscriptionTests
         Assert.Throws<InvalidSubscriptionTransitionException>(
             () => s.ChooseDeposit(DepositMethod.Payment, terms, Now));
 
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         Assert.Throws<InvalidSubscriptionTransitionException>(
             () => s.ChooseDeposit(DepositMethod.Payment, terms, Now));
 
@@ -52,20 +52,116 @@ public class SubscriptionTests
     }
 
     [Fact]
-    public void Choosing_a_deposit_asks_the_payment_service_for_the_auction_s_amount()
+    public void Choosing_a_deposit_method_asks_for_no_money()
+    {
+        // Choosing is a click; charging needs the second factor on the deposit
+        // endpoint. While the request rode along with the choice, that step-up
+        // guarded the confirmation of a charge already sent.
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId);
+
+        var s = Subscription.Start(auctionId, bidder.Id);
+        Build.PayForBooklet(s, terms);
+        s.ClearEvents();
+        s.AcceptTerms(Now);
+        s.ChooseDeposit(DepositMethod.Payment, terms, Now);
+
+        Assert.Empty(s.Events.OfType<DepositRequested>());
+        Assert.Null(s.DepositRequestedAt);
+
+        s.AuthoriseDeposit(terms, Now);
+
+        var requested = Assert.Single(s.Events.OfType<DepositRequested>());
+        Assert.Equal(100_000_00, requested.AmountMinorUnits);
+        Assert.Equal("Payment", requested.Method);
+        Assert.Equal(Now, s.DepositRequestedAt);
+    }
+
+    [Fact]
+    public void Asking_for_the_booklet_does_not_buy_it()
+    {
+        // The hole this closes: the endpoint used to take a payment reference the
+        // caller invented, so a bidder could walk the whole admission path — and
+        // reach the bid floor of a land auction — without a riyal having moved.
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId);
+
+        var s = Subscription.Start(auctionId, bidder.Id);
+        s.RequestBooklet(terms, Now);
+
+        Assert.Equal(SubscriptionStatus.Draft, s.Status);
+        Assert.Null(s.BookletPurchasedAt);
+        Assert.Throws<InvalidSubscriptionTransitionException>(() => s.AcceptTerms(Now));
+
+        var fee = Assert.Single(s.Events.OfType<BookletFeeRequested>());
+        Assert.Equal(terms.BookletPriceMinorUnits, fee.AmountMinorUnits);
+
+        s.ConfirmBookletPayment("SIM-BOO-ABC", Now);
+
+        Assert.Equal(SubscriptionStatus.BookletPurchased, s.Status);
+        Assert.Equal("SIM-BOO-ABC", s.BookletPaymentRef);
+    }
+
+    [Fact]
+    public void A_settlement_replayed_is_applied_once()
+    {
+        // payments.settlements is read from offset 0 on every start, so every
+        // confirmation this service has ever made arrives again each time it boots.
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId);
+
+        var s = Subscription.Start(auctionId, bidder.Id);
+        s.RequestBooklet(terms, Now);
+        s.ConfirmBookletPayment("SIM-BOO-ABC", Now);
+        s.AcceptTerms(Now);
+        s.ChooseDeposit(DepositMethod.Payment, terms, Now);
+        s.AuthoriseDeposit(terms, Now);
+        s.ConfirmDepositPayment("SIM-DEP-ABC", bidder, terms, Now);
+        s.ClearEvents();
+
+        // The whole log again, in order.
+        s.ConfirmBookletPayment("SIM-BOO-ABC", Now.AddHours(1));
+        s.ConfirmDepositPayment("SIM-DEP-ABC", bidder, terms, Now.AddHours(1));
+
+        Assert.Equal(SubscriptionStatus.Eligible, s.Status);
+        Assert.Equal(Now, s.BookletPurchasedAt);
+        Assert.Equal(Now, s.DepositPaidAt);
+
+        // And no second eligibility row: the catcher is not told twice, and the
+        // bidder's key epoch does not move under them.
+        Assert.Empty(s.Events.OfType<ParticipantEligibilityChanged>());
+    }
+
+    [Fact]
+    public void A_refused_payment_leaves_the_bidder_able_to_try_again()
     {
         var auctionId = Guid.NewGuid();
         var bidder = Build.VerifiedBidder();
         var terms = Build.Terms(auctionId);
 
         var s = Subscription.Start(auctionId, bidder.Id);
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.Payment, terms, Now);
+        s.AuthoriseDeposit(terms, Now);
+        s.ClearEvents();
 
-        var requested = Assert.Single(s.Events.OfType<DepositRequested>());
-        Assert.Equal(100_000_00, requested.AmountMinorUnits);
-        Assert.Equal("Payment", requested.Method);
+        s.RecordPaymentRefused(PaymentPurposes.Deposit, "InsufficientFunds", Now.AddMinutes(1));
+
+        // Nothing moved backwards, and nothing is pretending to be in flight.
+        Assert.Equal(SubscriptionStatus.AwaitingDeposit, s.Status);
+        Assert.Null(s.DepositRequestedAt);
+        Assert.Equal("InsufficientFunds", s.PaymentFailureReason);
+        Assert.Equal(PaymentPurposes.Deposit, s.PaymentFailurePurpose);
+
+        // A second attempt is allowed, and the refusal stops being shown.
+        s.AuthoriseDeposit(terms, Now.AddMinutes(2));
+
+        Assert.Single(s.Events.OfType<DepositRequested>());
+        Assert.Null(s.PaymentFailureReason);
     }
 
     [Fact]
@@ -92,7 +188,7 @@ public class SubscriptionTests
         var unverified = Bidder.FromNafath(Guid.NewGuid(), "1234567890", "سارة", "Sara", Now);
 
         var s = Subscription.Start(auctionId, unverified.Id);
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.Payment, terms, Now);
 
@@ -113,7 +209,7 @@ public class SubscriptionTests
         var terms = Build.Terms(auctionId);
 
         var s = Subscription.Start(auctionId, bidder.Id);
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.BankGuarantee, terms, Now);
 
@@ -133,7 +229,7 @@ public class SubscriptionTests
         var terms = Build.Terms(auctionId);
 
         var s = Subscription.Start(auctionId, bidder.Id);
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.BankGuarantee, terms, Now);
         s.SubmitBankGuarantee(Guid.NewGuid(), terms.EndsAt.AddDays(30), terms);
@@ -156,7 +252,7 @@ public class SubscriptionTests
         var terms = Build.Terms(auctionId);
 
         var s = Subscription.Start(auctionId, bidder.Id);
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         s.AcceptTerms(Now);
         s.ChooseDeposit(DepositMethod.BankGuarantee, terms, Now);
 
@@ -206,7 +302,7 @@ public class SubscriptionTests
         var terms = Build.Terms(auctionId);
 
         var s = Subscription.Start(auctionId, bidder.Id);
-        s.PurchaseBooklet("ref", Now);
+        Build.PayForBooklet(s, terms);
         s.AcceptTerms(Now);
 
         Assert.Throws<ParticipantValidationException>(

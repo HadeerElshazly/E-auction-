@@ -48,7 +48,8 @@ using var streams = new HttpClient
 using var watcher = new TopicWatcher(bootstrap, new[]
 {
     Topics.Upcoming, Topics.Sealed, Topics.Participants,
-    Topics.Lifecycle, Topics.CurrentWinner, Topics.BidsRejected
+    Topics.Lifecycle, Topics.CurrentWinner, Topics.BidsRejected,
+    Topics.ParticipantPayments, Topics.Settlements
 });
 
 try
@@ -230,19 +231,45 @@ try
     foreach (var (who, bidderId) in new[] { (saraParticipant, sara), (khalidParticipant, khalid) })
     {
         var sub = $"/auctions/{auctionId}/subscriptions/{bidderId}";
-        await who.PostAsync($"/auctions/{auctionId}/subscriptions", new { bidderId });
-        await who.PostAsync($"{sub}/booklet", new { paymentRef = $"BKLT-{bidderId:N}"[..16] });
-        await who.PostAsync($"{sub}/terms");
-        await who.PostAsync($"{sub}/deposit-method", new { method = "Payment" });
-
-        // The deposit, with the second factor.
         var strong = bidderId == sara ? saraStrong : khalidStrong;
-        await strong.PostAsync($"{sub}/deposit", new { paymentRef = $"DEP-{bidderId:N}"[..16] });
+
+        await who.PostAsync($"/auctions/{auctionId}/subscriptions", new { bidderId });
+        await QualifyAsync(who, strong, auctionId, bidderId);
 
         var state = await who.GetAsync(sub);
         var stage = state.GetProperty("status").GetString();
-        if (stage == "Eligible") n.Step($"{who.Who} is eligible to bid", "booklet → terms → deposit");
-        else n.Fail($"{who.Who} is eligible to bid", $"stage is {stage}");
+
+        if (stage != "Eligible")
+        {
+            n.Fail($"{who.Who} is eligible to bid", $"stage is {stage}");
+            continue;
+        }
+
+        // Asserted on the topic rather than on the subscription, for two reasons.
+        //
+        // The gateway's reference is not in the API response and should not be: a
+        // payment reference is the bidder's own and the endpoint is readable by
+        // administrators too. And the topic is stronger evidence anyway — it is
+        // where the money actually was recorded, and it proves the settlement
+        // crossed Kafka rather than being produced inside one process.
+        //
+        // This is the hole the payment service closed. Before it, both endpoints
+        // took a reference the caller invented, so this walk-through qualified two
+        // bidders for a state land auction without a riyal moving, and reported it
+        // as a pass.
+        foreach (var purpose in new[] { "Booklet", "Deposit" })
+        {
+            var settlement = await watcher.WaitForAsync(
+                Topics.Settlements, "PaymentSettled", auctionId,
+                p => p.Contains($"\"purpose\":\"{purpose}\"")
+                     && p.Contains(bidderId.ToString()));
+
+            if (!settlement.Contains("\"outcome\":\"Charged\""))
+                n.Fail($"{purpose.ToLowerInvariant()} charged for {who.Who}", settlement);
+        }
+
+        n.Step($"{who.Who} is eligible to bid",
+            $"both charges settled on {Topics.Settlements}");
     }
 
     await watcher.WaitForAsync(
@@ -698,7 +725,66 @@ try
         n.Fail("the winner cannot drive their own award", $"got {(int)bidderAward}, wanted 403");
 
     // -----------------------------------------------------------------------
-    n.Section("10. قاعة المزاد — the hall, where a clerk enters the bids");
+    n.Section("10. المدفوعات — the end of this auction's money");
+    // -----------------------------------------------------------------------
+    //
+    // Three different things happen to three sums, and none of them is a refund of
+    // everything: the winner owes brokerage, the winner's own deposit is set against
+    // the price rather than returned, and the loser's comes back. Reporting the
+    // winner's deposit as a refund would overstate what went back to bidders by the
+    // largest deposit in the auction.
+
+    // مبلغ السعي, 2.5% of the price actually won at.
+    var expectedBrokerage = (long)Math.Round(pendingAmount * 2.5m / 100m,
+        MidpointRounding.AwayFromZero);
+
+    var brokerage = await watcher.WaitForAsync(
+        Topics.Settlements, "PaymentSettled", auctionId,
+        p => p.Contains("\"purpose\":\"Brokerage\"") && p.Contains(sara.ToString()));
+
+    if (brokerage.Contains($"\"amountMinorUnits\":{expectedBrokerage}")
+        && brokerage.Contains("\"outcome\":\"Charged\""))
+        n.Step("brokerage charged to the winner",
+            $"{expectedBrokerage / 100m:N2} SAR — 2.5% of {pendingAmount / 100:N0}");
+    else
+        n.Fail("brokerage charged to the winner",
+            $"wanted {expectedBrokerage} halala, got {brokerage}");
+
+    // Settling the award is what releases the deposits — never at the gavel, while
+    // the cascade can still reach a losing bidder (§8.3).
+    await committee.PostAsync($"/auctions/{auctionId}/settle");
+
+    var applied = await watcher.WaitForAsync(
+        Topics.Settlements, "PaymentSettled", auctionId,
+        p => p.Contains("\"outcome\":\"AppliedToPurchase\"") && p.Contains(sara.ToString()));
+    n.Step("the winner's deposit applied to the price", "not refunded, and not reported as one");
+
+    var refunded = await watcher.WaitForAsync(
+        Topics.Settlements, "PaymentSettled", auctionId,
+        p => p.Contains("\"outcome\":\"Refunded\"") && p.Contains(khalid.ToString()));
+
+    if (refunded.Contains("RFND-"))
+        n.Step("the losing bidder's deposit refunded", "against the original charge");
+    else
+        n.Fail("the losing bidder's deposit refunded", refunded);
+
+    // The winner must not be refunded as well as credited: that would hand back a
+    // hundred thousand riyals the municipality has already set against the price.
+    var doubleRefund = await watcher.TryFindAsync(
+        Topics.Settlements, "PaymentSettled",
+        p => p.Contains(auctionId.ToString()) && p.Contains(sara.ToString())
+             && p.Contains("\"outcome\":\"Refunded\""),
+        TimeSpan.FromSeconds(3));
+
+    if (doubleRefund is null)
+        n.Step("the winner is not refunded as well", "one outcome per deposit");
+    else
+        n.Fail("the winner is not refunded as well", doubleRefund);
+
+    _ = applied;
+
+    // -----------------------------------------------------------------------
+    n.Section("11. قاعة المزاد — the hall, where a clerk enters the bids");
     // -----------------------------------------------------------------------
     //
     // A second auction, run the other way (§29). Everything a bidder does is
@@ -774,12 +860,8 @@ try
                  (khalidParticipant, khalidStrong, khalid)
              })
     {
-        var sub = $"/auctions/{hallId}/subscriptions/{bidderId}";
         await who.PostAsync($"/auctions/{hallId}/subscriptions", new { bidderId });
-        await who.PostAsync($"{sub}/booklet", new { paymentRef = $"HBK-{bidderId:N}"[..16] });
-        await who.PostAsync($"{sub}/terms");
-        await who.PostAsync($"{sub}/deposit-method", new { method = "Payment" });
-        await strong.PostAsync($"{sub}/deposit", new { paymentRef = $"HDP-{bidderId:N}"[..16] });
+        await QualifyAsync(who, strong, hallId, bidderId);
     }
     n.Step("both bidders qualify for the hall auction", "same booklet → terms → deposit");
 
@@ -971,6 +1053,58 @@ static async Task<JsonElement> WaitForPriceAsync(Caller who, Guid auctionId, lon
     throw new SmokeException(
         $"the public price never reached {expected / 100:N0} SAR; is the query BFF "
         + "consuming auctions.current-winner?");
+}
+
+/// <summary>
+/// Walks one bidder from a bare subscription to eligible, waiting on the payment
+/// service at each of the two steps that cost money.
+///
+/// Both of those steps are asynchronous and return 202: the request crosses the
+/// outbox to <c>participants.payments</c>, the payment service charges the gateway
+/// and answers on <c>payments.settlements</c>, and the participant service applies
+/// that. Nothing here can be asserted immediately, which is the honest shape of
+/// taking money and the reason this helper exists.
+/// </summary>
+static async Task QualifyAsync(Caller who, Caller strong, Guid auctionId, Guid bidderId)
+{
+    var sub = $"/auctions/{auctionId}/subscriptions/{bidderId}";
+
+    // The booklet fee. Stepped up, because it is money.
+    await strong.PostAsync($"{sub}/booklet");
+    await WaitForStageAsync(who, sub, "BookletPurchased", "the booklet fee");
+
+    await who.PostAsync($"{sub}/terms");
+    await who.PostAsync($"{sub}/deposit-method", new { method = "Payment" });
+
+    await strong.PostAsync($"{sub}/deposit");
+    await WaitForStageAsync(who, sub, "Eligible", "the deposit");
+}
+
+/// <summary>
+/// Waits for a subscription to reach a stage, and says which gateway refusal it saw
+/// if it does not. A bare timeout here would send someone reading Kafka logs for
+/// something the subscription was already recording.
+/// </summary>
+static async Task WaitForStageAsync(Caller who, string sub, string stage, string what)
+{
+    for (var i = 0; i < 120; i++)
+    {
+        var state = await who.GetAsync(sub);
+        if (state.GetProperty("status").GetString() == stage) return;
+
+        if (state.TryGetProperty("paymentFailureReason", out var reason)
+            && reason.ValueKind == JsonValueKind.String)
+        {
+            throw new SmokeException(
+                $"the gateway refused {what} for {who.Who}: {reason.GetString()}");
+        }
+
+        await Task.Delay(500);
+    }
+
+    throw new SmokeException(
+        $"{what} never settled for {who.Who}; is the payment service running and "
+        + "consuming " + Topics.ParticipantPayments + "?");
 }
 
 /// <summary>

@@ -43,6 +43,8 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             e.Property(x => x.BookletPaymentRef).HasMaxLength(200);
             e.Property(x => x.DepositPaymentRef).HasMaxLength(200);
             e.Property(x => x.RevocationReason).HasMaxLength(2000);
+            e.Property(x => x.PaymentFailurePurpose).HasMaxLength(40);
+            e.Property(x => x.PaymentFailureReason).HasMaxLength(500);
             e.Ignore(x => x.Events);
 
             // One subscription per bidder per auction.

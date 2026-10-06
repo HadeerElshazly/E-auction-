@@ -262,6 +262,7 @@ public sealed class Auction
             MinIncrementMinorUnits = MinIncrementMinorUnits,
             DepositMinorUnits = DepositMinorUnits,
             BookletPriceMinorUnits = BookletPriceMinorUnits,
+            BrokerageFeePercent = BrokerageFeePercent,
             QuietPeriodSeconds = QuietPeriodSeconds,
             MaxExtensions = MaxExtensions,
             Channel = Channel.ToString(),
