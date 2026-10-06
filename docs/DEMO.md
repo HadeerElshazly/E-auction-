@@ -29,6 +29,7 @@ sessions do not fight:
 
 | Tab | URL | Sign in as |
 |---|---|---|
+| **Sandbox** | http://localhost:5111 | nobody — no sign-in |
 | Catalogue | http://localhost:3000 | nobody — stay signed out |
 | Bidder | http://localhost:3000 | `sara` |
 | Second bidder | http://localhost:3000 | `khalid` |
@@ -37,9 +38,30 @@ sessions do not fight:
 | Reports | http://localhost:3001 | `reporting-user` |
 | Audit | http://localhost:3001 | `auditor-user` |
 
-Password for every account: `dev-only-password`. The two bidders also need a
-one-time code at the money steps; the terminal prints one, or any TOTP app seeded
-with `eauctiondevsecret1234567890` will produce it.
+Password for every account: `dev-only-password`.
+
+The addresses above are the ones `run-portals.sh` uses. If you brought the stack up
+with Docker Compose instead, the portals, Keycloak and the sandbox are at these same
+addresses, but the services sit on different ports — see the header of
+`deploy/compose/docker-compose.yml`, which lists them. Nothing in this script asks
+you to open a service directly.
+
+**Open the sandbox first and keep it open**, ideally on a second screen. Registering
+as a bidder and paying a deposit are both behind a second factor, and the sandbox is
+the only place its code can be read — without it you cannot get past the first step
+of the bidder's journey, because the gate is real even though Nafath behind it is
+not. The code changes every thirty seconds and the page counts down to the next one;
+if the bar is nearly empty, wait for the next code rather than racing it.
+
+> Earlier versions of this page said any authenticator app seeded with
+> `eauctiondevsecret1234567890` would produce the code. It will not: that is an
+> ASCII secret and authenticator apps expect base32, so the codes come out wrong
+> and the login fails for a reason nothing on screen explains. Use the sandbox.
+
+The sandbox's second panel is the payment gateway. It shows the booklet fee, the
+deposit, the brokerage and any refunds as they are charged, with the reference the
+bidder would quote — worth pointing at, because otherwise the money in this system
+moves entirely out of sight. It also has the switch described in §6.1.
 
 **Pick your times before you start.** When you create the auction, set it to open
 about four minutes out and close about three minutes after that. Too soon and you
@@ -184,6 +206,24 @@ chain still shows it afterwards.
 
 | Question | The honest answer |
 |---|---|
+### 6.1 Showing the path where a bidder does not pay
+
+Worth ninety seconds if anyone asks what happens when a payment fails, because it
+is the only part of the money story that cannot be shown by it working.
+
+In the sandbox's payment panel press **اجعلها ترفض**, pick a reason, then have the
+second bidder try to pay their deposit. The portal tells them the payment was
+refused and offers to try again; they never become eligible; and the committee's
+screen shows them as not qualified. Press **أعِد القبول** afterwards, or the rest of
+the demonstration will fail in the same way and you will be debugging in front of an
+audience.
+
+What this is not: a real decline from a real bank. It is the platform's own refusal
+path being driven on purpose, which is the point — the behaviour on the far side of
+a refusal is real, and is what a procurement officer is actually asking about.
+
+---
+
 | Is Nafath connected? | No. Registration reads the identity claims from the token and stands in for the real callback. It needs credentials from Elm/NIC under contract. **Until then this must not touch real citizens' identities.** |
 | Did money move? | No. The payment gateway is a simulator that settles everything. The service refuses to start in production without an explicit flag, so it cannot ship by accident. PayTabs/SADAD need merchant accounts. |
 | Do bidders get an SMS? | Not yet. The in-product inbox works; SMS needs a licensed aggregator and a registered sender name. |

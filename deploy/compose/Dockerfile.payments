@@ -13,7 +13,9 @@ COPY src/ src/
 RUN dotnet publish src/EAuction.Payments/EAuction.Payments.csproj \
       -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:8.0
+# aspnet, not runtime: this service has an HTTP surface now — health endpoints, the
+# seam a real gateway's webhook lands on, and the sandbox console.
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app .
 

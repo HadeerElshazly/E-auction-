@@ -237,7 +237,8 @@ start query-bff EAuction.QueryBff 5105 \
 # The simulated gateway settles everything, so Payments__AllowSimulatedGateway is
 # how it is allowed to; in Production the service refuses to start without it.
 start payments EAuction.Payments 5106 \
-  Payments__AllowSimulatedGateway=true
+  Payments__AllowSimulatedGateway=true \
+  Payments__Sandbox=true
 
 # The document service, on whatever object store is available.
 #
@@ -272,10 +273,24 @@ start reporting EAuction.Reporting 5110 \
   ConnectionStrings__Reporting="$PG;Database=eauction_reporting" \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
+# صندوق التجارب. Not part of the platform: it stands in for Nafath and for the
+# payment gateway, neither of which has a contract yet, and it is what makes the
+# step-up gate on registration passable by a person rather than only by this suite.
+start sandbox EAuction.Sandbox 5111 \
+  Sandbox__Enabled=true \
+  Sandbox__TotpSecret="${SMOKE_TOTP_SECRET:-eauctiondevsecret1234567890}" \
+  Sandbox__PaymentsBaseUrl="http://127.0.0.1:5106"
+
 # --- wait for health -------------------------------------------------------
 
-for probe in "auction-admin 5101" "participant 5102" "query-bff 5105" "documents 5107" \
-             "notifications 5108" "audit 5109" "reporting 5110"; do
+# payments is in this list for the first time: it used to be a bare worker with no
+# HTTP surface, so the only thing a runner could say about it was that the process
+# existed. Its readiness is its replay — until its own output topic has been read to
+# the end it cannot know what it has already charged (D-12) — which is exactly the
+# state a walk-through must not start bidding in.
+for probe in "auction-admin 5101" "participant 5102" "payments 5106" "query-bff 5105" \
+             "documents 5107" "notifications 5108" "audit 5109" "reporting 5110" \
+             "sandbox 5111"; do
   set -- $probe
   for _ in $(seq 1 60); do
     curl -fsS --noproxy "*" -o /dev/null "http://127.0.0.1:$2/health/ready" 2>/dev/null && break

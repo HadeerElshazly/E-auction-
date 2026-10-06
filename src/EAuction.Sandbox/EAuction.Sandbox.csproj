@@ -5,8 +5,7 @@
     <Nullable>enable</Nullable>
     <InvariantGlobalization>true</InvariantGlobalization>
     <IsPackable>false</IsPackable>
+    <RootNamespace>EAuction.Sandbox</RootNamespace>
+    <AssemblyName>EAuction.Sandbox</AssemblyName>
   </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../EAuction.Core/EAuction.Core.csproj" />
-  </ItemGroup>
 </Project>

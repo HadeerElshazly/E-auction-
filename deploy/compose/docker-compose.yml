@@ -356,6 +356,16 @@ services:
       # everything without taking a riyal, which is why the service refuses to
       # start on it in Production unless this says so explicitly.
       Payments__AllowSimulatedGateway: "true"
+      # The console over that simulator, so a demonstration can see the booklet fee
+      # and the deposit being taken and can reach the non-payment path on purpose.
+      # Only has any effect where the line above is already set.
+      Payments__Sandbox: "true"
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      # Published only so `curl localhost:5093/health/ready` works while debugging.
+      # The sandbox console reads this service over the Compose network, not from
+      # the browser — it configures no CORS, because it is not browser-facing.
+      - "5093:8080"
     depends_on:
       provision-migrate:
         condition: service_completed_successfully
@@ -546,6 +556,38 @@ services:
       - "3001:8080"
     depends_on:
       auction-admin:
+        condition: service_started
+
+  # صندوق التجارب — the two external systems the platform does not have yet.
+  #
+  # Nafath needs a contract with Elm/NIC (P-1) and the payment gateway needs merchant
+  # accounts (P-3), so the platform stands in for both. That substitution is fine in
+  # a test and invisible in a room: the step-up gate on registration asks for a
+  # six-digit code that only the test suite could produce, which makes the first
+  # thing a person tries by hand — registering as a bidder — the one thing they
+  # cannot do. This serves that code, and a console over the payment simulator.
+  #
+  # NOT part of the platform. It is absent from the Helm chart on purpose, and the
+  # service refuses to start unless Sandbox:Enabled says so.
+  sandbox:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.sandbox
+    container_name: eauction-sandbox
+    ports:
+      # The same port the local runner gives it, so docs/DEMO.md names one address
+      # whichever way the stack was started.
+      - "5111:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Sandbox__Enabled: "true"
+      # The secret the realm seeds on the dev bidders. Already public — it is in
+      # deploy/keycloak/eauction-realm.json, which is in git — and this service may
+      # never be given any other kind.
+      Sandbox__TotpSecret: "eauctiondevsecret1234567890"
+      Sandbox__PaymentsBaseUrl: "http://payments:8080"
+    depends_on:
+      payments:
         condition: service_started
 
 volumes:

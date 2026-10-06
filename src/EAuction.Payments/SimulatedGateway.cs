@@ -37,6 +37,15 @@ public sealed class SimulatedGateway : IPaymentGateway
 
     public int Charges => _charged.Count;
 
+    /// <summary>
+    /// Whether this key has already been charged successfully.
+    ///
+    /// Exposed for <see cref="SandboxGateway"/>, which asks before delegating so a
+    /// redelivered instruction can be labelled as one on screen rather than looking
+    /// like the same deposit being taken a second time.
+    /// </summary>
+    public bool HasCharged(string idempotencyKey) => _charged.ContainsKey(idempotencyKey);
+
     public Task<PaymentOutcome> ChargeAsync(PaymentInstruction instruction, CancellationToken ct)
     {
         if (instruction.AmountMinorUnits <= 0)
