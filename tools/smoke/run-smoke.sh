@@ -24,6 +24,11 @@ for a in "$@"; do [ "$a" = "--keep-data" ] && KEEP_DATA=1; done
 # per-bidder secret from it independently, so no secret is ever published (D-18).
 MASTER_KEY="${SMOKE_MASTER_KEY:-$(openssl rand -hex 32)}"
 
+# One grant key for the document service and the two services that decide who may
+# read a document. Three services, one key: auction-admin mints grants for award
+# letters, the participant service for booklets, and the document service verifies.
+GRANT_KEY="${SMOKE_GRANT_KEY:-$(openssl rand -hex 32)}"
+
 mkdir -p "$RUN"
 PIDS=()
 
@@ -199,11 +204,13 @@ PORTAL_ORIGINS="http://localhost:3000,http://localhost:3001"
 start auction-admin EAuction.AuctionAdmin 5101 \
   ConnectionStrings__Admin="$PG;Database=eauction_admin" \
   Admin__BidderMasterKeyHex="$MASTER_KEY" \
+  Documents__GrantKeyHex="$GRANT_KEY" \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 start participant EAuction.Participant 5102 \
   ConnectionStrings__Participant="$PG;Database=eauction_participant" \
   Participant__BidderMasterKeyHex="$MASTER_KEY" \
+  Documents__GrantKeyHex="$GRANT_KEY" \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 start bid-catcher EAuction.BidCatcher 5103 \
@@ -228,9 +235,21 @@ start query-bff EAuction.QueryBff 5105 \
 start payments EAuction.Payments 5106 \
   Payments__AllowSimulatedGateway=true
 
+# The document service, on whatever object store is available.
+#
+# Without Storage__ServiceUrl it keeps documents in memory, which is fine for a
+# walk-through in one process and is why the walk-through still runs on a machine
+# with no MinIO. Set SMOKE_S3 to point it at a real one.
+start documents EAuction.Documents 5107 \
+  Documents__GrantKeyHex="$GRANT_KEY" \
+  Storage__ServiceUrl="${SMOKE_S3:-}" \
+  Storage__AccessKey="${SMOKE_S3_ACCESS_KEY:-eauction}" \
+  Storage__SecretKey="${SMOKE_S3_SECRET_KEY:-eauction123}" \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
+
 # --- wait for health -------------------------------------------------------
 
-for probe in "auction-admin 5101" "participant 5102" "query-bff 5105"; do
+for probe in "auction-admin 5101" "participant 5102" "query-bff 5105" "documents 5107"; do
   set -- $probe
   for _ in $(seq 1 60); do
     curl -fsS --noproxy "*" -o /dev/null "http://127.0.0.1:$2/health/ready" 2>/dev/null && break

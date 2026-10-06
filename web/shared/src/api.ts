@@ -129,6 +129,57 @@ export function api(options: ApiOptions) {
     put: <T>(path: string, body: unknown) => send<T>(options, 'PUT', path, body),
     del: <T>(path: string) => send<T>(options, 'DELETE', path),
 
+    /**
+     * A file, as a multipart form.
+     *
+     * Its own method rather than a `body` that happens to be a FormData, because
+     * `send` sets Content-Type to application/json and a multipart request must
+     * not have one set at all — the browser writes it, boundary included, and a
+     * hand-written header would name a boundary the body does not use.
+     */
+    upload: async <T>(path: string, file: File, fields: Record<string, string> = {}): Promise<T> => {
+      const form = new FormData()
+      form.append('file', file)
+      for (const [name, value] of Object.entries(fields)) form.append(name, value)
+
+      const headers: Record<string, string> = {}
+      if (options.session) headers.Authorization = `Bearer ${options.session.accessToken}`
+
+      let response: Response
+      try {
+        response = await fetch(options.baseUrl.replace(/\/$/, '') + path, {
+          method: 'POST',
+          headers,
+          body: form,
+        })
+      } catch {
+        throw new ApiError(
+          0,
+          'Unreachable',
+          [],
+          `Could not reach ${options.baseUrl}. The service may be down, or its ` +
+            `Cors__AllowedOrigins may not include ${location.origin}.`,
+        )
+      }
+
+      const text = await response.text()
+      const parsed = text ? safeJson(text) : null
+
+      if (!response.ok) {
+        const reason = typeof parsed?.reason === 'string' ? parsed.reason : null
+        const problems = Array.isArray(parsed?.problems) ? (parsed.problems as string[]) : []
+        throw new ApiError(
+          response.status,
+          reason,
+          problems,
+          problems[0] ?? reason ?? `Upload failed (${response.status})`,
+          stepUpFrom(response.status, parsed),
+        )
+      }
+
+      return parsed as T
+    },
+
     /** The bid path: a fixed-width binary frame, not JSON. */
     postFrame: async <T>(path: string, frame: Uint8Array<ArrayBuffer>): Promise<T> => {
       const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }

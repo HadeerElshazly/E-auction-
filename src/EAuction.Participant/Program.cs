@@ -29,6 +29,21 @@ if (string.IsNullOrWhiteSpace(bidderMasterKeyHex))
 }
 var bidderMasterKey = Convert.FromHexString(bidderMasterKeyHex);
 
+// The key the document service verifies grants with. Held here because the rule
+// for كراسة الشروط is this service's — has this bidder paid for it — and the
+// document service must not have to learn what a subscription is.
+var documentGrantKeyHex = builder.Configuration["Documents:GrantKeyHex"];
+if (string.IsNullOrWhiteSpace(documentGrantKeyHex))
+{
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(
+            "Documents:GrantKeyHex is required, and must match the document "
+            + "service's. Without it no bidder can open the terms booklet they paid for.");
+
+    documentGrantKeyHex = Convert.ToHexString(DocumentGrants.NewKey());
+}
+var documentGrantKey = Convert.FromHexString(documentGrantKeyHex);
+
 var bootstrap = builder.Configuration["Kafka:BootstrapServers"];
 
 builder.Services.AddSingleton<IEventStream>(
@@ -375,6 +390,45 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/signing-key
         subscription.KeyEpoch));
 }).RequireAuthorization(Policies.Bidder);
 
+// A grant to read كراسة الشروط, for a bidder who has paid for it.
+//
+// The document itself is Restricted in the document service: no role opens it,
+// not an administrator's. This endpoint is the only way a bidder gets at it, and
+// it says yes for exactly one reason — they bought it.
+//
+// The grant lasts five minutes and names this bidder, so a forwarded link is
+// useless to whoever it is forwarded to.
+app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/booklet-grant", async (
+    HttpContext http, Guid auctionId, Guid bidderId,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    if (http.User.SubjectId() != bidderId) return Results.Forbid();
+
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+    if (terms?.BookletDocumentId is null)
+        return Results.NotFound(new { error = "This auction has no booklet attached." });
+
+    var subscription = await db.Subscriptions
+        .FirstOrDefaultAsync(s => s.AuctionId == auctionId && s.BidderId == bidderId, ct);
+
+    // Paid for, not merely asked for. Draft means the fee is outstanding or in
+    // flight, and a bidder who has not paid is the person this gate is for.
+    if (subscription is null || subscription.BookletPurchasedAt is null)
+        return Results.Conflict(new
+        {
+            error = "The terms booklet has not been purchased.",
+            reason = "BookletNotPurchased"
+        });
+
+    return Results.Ok(new DocumentGrantResponse(
+        terms.BookletDocumentId.Value,
+        DocumentGrants.Mint(
+            documentGrantKey, terms.BookletDocumentId.Value, bidderId, DateTimeOffset.UtcNow),
+        DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
+}).RequireAuthorization(Policies.Bidder);
+
 app.Run();
 
 // ---------------------------------------------------------------------------
@@ -433,6 +487,10 @@ public sealed record BankGuaranteeRequest(Guid DocumentId, DateTimeOffset Expire
 public sealed record VerifyGuaranteeRequest(Guid VerifiedByUserId);
 public sealed record RevokeRequest(string Reason);
 public sealed record SigningKeyResponse(string SecretHex, int KeyEpoch);
+
+/// <summary>A signed permission to read one document, and when it stops working.</summary>
+public sealed record DocumentGrantResponse(
+    Guid DocumentId, string Grant, DateTimeOffset ExpiresAt);
 
 /// <summary>Note the absence of NationalId: personal data under PDPL, kept in the service.</summary>
 public sealed record BidderResponse(

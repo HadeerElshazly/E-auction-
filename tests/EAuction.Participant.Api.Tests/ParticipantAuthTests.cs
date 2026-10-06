@@ -297,6 +297,146 @@ public class ParticipantAuthTests : IDisposable
 }
 
 /// <summary>
+/// The grant that opens كراسة الشروط.
+///
+/// The booklet is Restricted in the document service: no role opens it, not an
+/// administrator's. This endpoint is the only way in, so what it refuses is the
+/// whole of the control.
+/// </summary>
+public class BookletGrantTests : IDisposable
+{
+    private static readonly byte[] GrantKey = DocumentGrants.NewKey();
+
+    private readonly AuthenticatedFactory<Program> _factory = new()
+    {
+        Settings = new Dictionary<string, string?>
+        {
+            ["Documents:GrantKeyHex"] = Convert.ToHexString(GrantKey),
+        },
+    };
+
+    public void Dispose() => _factory.Dispose();
+
+    private static readonly Guid Booklet = Guid.NewGuid();
+
+    private IDbContextFactory<ParticipantDbContext> Db() =>
+        _factory.Services.GetRequiredService<IDbContextFactory<ParticipantDbContext>>();
+
+    /// <summary>A bidder with a subscription at the given stage, and an auction with a booklet.</summary>
+    private async Task<(Guid Bidder, Guid Auction)> SeedAsync(bool bookletPaid, bool withBooklet = true)
+    {
+        var bidder = Guid.NewGuid();
+        var auction = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+
+        await using var db = await Db().CreateDbContextAsync();
+
+        var terms = new AuctionTerms(
+            auction, now.AddMinutes(-1), now.AddHours(1),
+            depositMinorUnits: 100_000_00, bookletPriceMinorUnits: 1_000_00,
+            bookletDocumentId: withBooklet ? Booklet : null);
+
+        db.AuctionTerms.Add(terms);
+        db.Bidders.Add(Bidder.FromNafath(
+            bidder, "1" + Random.Shared.NextInt64(100_000_000, 999_999_999),
+            "سارة", "Sara", now));
+
+        var subscription = Subscription.Start(auction, bidder);
+        subscription.RequestBooklet(terms, now);
+        if (bookletPaid) subscription.ConfirmBookletPayment("SIM-BOO-SEED", now);
+        db.Subscriptions.Add(subscription);
+
+        await db.SaveChangesAsync();
+        return (bidder, auction);
+    }
+
+    private string Path(Guid auction, Guid bidder) =>
+        $"/auctions/{auction}/subscriptions/{bidder}/booklet-grant";
+
+    [Fact]
+    public async Task A_bidder_who_paid_gets_a_grant_that_verifies()
+    {
+        var (bidder, auction) = await SeedAsync(bookletPaid: true);
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.For(bidder, Roles.Bidder))
+            .GetAsync(Path(auction, bidder));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var granted = body.GetProperty("documentId").GetGuid();
+        var grant = body.GetProperty("grant").GetString();
+
+        Assert.Equal(Booklet, granted);
+
+        // Verified with the key the host was given, so this asserts the grant the
+        // document service will actually accept rather than that a string came back.
+        Assert.True(DocumentGrants.Verify(
+            GrantKey, grant, Booklet, bidder, DateTimeOffset.UtcNow));
+
+        // And for nobody else.
+        Assert.False(DocumentGrants.Verify(
+            GrantKey, grant, Booklet, Guid.NewGuid(), DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public async Task A_bidder_who_has_not_paid_gets_no_grant()
+    {
+        // The whole point of the gate. Asking for the booklet is not paying for it:
+        // the fee is requested and settles asynchronously, and this is the window
+        // in which a bidder would otherwise read what they have not bought.
+        var (bidder, auction) = await SeedAsync(bookletPaid: false);
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.For(bidder, Roles.Bidder))
+            .GetAsync(Path(auction, bidder));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("BookletNotPurchased", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task One_bidder_cannot_get_a_grant_for_another()
+    {
+        var (bidder, auction) = await SeedAsync(bookletPaid: true);
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.For(Guid.NewGuid(), Roles.Bidder))
+            .GetAsync(Path(auction, bidder));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_administrator_cannot_get_a_grant_for_a_bidder()
+    {
+        // Not an oversight. A grant names a subject, and an administrator who could
+        // mint one for a bidder could mint one for themselves — which is exactly the
+        // thing Restricted exists to prevent.
+        var (bidder, auction) = await SeedAsync(bookletPaid: true);
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.For(Guid.NewGuid(), Roles.AuctionAdmin))
+            .GetAsync(Path(auction, bidder));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_auction_with_no_booklet_attached_yields_no_grant()
+    {
+        var (bidder, auction) = await SeedAsync(bookletPaid: true, withBooklet: false);
+
+        var response = await _factory.CreateClient()
+            .WithToken(TestJwt.For(bidder, Roles.Bidder))
+            .GetAsync(Path(auction, bidder));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+}
+
+/// <summary>
 /// The second factor, at the endpoints that move money.
 ///
 /// These assert the HTTP contract rather than the decision — StepUpTests covers the

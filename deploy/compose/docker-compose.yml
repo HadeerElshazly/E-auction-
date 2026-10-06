@@ -160,6 +160,8 @@ services:
       # The same master key the catcher holds: the auction-admin service derives a
       # hall clerk's signing key from it (§29).
       Admin__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      # The key the document service verifies grants with. Must match it.
+      Documents__GrantKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
     depends_on:
       postgres:
@@ -214,6 +216,8 @@ services:
       # Must match the catcher's: both derive each bidder's signing key from it,
       # and neither ever sends a derived secret to the other.
       Participant__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      # The key the document service verifies grants with. Must match it.
+      Documents__GrantKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
     depends_on:
       provision-migrate:
         condition: service_completed_successfully
@@ -315,6 +319,39 @@ services:
       provision-migrate:
         condition: service_completed_successfully
       kafka:
+        condition: service_healthy
+
+  # The files: كراسة الشروط, the cover image, bank guarantees and award letters.
+  #
+  # It holds no database. Everything it knows about a document rides on the object
+  # as S3 user metadata, so the bytes and the facts about them cannot be restored
+  # out of step with each other.
+  documents:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.documents
+    container_name: eauction-documents
+    ports:
+      - "5096:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
+      Storage__ServiceUrl: http://minio:9000
+      Storage__AccessKey: eauction
+      Storage__SecretKey: eauction123
+      Storage__Bucket: eauction-documents
+      # The same key auction-admin and the participant service mint grants with.
+      # A development value, in the repository on purpose: it is worthless outside
+      # this compose file, and the three services must agree or no bidder can open
+      # the booklet they paid for.
+      Documents__GrantKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
+    depends_on:
+      minio:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
 
 volumes:

@@ -31,6 +31,21 @@ if (string.IsNullOrWhiteSpace(clerkMasterKeyHex))
 
 var clerkMasterKey = Convert.FromHexString(clerkMasterKeyHex);
 
+// The key the document service verifies grants with. Held here because the rule
+// for an award letter is this service's — did this bidder win — and the document
+// service must not have to learn what an award is.
+var documentGrantKeyHex = builder.Configuration["Documents:GrantKeyHex"];
+if (string.IsNullOrWhiteSpace(documentGrantKeyHex))
+{
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(
+            "Documents:GrantKeyHex is required, and must match the document service's. "
+            + "Without it a winner cannot open their own award letter.");
+
+    documentGrantKeyHex = Convert.ToHexString(DocumentGrants.NewKey());
+}
+var documentGrantKey = Convert.FromHexString(documentGrantKeyHex);
+
 var bootstrap = builder.Configuration["Kafka:BootstrapServers"];
 if (string.IsNullOrWhiteSpace(bootstrap))
 {
@@ -247,6 +262,45 @@ app.MapPost("/auctions/{id:guid}/award/notify", (Guid id, IDbContextFactory<Admi
     Mutate(f, id, ct, a => a.NotifyWinner(DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AwardCommittee);
 
+// A grant for the winner to read their own award letter.
+//
+// The letter is Restricted in the document service, which means no role opens it
+// — not an administrator's and not the committee's own. That is deliberate: a
+// signed خطاب ترسية is the winner's instrument, and "staff can read it" is a much
+// larger set of people than anyone would choose if asked.
+//
+// The signed letter if there is one, otherwise the draft: a winner notified
+// before the signature is still entitled to see what they were notified about.
+app.MapGet("/auctions/{id:guid}/award/letter-grant", async (
+    HttpContext http, Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    if (subject is null) return Results.Forbid();
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    var auction = await db.Auctions
+        .Include(a => a.Awards)
+        .FirstOrDefaultAsync(a => a.Id == id, ct);
+
+    if (auction is null) return Results.NotFound();
+
+    var award = auction.CurrentAward;
+
+    // Theirs, and only theirs. A bidder who lost — or who was disqualified and
+    // replaced by the cascade — is not the holder of this letter.
+    if (award is null || award.BidderId != subject.Value) return Results.NotFound();
+
+    var documentId = award.SignedLetterDocumentId ?? award.LetterDocumentId;
+    if (documentId is null)
+        return Results.NotFound(new { error = "No award letter has been issued yet." });
+
+    return Results.Ok(new DocumentGrantResponse(
+        documentId.Value,
+        DocumentGrants.Mint(
+            documentGrantKey, documentId.Value, subject.Value, DateTimeOffset.UtcNow),
+        DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
+}).RequireAuthorization(Policies.Bidder);
+
 app.MapPost("/auctions/{id:guid}/award/disqualify", (Guid id, DisqualifyRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AwardCommittee);
@@ -384,6 +438,10 @@ public sealed record AddPlotRequest(
     string? DescriptionAr, string? DescriptionEn);
 
 public sealed record DocumentRequest(Guid DocumentId);
+
+/// <summary>A signed permission to read one document, and when it stops working.</summary>
+public sealed record DocumentGrantResponse(
+    Guid DocumentId, string Grant, DateTimeOffset ExpiresAt);
 public sealed record RejectRequest(string Reason);
 public sealed record OfferCandidateRequest(Guid BidderId, long AmountMinorUnits);
 public sealed record ConfirmAwardRequest(Guid CommitteeUserId);

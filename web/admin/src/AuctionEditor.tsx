@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { parseRiyals, riyals, sar, type Api } from '@eauction/shared'
+import { useEffect, useRef, useState } from 'react'
+import { api, config, parseRiyals, riyals, sar, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
 import { label } from './types'
 
@@ -15,7 +15,15 @@ interface Props {
 /** Editing is confined to Draft and Rejected, as the domain enforces. */
 const editable = new Set(['Draft', 'Rejected'])
 
-export function AuctionEditor({ auction, client, busy, canEdit, canApprove, onAct }: Props) {
+export function AuctionEditor({
+  auction,
+  client,
+  session,
+  busy,
+  canEdit,
+  canApprove,
+  onAct,
+}: Props & { session: Session }) {
   const l = label(auction.status)
   const open = editable.has(auction.status)
 
@@ -44,7 +52,14 @@ export function AuctionEditor({ auction, client, busy, canEdit, canApprove, onAc
 
       <Plots auction={auction} client={client} busy={busy} canEdit={open && canEdit} onAct={onAct} />
 
-      <Documents auction={auction} client={client} busy={busy} canEdit={open && canEdit} onAct={onAct} />
+      <Documents
+        auction={auction}
+        client={client}
+        session={session}
+        busy={busy}
+        canEdit={open && canEdit}
+        onAct={onAct}
+      />
 
       <Workflow
         auction={auction}
@@ -520,53 +535,128 @@ function Plots({
   )
 }
 
+/**
+ * The two documents an auction is prepared with: كراسة الشروط and the cover image.
+ *
+ * They go to the document service first and to auction-admin second, in that
+ * order, because the id auction-admin records has to be an id that resolves. The
+ * other order — attach, then upload — leaves an auction pointing at a document
+ * that does not exist if the upload fails, and the auction looks complete.
+ */
 function Documents({
   auction,
   client,
+  session,
   busy,
   canEdit,
   onAct,
-}: Omit<Props, 'canApprove'> & { canEdit: boolean }) {
+}: Omit<Props, 'canApprove'> & { canEdit: boolean; session: Session }) {
+  const documents = api({ baseUrl: config.documentsApi, session })
+
   return (
     <>
       <h3>المستندات</h3>
-      <p className="muted small" style={{ marginTop: -4 }}>
-        خدمة المستندات لم تُبنَ بعد، فتُسجَّل هنا كمعرّفات فقط.
-      </p>
       <div className="row">
-        <span className="small">
-          كراسة الشروط: {auction.bookletDocumentId ? '✓' : '—'}
-        </span>
-        {canEdit && (
-          <button
-            disabled={busy}
-            onClick={() =>
-              onAct(() =>
-                client.post(`/auctions/${auction.id}/booklet`, {
-                  documentId: crypto.randomUUID(),
-                }),
-              )
-            }
-          >
-            إرفاق كراسة
-          </button>
-        )}
-        <span className="small">صورة الغلاف: {auction.coverImageDocumentId ? '✓' : '—'}</span>
-        {canEdit && (
-          <button
-            disabled={busy}
-            onClick={() =>
-              onAct(() =>
-                client.post(`/auctions/${auction.id}/cover-image`, {
-                  documentId: crypto.randomUUID(),
-                }),
-              )
-            }
-          >
-            إرفاق غلاف
-          </button>
-        )}
+        <Attach
+          label="كراسة الشروط"
+          buttonLabel="إرفاق كراسة"
+          // Restricted: a bidder reads it with a grant the participant service
+          // mints once they have paid for it. No role opens it.
+          access="Restricted"
+          accept="application/pdf"
+          attached={auction.bookletDocumentId}
+          documentsApi={documents}
+          canEdit={canEdit}
+          busy={busy}
+          onAttach={(documentId) =>
+            onAct(() => client.post(`/auctions/${auction.id}/booklet`, { documentId }))
+          }
+        />
+        <Attach
+          label="صورة الغلاف"
+          buttonLabel="إرفاق غلاف"
+          // Public: it is on the catalogue an anonymous citizen reads before
+          // deciding whether to register at all.
+          access="Public"
+          accept="image/*"
+          attached={auction.coverImageDocumentId}
+          documentsApi={documents}
+          canEdit={canEdit}
+          busy={busy}
+          onAttach={(documentId) =>
+            onAct(() => client.post(`/auctions/${auction.id}/cover-image`, { documentId }))
+          }
+        />
       </div>
+    </>
+  )
+}
+
+interface AttachProps {
+  label: string
+  buttonLabel: string
+  access: 'Public' | 'Private' | 'Restricted'
+  accept: string
+  attached: string | null | undefined
+  documentsApi: Api
+  canEdit: boolean
+  busy: boolean
+  onAttach: (documentId: string) => Promise<void>
+}
+
+/**
+ * One file picker.
+ *
+ * A hidden input driven by a button rather than a bare `<input type="file">`,
+ * because the browser's own control cannot be styled and renders its label in
+ * English in the middle of an Arabic form.
+ */
+function Attach({
+  label,
+  buttonLabel,
+  access,
+  accept,
+  attached,
+  documentsApi,
+  canEdit,
+  busy,
+  onAttach,
+}: AttachProps) {
+  const input = useRef<HTMLInputElement>(null)
+  const [name, setName] = useState<string | null>(null)
+
+  const choose = async (file: File) => {
+    setName(file.name)
+    const uploaded = await documentsApi.upload<{ id: string }>('/documents', file, { access })
+    await onAttach(uploaded.id)
+  }
+
+  return (
+    <>
+      <span className="small">
+        {label}: {attached ? '✓' : '—'}
+        {name !== null && attached === null && <span className="muted"> ({name})</span>}
+      </span>
+      {canEdit && (
+        <>
+          <input
+            ref={input}
+            type="file"
+            accept={accept}
+            aria-label={buttonLabel}
+            // Hidden rather than display:none, so the input is still focusable and
+            // Playwright can set files on it.
+            style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void choose(file)
+            }}
+          />
+          <button disabled={busy} onClick={() => input.current?.click()}>
+            {buttonLabel}
+          </button>
+        </>
+      )}
     </>
   )
 }

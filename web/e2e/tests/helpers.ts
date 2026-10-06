@@ -172,7 +172,19 @@ const EXISTENCE_CHECKS = [/\/bidders\/[0-9a-f-]+$/, /\/subscriptions\/[0-9a-f-]+
  * asking the user to confirm who they are, not a fault — it is the first half of
  * every step-up, and the portal answers it by redirecting to the identity provider.
  */
-const STEP_UP_GATED = [/\/bidders\/register$/, /\/deposit$/, /\/guarantee$/, /\/award$/]
+const STEP_UP_GATED = [
+  /\/bidders\/register$/,
+  // The booklet fee joined this list when it stopped being a string the caller
+  // made up and became a charge the payment service takes (§30).
+  //
+  // Scoped to the subscription path on purpose: auction-admin has a /booklet of
+  // its own for attaching the PDF, which is role-gated and not stepped up. A bare
+  // /booklet$ would have quietly reclassified a genuine 403 there as a challenge.
+  /\/subscriptions\/[0-9a-f-]+\/booklet$/,
+  /\/deposit$/,
+  /\/guarantee$/,
+  /\/award$/,
+]
 
 export function watchPage(page: Page): PageProblems {
   const problems: PageProblems = {

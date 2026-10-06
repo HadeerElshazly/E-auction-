@@ -81,6 +81,7 @@ e-auction/
     ├── auction-admin.yaml
     ├── participant.yaml
     ├── payments.yaml
+    ├── documents.yaml
     ├── query-bff.yaml
     └── NOTES.txt
 ```

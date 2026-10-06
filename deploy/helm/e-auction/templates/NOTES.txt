@@ -23,6 +23,9 @@ Services:
 {{- if .Values.payments.enabled }}
   payments        {{ .Values.payments.replicas }} replica
 {{- end }}
+{{- if .Values.documents.enabled }}
+  documents       {{ .Values.documents.replicas }} replicas
+{{- end }}
 
 {{- if gt (int .Values.bidProcessor.replicas) 1 }}
 

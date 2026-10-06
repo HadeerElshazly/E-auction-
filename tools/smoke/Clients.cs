@@ -156,6 +156,26 @@ public sealed class Caller(HttpClient http, string baseUrl, string token, string
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 
+    /// <summary>A multipart upload, for the document service.</summary>
+    public async Task<JsonElement> UploadAsync(
+        string path, string fileName, byte[] bytes, string contentType, string access)
+    {
+        var request = Request(HttpMethod.Post, path);
+
+        var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(bytes);
+        file.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+
+        // The filename goes in the part's Content-Disposition, and .NET writes it
+        // RFC 5987-encoded when it is not ASCII — which is how an Arabic name
+        // survives the wire at all.
+        form.Add(file, "file", fileName);
+        form.Add(new StringContent(access), "access");
+        request.Content = form;
+
+        return await SendAsync(request, path);
+    }
+
     public async Task<(HttpStatusCode Status, string Body)> TryPostBytesAsync(
         string path, byte[] payload)
     {

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>EAuction.Documents</RootNamespace>
+    <AssemblyName>EAuction.Documents</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../EAuction.Core/EAuction.Core.csproj" />
+    <ProjectReference Include="../EAuction.Security/EAuction.Security.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- S3, because MinIO speaks it. The deployed object store may well not be
+         MinIO — the on-prem environment is not yet known — and anything that
+         speaks S3 drops in behind the same client. -->
+    <PackageReference Include="AWSSDK.S3" Version="3.7.405.3" />
+  </ItemGroup>
+
+</Project>

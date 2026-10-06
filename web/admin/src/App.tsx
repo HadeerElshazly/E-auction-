@@ -190,6 +190,7 @@ export function App() {
             <AuctionEditor
               auction={selected}
               client={client}
+              session={session}
               busy={busy}
               canEdit={isAdmin}
               canApprove={isCommittee}

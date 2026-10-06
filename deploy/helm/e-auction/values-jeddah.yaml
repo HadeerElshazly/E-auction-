@@ -35,6 +35,10 @@ auctionAdmin:
     - name: ConnectionStrings__Admin
       secretName: eauction-admin-db
       secretKey: connection-string
+    # Mints grants for award letters; must match the document service's key.
+    - name: Documents__GrantKeyHex
+      secretName: eauction-document-grants
+      secretKey: grant-key
   env:
     - name: ASPNETCORE_URLS
       value: http://+:8080
@@ -57,3 +61,49 @@ payments:
   # its credentials are in a secret (P-3). The secretEnv below is the shape;
   # the names come from the adapter.
   secretEnv: []
+
+documents:
+  replicas: 2
+  secretEnv:
+    - name: Storage__AccessKey
+      secretName: eauction-object-store
+      secretKey: access-key
+    - name: Storage__SecretKey
+      secretName: eauction-object-store
+      secretKey: secret-key
+    # The same key auction-admin and the participant service mint grants with.
+    # Three services, one secret: if they disagree, no bidder can open the booklet
+    # they paid for and no winner can open their award letter.
+    - name: Documents__GrantKeyHex
+      secretName: eauction-document-grants
+      secretKey: grant-key
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    # The municipality's object store. Not defaulted anywhere: without it the
+    # service refuses to start rather than holding a signed award letter in memory
+    # and losing it on the next pod restart.
+    - name: Storage__ServiceUrl
+      value: http://minio.storage.svc.cluster.local:9000
+    - name: Storage__Bucket
+      value: eauction-documents
+    - name: Documents__MaxUploadBytes
+      value: "67108864"
+
+participant:
+  secretEnv:
+    - name: ConnectionStrings__Participant
+      secretName: eauction-participant-db
+      secretKey: connection-string
+    # The catcher derives the same per-bidder secret from this; neither service
+    # ever sends a derived key to the other (D-20).
+    - name: Participant__BidderMasterKeyHex
+      secretName: eauction-bidder-keys
+      secretKey: master-key
+    # Mints grants for كراسة الشروط; must match the document service's key.
+    - name: Documents__GrantKeyHex
+      secretName: eauction-document-grants
+      secretKey: grant-key
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080

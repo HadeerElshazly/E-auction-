@@ -1,7 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using EAuction.AuctionAdmin.Persistence;
 using EAuction.Security;
 using EAuction.TestSupport;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EAuction.AuctionAdmin.Tests;
@@ -167,5 +171,133 @@ public class AdminAuthTests : IDisposable
     {
         var response = await factory.CreateClient().Anonymous().GetAsync("/health/live");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}
+
+/// <summary>
+/// The grant that opens an award letter.
+///
+/// خطاب الترسية is Restricted in the document service, which means no role opens
+/// it — not an administrator's and not the committee's own. This endpoint is the
+/// only way in, and it says yes to one person: whoever currently holds the award.
+/// </summary>
+public class AwardLetterGrantTests : IDisposable
+{
+    private static readonly byte[] GrantKey = DocumentGrants.NewKey();
+
+    private readonly AuthenticatedFactory<Program> factory = new()
+    {
+        Settings = new Dictionary<string, string?>
+        {
+            ["Documents:GrantKeyHex"] = Convert.ToHexString(GrantKey),
+        },
+    };
+
+    public void Dispose() => factory.Dispose();
+
+    private IDbContextFactory<AdminDbContext> Db() =>
+        factory.Services.GetRequiredService<IDbContextFactory<AdminDbContext>>();
+
+    /// <summary>
+    /// An auction carried to a notified winner, written straight to the database.
+    ///
+    /// The award workflow has its own tests; driving it through nine endpoints here
+    /// would make this test fail for reasons that have nothing to do with grants.
+    /// </summary>
+    private async Task<(Guid Auction, Guid Winner, Guid SignedLetter)> SettledAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var auction = Build.ReadyAuction(now);
+
+        auction.SubmitForReview(now);
+        auction.Approve(now);
+        auction.MarkScheduled();
+        auction.MarkLive();
+        auction.MarkClosing();
+        auction.MarkPendingEligibilityReview();
+
+        var winner = Guid.NewGuid();
+        auction.OfferCandidate(winner, 1_800_000_00);
+        auction.ConfirmAward(Build.Committee, now, TimeSpan.FromDays(5));
+        auction.GenerateAwardLetter(Guid.NewGuid());
+
+        var signed = Guid.NewGuid();
+        auction.UploadSignedAwardLetter(signed);
+        auction.NotifyWinner(now);
+
+        await using var db = await Db().CreateDbContextAsync();
+        db.Auctions.Add(auction);
+        await db.SaveChangesAsync();
+
+        return (auction.Id, winner, signed);
+    }
+
+    [Fact]
+    public async Task The_winner_gets_a_grant_for_the_signed_letter()
+    {
+        var (auction, winner, signed) = await SettledAsync();
+
+        var response = await factory.CreateClient()
+            .As(winner, Roles.Bidder)
+            .GetAsync($"/auctions/{auction}/award/letter-grant");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // The signed letter, not the draft: that is the instrument.
+        Assert.Equal(signed, body.GetProperty("documentId").GetGuid());
+
+        Assert.True(DocumentGrants.Verify(
+            GrantKey, body.GetProperty("grant").GetString(), signed, winner,
+            DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public async Task A_bidder_who_did_not_win_gets_nothing()
+    {
+        var (auction, _, _) = await SettledAsync();
+
+        var response = await factory.CreateClient()
+            .As(Guid.NewGuid(), Roles.Bidder)
+            .GetAsync($"/auctions/{auction}/award/letter-grant");
+
+        // 404 rather than 403: whether this auction has an award, and whose it is,
+        // is not something to confirm to a bidder who is not its holder.
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_committee_cannot_mint_itself_a_grant()
+    {
+        // Restricted means no role opens it, including the role that uploaded it.
+        // A committee member who could mint a grant for themselves would make the
+        // classification decorative.
+        var (auction, _, _) = await SettledAsync();
+
+        var response = await factory.CreateClient()
+            .As(Guid.NewGuid(), Roles.AwardCommittee)
+            .GetAsync($"/auctions/{auction}/award/letter-grant");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_auction_with_no_award_yields_nothing()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var auction = Build.ReadyAuction(now);
+
+        await using (var db = await Db().CreateDbContextAsync())
+        {
+            db.Auctions.Add(auction);
+            await db.SaveChangesAsync();
+        }
+
+        var response = await factory.CreateClient()
+            .As(Guid.NewGuid(), Roles.Bidder)
+            .GetAsync($"/auctions/{auction.Id}/award/letter-grant");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

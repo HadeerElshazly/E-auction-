@@ -21,6 +21,7 @@ var adminUrl = Env("SMOKE_ADMIN_URL", "http://localhost:5101");
 var participantUrl = Env("SMOKE_PARTICIPANT_URL", "http://localhost:5102");
 var catcherUrl = Env("SMOKE_CATCHER_URL", "http://localhost:5103");
 var bffUrl = Env("SMOKE_BFF_URL", "http://localhost:5105");
+var documentsUrl = Env("SMOKE_DOCUMENTS_URL", "http://localhost:5107");
 var bootstrap = Env("SMOKE_KAFKA", "127.0.0.1:9092");
 var password = Env("SMOKE_PASSWORD", "dev-only-password");
 
@@ -128,9 +129,55 @@ try
         });
     n.Step("three plots added", "one indivisible package, priced as a whole");
 
-    await admin.PostAsync($"/auctions/{auctionId}/booklet", new { documentId = Guid.NewGuid() });
-    await admin.PostAsync($"/auctions/{auctionId}/cover-image", new { documentId = Guid.NewGuid() });
-    n.Step("booklet (كراسة الشروط) and cover attached");
+    // Real files, through the document service, and the ids it returns.
+    //
+    // Uploaded before being attached, in that order, because the id auction-admin
+    // records has to be an id that resolves — the other order leaves an auction
+    // pointing at a document that does not exist and looking complete.
+    var adminDocs = new Caller(http, documentsUrl, adminToken, "admin");
+
+    var bookletDoc = await adminDocs.UploadAsync(
+        "/documents", "كراسة الشروط.pdf", BookletPdf(), "application/pdf", "Restricted");
+    var coverDoc = await adminDocs.UploadAsync(
+        "/documents", "cover.jpg", [0xFF, 0xD8, 0xFF, 0xE0, 0x00], "image/jpeg", "Public");
+
+    var bookletDocId = bookletDoc.GetProperty("id").GetGuid();
+    var coverDocId = coverDoc.GetProperty("id").GetGuid();
+
+    await admin.PostAsync($"/auctions/{auctionId}/booklet", new { documentId = bookletDocId });
+    await admin.PostAsync($"/auctions/{auctionId}/cover-image", new { documentId = coverDocId });
+
+    // The Arabic filename came back intact, which is not a formality: S3 user
+    // metadata is ASCII-only, so this is the case that turns a booklet's name into
+    // question marks.
+    if (bookletDoc.GetProperty("fileName").GetString() == "كراسة الشروط.pdf")
+        n.Step("booklet (كراسة الشروط) and cover uploaded and attached",
+            $"sha256 {bookletDoc.GetProperty("sha256").GetString()?[..12]}…");
+    else
+        n.Fail("booklet (كراسة الشروط) and cover uploaded and attached",
+            $"the filename came back as {bookletDoc.GetProperty("fileName").GetString()}");
+
+    // The cover is Public: a citizen reads the catalogue before registering, so it
+    // has to open with no token at all.
+    var anonDocs = new Caller(http, documentsUrl, "", "anonymous");
+    var (coverStatus, _) = await anonDocs.TryGetAsync($"/documents/{coverDocId}");
+
+    if (coverStatus == System.Net.HttpStatusCode.OK)
+        n.Step("the cover image is public", "no token, as the catalogue needs");
+    else
+        n.Fail("the cover image is public", $"got {(int)coverStatus}");
+
+    // The booklet is Restricted: no role opens it, not even the administrator who
+    // uploaded it. Only a grant, and only from the service that knows who paid.
+    var (bookletStatus, _) = await adminDocs.TryGetAsync($"/documents/{bookletDocId}");
+    var (anonBooklet, _) = await anonDocs.TryGetAsync($"/documents/{bookletDocId}");
+
+    if (bookletStatus == System.Net.HttpStatusCode.NotFound
+        && anonBooklet == System.Net.HttpStatusCode.NotFound)
+        n.Step("the booklet is not readable by role", "404 — not even for its uploader");
+    else
+        n.Fail("the booklet is not readable by role",
+            $"admin got {(int)bookletStatus}, anonymous got {(int)anonBooklet}");
 
     // The auction must open and close inside this test's runtime.
     var startsAt = DateTimeOffset.UtcNow.AddSeconds(12);
@@ -275,6 +322,37 @@ try
     await watcher.WaitForAsync(
         Topics.Participants, "", auctionId, p => p.Contains(sara.ToString()));
     n.Step($"eligibility published to {Topics.Participants}", "this is how the catcher learns");
+
+    // كراسة الشروط, which sara has now paid for.
+    //
+    // The document is Restricted, so no role opens it — the step above proved that
+    // even its uploader gets a 404. The only way in is a grant, and the participant
+    // service mints one for exactly one reason: the booklet fee settled.
+    var saraGrant = await saraParticipant.GetAsync(
+        $"/auctions/{auctionId}/subscriptions/{sara}/booklet-grant");
+
+    var grantedDoc = saraGrant.GetProperty("documentId").GetGuid();
+    var grant = saraGrant.GetProperty("grant").GetString()!;
+
+    var saraDocs = new Caller(http, documentsUrl, saraToken, "sara");
+    var (opened, bookletBody) = await saraDocs.TryGetAsync(
+        $"/documents/{grantedDoc}?grant={Uri.EscapeDataString(grant)}");
+
+    if (opened == System.Net.HttpStatusCode.OK && bookletBody.Contains("كراسة الشروط"))
+        n.Step("sara reads the booklet she paid for", "a grant, not a role");
+    else
+        n.Fail("sara reads the booklet she paid for", $"got {(int)opened}");
+
+    // The same grant in khalid's hands. It names sara in the part that is signed,
+    // so a forwarded link is no use to whoever it reaches.
+    var khalidDocs = new Caller(http, documentsUrl, khalidToken, "khalid");
+    var (borrowed, _) = await khalidDocs.TryGetAsync(
+        $"/documents/{grantedDoc}?grant={Uri.EscapeDataString(grant)}");
+
+    if (borrowed == System.Net.HttpStatusCode.NotFound)
+        n.Step("a forwarded grant is useless to anyone else", "404 — the subject is signed in");
+    else
+        n.Fail("a forwarded grant is useless to anyone else", $"got {(int)borrowed}");
 
     // -----------------------------------------------------------------------
     n.Section("5. The public catalogue — what a citizen may see");
@@ -823,8 +901,12 @@ try
     });
     await admin.PostAsync($"/auctions/{hallId}/plots",
         new { deedNumber = "2020/1", areaSqm = 900.0m });
-    await admin.PostAsync($"/auctions/{hallId}/booklet", new { documentId = Guid.NewGuid() });
-    await admin.PostAsync($"/auctions/{hallId}/cover-image", new { documentId = Guid.NewGuid() });
+    var hallBooklet = await adminDocs.UploadAsync(
+        "/documents", "كراسة القاعة.pdf", BookletPdf(), "application/pdf", "Restricted");
+
+    await admin.PostAsync($"/auctions/{hallId}/booklet",
+        new { documentId = hallBooklet.GetProperty("id").GetGuid() });
+    await admin.PostAsync($"/auctions/{hallId}/cover-image", new { documentId = coverDocId });
 
     // The clerk goes on the floor before approval here, but the domain allows it
     // after as well — a clerk falls ill and a shift changes, and an auction cannot
@@ -991,6 +1073,17 @@ static string Reason(string body)
     try { return JsonDocument.Parse(body).RootElement.GetProperty("reason").GetString() ?? body; }
     catch { return body; }
 }
+
+/// <summary>
+/// A few bytes that begin like a PDF.
+///
+/// Not a real document: what the walk-through proves about a booklet is that it
+/// round-trips byte for byte with its name and its hash, and a 40MB file would
+/// prove that no better and take longer.
+/// </summary>
+static byte[] BookletPdf() =>
+    System.Text.Encoding.UTF8.GetBytes(
+        "%PDF-1.7\n% كراسة الشروط — مخطط السعيد\n%%EOF\n");
 
 static async Task WaitUntil(DateTimeOffset when, string what)
 {

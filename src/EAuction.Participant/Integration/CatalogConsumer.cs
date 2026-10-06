@@ -46,14 +46,15 @@ public sealed class CatalogConsumer(
             db.AuctionTerms.Add(new AuctionTerms(
                 payload.AuctionId, payload.StartsAt, payload.EndsAt,
                 payload.DepositMinorUnits, payload.BookletPriceMinorUnits,
-                Visibility(payload.BidderVisibility)));
+                Visibility(payload.BidderVisibility), payload.BookletDocumentId));
         }
         else
         {
             existing.Update(
                 payload.StartsAt, payload.EndsAt,
                 payload.DepositMinorUnits, payload.BookletPriceMinorUnits,
-                DateTimeOffset.UtcNow, Visibility(payload.BidderVisibility));
+                DateTimeOffset.UtcNow, Visibility(payload.BidderVisibility),
+                payload.BookletDocumentId);
         }
 
         await db.SaveChangesAsync(ct);
@@ -126,6 +127,7 @@ public sealed class CatalogConsumer(
         public DateTimeOffset EndsAt { get; init; }
         public long DepositMinorUnits { get; init; }
         public long BookletPriceMinorUnits { get; init; }
+        public Guid? BookletDocumentId { get; init; }
     }
 
     private sealed record DepositsReleasablePayload

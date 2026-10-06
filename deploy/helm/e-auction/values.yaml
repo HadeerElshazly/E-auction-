@@ -310,6 +310,80 @@ participant:
 #
 # Scales out freely — every replica keeps its own full copy of a small read model,
 # and nothing it serves is a write.
+# The files: كراسة الشروط, the cover image, bank guarantees and award letters.
+#
+# Holds no database. Everything it knows about a document rides on the object as S3
+# user metadata, so a pod is disposable and replicas need no coordination.
+documents:
+  enabled: true
+  image: e-auction/documents
+  replicas: 2
+  port: 8080
+
+  # Internal by default. Both portals call it from a browser, so it reaches them
+  # through the API gateway like the participant service does — and unlike the
+  # query BFF, which is the one surface a citizen reaches before logging in.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    # Higher than the other services': an upload is buffered in memory to hash it
+    # on the way through, and a كراسة الشروط with site plans in it is tens of
+    # megabytes. Documents:MaxUploadBytes is the other half of that bound.
+    limits:
+      memory: 1Gi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  # The object store's credentials and the grant key. Both are secrets, and the
+  # grant key has to be the same one auction-admin and the participant service
+  # hold — three services, one key, nothing derived from it ever published (the
+  # same arrangement as the bidder master key, D-20).
+  #
+  #   secretEnv:
+  #     - name: Storage__AccessKey
+  #       secretName: eauction-object-store
+  #       secretKey: access-key
+  #     - name: Storage__SecretKey
+  #       secretName: eauction-object-store
+  #       secretKey: secret-key
+  #     - name: Documents__GrantKeyHex
+  #       secretName: eauction-document-grants
+  #       secretKey: grant-key
+  secretEnv: []
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    # Where the object store is. Deliberately not defaulted: the service refuses to
+    # start in Production without it rather than holding documents in memory and
+    # losing a signed award letter on the next pod restart.
+    #
+    #   - name: Storage__ServiceUrl
+    #     value: http://minio.storage.svc.cluster.local:9000
+    - name: Documents__MaxUploadBytes
+      value: "67108864"
+
 queryBff:
   enabled: true
   image: e-auction/query-bff

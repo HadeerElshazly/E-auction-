@@ -26,6 +26,15 @@ public sealed class AuctionTerms
     /// </summary>
     public BidderVisibility BidderVisibility { get; private set; } = BidderVisibility.Masked;
 
+    /// <summary>
+    /// كراسة الشروط in the document service, so this service can mint a grant for
+    /// a bidder who has paid for it.
+    ///
+    /// Held here because the rule — "has this bidder paid?" — is this service's,
+    /// and the document service must not have to learn what a subscription is.
+    /// </summary>
+    public Guid? BookletDocumentId { get; private set; }
+
     public DateTimeOffset UpdatedAt { get; private set; } = DateTimeOffset.UtcNow;
 
     private AuctionTerms() { }
@@ -33,7 +42,8 @@ public sealed class AuctionTerms
     public AuctionTerms(
         Guid auctionId, DateTimeOffset startsAt, DateTimeOffset endsAt,
         long depositMinorUnits, long bookletPriceMinorUnits,
-        BidderVisibility bidderVisibility = BidderVisibility.Masked)
+        BidderVisibility bidderVisibility = BidderVisibility.Masked,
+        Guid? bookletDocumentId = null)
     {
         AuctionId = auctionId;
         BidderVisibility = bidderVisibility;
@@ -41,18 +51,21 @@ public sealed class AuctionTerms
         EndsAt = endsAt;
         DepositMinorUnits = depositMinorUnits;
         BookletPriceMinorUnits = bookletPriceMinorUnits;
+        BookletDocumentId = bookletDocumentId;
     }
 
     public void Update(
         DateTimeOffset startsAt, DateTimeOffset endsAt,
         long depositMinorUnits, long bookletPriceMinorUnits, DateTimeOffset now,
-        BidderVisibility bidderVisibility = BidderVisibility.Masked)
+        BidderVisibility bidderVisibility = BidderVisibility.Masked,
+        Guid? bookletDocumentId = null)
     {
         BidderVisibility = bidderVisibility;
         StartsAt = startsAt;
         EndsAt = endsAt;
         DepositMinorUnits = depositMinorUnits;
         BookletPriceMinorUnits = bookletPriceMinorUnits;
+        BookletDocumentId = bookletDocumentId;
         UpdatedAt = now;
     }
 }

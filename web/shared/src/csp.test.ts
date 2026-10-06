@@ -26,6 +26,7 @@ const PRODUCTION_ENV = {
   VITE_PARTICIPANT_API: 'https://api.jeddah.gov.sa/participants',
   VITE_CATCHER_API: 'https://bids.jeddah.gov.sa',
   VITE_QUERY_API: 'https://api.jeddah.gov.sa/public',
+  VITE_DOCUMENTS_API: 'https://api.jeddah.gov.sa/documents',
 }
 
 function directive(policy: string, name: string): string {
@@ -70,9 +71,15 @@ test('connect-src is exactly the origins this build calls', () => {
   assert.ok(origins.includes('https://api.jeddah.gov.sa'))
   assert.ok(origins.includes('https://bids.jeddah.gov.sa'))
 
-  // Three services behind one gateway are one origin. A policy that repeated it
+  // Four services behind one gateway are one origin. A policy that repeated it
   // would still work; one that failed to deduplicate would be read less carefully.
   assert.equal(origins.length, 4)
+
+  // And no development fallback. A variable missing from a production build takes
+  // its dev value from endpoints.ts, which would paste http://localhost into the
+  // policy of a bundle served from a government domain — this is the assertion
+  // that caught exactly that when the document service was added.
+  assert.ok(!origins.some((origin) => origin.includes('localhost')))
 
   // And nothing else. An attacker's host is what connect-src exists to exclude.
   assert.ok(!origins.some((origin) => origin.includes('evil')))

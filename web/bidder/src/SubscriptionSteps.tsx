@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { sar, useStepUp, type Api, type Session } from '@eauction/shared'
+import { useEffect, useRef, useState } from 'react'
+import { api, config, sar, useStepUp, type Api, type Session } from '@eauction/shared'
 import { authConfig } from './authConfig'
 import type { AuctionDetail, Bidder, Subscription } from './types'
 
@@ -63,6 +63,12 @@ export function SubscriptionSteps({
   // can complete, rather than a 403 they can do nothing about.
   const stepUp = useStepUp(authConfig)
 
+  // The document service, for the bank guarantee the bidder uploads and the
+  // booklet they read. Its own client because it is its own origin — which is
+  // also why it is in the endpoint table that drives the Content-Security-Policy.
+  const documents = api({ baseUrl: config.documentsApi, session })
+  const guaranteeInput = useRef<HTMLInputElement>(null)
+
   const act = async (label: string, work: () => Promise<unknown>) => {
     setBusy(true)
     onError(null)
@@ -92,6 +98,12 @@ export function SubscriptionSteps({
           سُدّد التأمين وقُبلت الشروط. مفتاح التوقيع الخاص بك رقم{' '}
           <span className="num">{subscription.keyEpoch}</span>.
         </p>
+        <Booklet
+          auction={auction}
+          session={session}
+          participant={participant}
+          onError={onError}
+        />
       </div>
     )
   }
@@ -145,6 +157,15 @@ export function SubscriptionSteps({
           : <span className="ltr">{subscription.paymentFailureReason}</span>. يمكنك
           المحاولة مرة أخرى.
         </div>
+      )}
+
+      {subscription?.bookletPurchasedAt != null && (
+        <Booklet
+          auction={auction}
+          session={session}
+          participant={participant}
+          onError={onError}
+        />
       )}
 
       {awaitingGateway && (
@@ -309,27 +330,52 @@ export function SubscriptionSteps({
               دفع مبلغ التأمين — {sar(auction.depositMinorUnits, 'ar')}
             </button>
           ) : (
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() =>
-                act('guarantee', () =>
-                  participant.post(
-                    `/auctions/${auction.id}/subscriptions/${session.subject}/guarantee`,
-                    {
-                      documentId: crypto.randomUUID(),
-                      // The guarantee must outlast the auction, which the service
-                      // checks; a month past the close is the usual ask.
-                      expiresAt: new Date(
-                        new Date(auction.endsAt).getTime() + 30 * 864e5,
-                      ).toISOString(),
-                    },
-                  ),
-                )
-              }
-            >
-              رفع الضمان البنكي
-            </button>
+            <>
+              <input
+                ref={guaranteeInput}
+                type="file"
+                accept="application/pdf,image/*"
+                aria-label="رفع الضمان البنكي"
+                // Hidden rather than display:none, so it stays focusable and a
+                // test can set files on it.
+                style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+
+                  void act('guarantee', async () => {
+                    // Private, not Restricted: this is the bidder's own document
+                    // and an administrator has to be able to look at it to verify
+                    // it. Uploaded first, so the id the participant service
+                    // records is one that resolves.
+                    const uploaded = await documents.upload<{ id: string }>(
+                      '/documents',
+                      file,
+                      { access: 'Private' },
+                    )
+
+                    return participant.post(
+                      `/auctions/${auction.id}/subscriptions/${session.subject}/guarantee`,
+                      {
+                        documentId: uploaded.id,
+                        // The guarantee must outlast the auction, which the
+                        // service checks; a month past the close is the usual ask.
+                        expiresAt: new Date(
+                          new Date(auction.endsAt).getTime() + 30 * 864e5,
+                        ).toISOString(),
+                      },
+                    )
+                  })
+                }}
+              />
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => guaranteeInput.current?.click()}
+              >
+                رفع الضمان البنكي
+              </button>
+            </>
           ))}
 
         {subscription?.status === 'AwaitingDeposit' &&
@@ -340,6 +386,62 @@ export function SubscriptionSteps({
             </span>
           )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The link to كراسة الشروط, for a bidder who has paid for it.
+ *
+ * The document is Restricted in the document service, so this cannot be a plain
+ * link: it asks the participant service for a grant — which that service gives
+ * only to a bidder whose booklet fee has settled — and then opens the document
+ * with it. The grant is good for five minutes and names this bidder, so the URL
+ * it produces is no use to anyone it is forwarded to.
+ */
+function Booklet({
+  auction,
+  session,
+  participant,
+  onError,
+}: {
+  auction: AuctionDetail
+  session: Session
+  participant: Api
+  onError: (message: string | null) => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  const open = async () => {
+    setBusy(true)
+    onError(null)
+    try {
+      const { documentId, grant } = await participant.get<{
+        documentId: string
+        grant: string
+      }>(`/auctions/${auction.id}/subscriptions/${session.subject}/booklet-grant`)
+
+      // A new tab rather than a fetch into a blob: the document service answers
+      // with Content-Disposition: attachment, so the browser saves the file and
+      // the tab closes itself. A blob URL would work too and would cost holding
+      // a 40MB booklet in the page's memory for no reason.
+      window.open(
+        `${config.documentsApi}/documents/${documentId}?grant=${encodeURIComponent(grant)}`,
+        '_blank',
+        'noopener,noreferrer',
+      )
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="row" style={{ marginTop: 10 }}>
+      <button disabled={busy} onClick={() => void open()}>
+        تنزيل كراسة الشروط
+      </button>
     </div>
   )
 }

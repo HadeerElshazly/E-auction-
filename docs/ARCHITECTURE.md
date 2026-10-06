@@ -70,6 +70,7 @@ design change, not a configuration change.
 | D-36 | **An onsite bid is signed by the clerk, and the frame names both them and the bidder** (§29) | A bidder in the hall has a paddle, not a keyboard. An onsite record that looked identical to an online one would overstate what it proves |
 | D-37 | **Eligibility follows a settlement, so the deposit endpoint returns 202** (§30) | The caller used to invent the payment reference and the service believed it, so a bidder could reach the bid floor of a land auction without a riyal having moved |
 | D-38 | **The payment service proves its replay with a marker it writes, rather than a quiet period** (§30) | A quiet period is a guess about whether money has already been taken; a slow broker looks exactly like an empty topic, and an empty topic means charge everybody again |
+| D-39 | **The document service does not know what an auction is: restricted documents open to a signed grant, never to a role** (§31) | Whether a bidder may read the booklet depends on whether they paid; that fact lives in the participant service, and a document service that learned it would have to consume the auction domain |
 | D-16 | **Debezium for the transactional outbox only**, never raw table CDC | Raw CDC leaks internal schema into the public event contract |
 | D-17 | **Event-driven domain; WSO2 MI only at integration edges** (payment, SADAD, municipality systems) | MI is an ESB, not a human-workflow engine. Workflows are state machines in the owning service |
 | D-18 | **React (web) + React Native/Expo (mobile)**, shared TypeScript contracts | |
@@ -1124,7 +1125,7 @@ the limit in tests that are not about rate limiting.
 | **Nafath is not integrated** | `POST /bidders/nafath` stands in for the callback and is open. It must be gated before any real use — identity is the one thing a bidder cannot be allowed to assert about themselves |
 | **No authentication on any endpoint** | Including the signing-key endpoint, which hands out a bidder's credential to anyone who asks |
 | ~~Payments are references, not integrations~~ | *Superseded by §30.* `DepositRequested` now reaches a payment service, and the caller no longer supplies the reference. PayTabs and SADAD adapters are still not built |
-| Documents are ids only | The bank guarantee is a `Guid` validated against nothing |
+| ~~Documents are ids only~~ | *Superseded by §31.* The bank guarantee is now a real file in the document service, and its id resolves |
 | Company bidders | Individuals only; Nafath's delegation path is a different integration |
 
 ---
@@ -2813,3 +2814,146 @@ checked to bite.
   due date, and no consequence for not paying it.
 - **One replica, enforced only by a warning.** Sharding by auction is the way to
   scale this and it is not built.
+
+---
+
+## 31. المستندات — the document service, and who may read a file
+
+Five documents exist in this platform and until now all five were a `Guid`
+validated against nothing.
+
+| Document | Uploaded by | Read by |
+|---|---|---|
+| كراسة الشروط, the terms booklet | an administrator | a bidder who paid for it |
+| the cover image | an administrator | anyone, including an anonymous citizen |
+| the bank guarantee | the bidder | that bidder, and staff who verify it |
+| the award letter | the committee | the winner |
+| the signed award letter | the committee | the winner |
+
+`EAuction.Documents` stores them on anything that speaks S3 — MinIO, in compose.
+It holds **no database**: everything known about a document rides on the object as
+S3 user metadata, so there is no migration, pods are disposable, and the bytes and
+the facts about them cannot be restored out of step with each other.
+
+### D-39: the document service does not know what an auction is
+
+"May this person read this file" is not a question a document service can answer.
+Whether a bidder may read كراسة الشروط depends on whether they paid for it;
+whether they may read an award letter depends on whether they won. Those facts
+live in the participant service and auction-admin, and a document service that
+learned them would have to consume the auction domain — which is the opposite of
+what a document service is for.
+
+So a document carries one of three classifications, set by whoever uploads it:
+
+- **`Public`** — anyone, no token. The cover image.
+- **`Private`** — the uploader, or staff. The bank guarantee: a bidder uploads it
+  and an administrator verifies it, and nobody else has business with a document
+  naming a citizen's bank.
+- **`Restricted`** — nobody, by identity. No role opens it, *including an
+  administrator's*. Only a grant.
+
+A **grant** is `HMAC-SHA256` over `documentId · subject · expiry`, minted by the
+service that owns the rule and verified by the document service. The participant
+service has `GET .../booklet-grant`, which says yes for exactly one reason — the
+booklet fee settled. Auction-admin has `GET .../award/letter-grant`, which says
+yes only to the bidder named in the current award. Three services hold the same
+key and nothing derived from it is ever published, the same arrangement as the
+bidder master key (D-20).
+
+The subject is inside the signature, not written alongside it, so a grant cannot
+be re-pointed at another person by editing the part that says who it is for. It
+lasts five minutes, which is long enough for a click and a slow connection and
+nothing more.
+
+A presigned object-store URL was the obvious alternative and is worse on two
+counts: it names the bucket and key in the URL, leaking the storage layout to the
+browser, and it cannot be bound to a subject — anyone the link reaches can use it.
+
+### A refusal is a 404
+
+Not a 403. These ids travel: they are in the auction's public event, in award
+letters, in support tickets. A 403 answers "that document is real and it is not
+yours", and the smoke test asserts that the refusal for a document that exists is
+indistinguishable from the one for a document that does not.
+
+### The one thing a document service gets wrong that costs the platform
+
+Serving an uploaded file inline means an uploaded `.html` — or a `.pdf` the
+browser decides is really HTML — runs as a page on a domain the platform's own
+cookies belong to. That is stored cross-site scripting with an upload form for a
+delivery mechanism.
+
+Every download therefore carries `Content-Disposition: attachment` and
+`X-Content-Type-Options: nosniff`, asserted by a test that uploads
+`<script>alert(document.cookie)</script>` as `innocent.html` and checks both
+headers come back.
+
+The filename is the uploader's, so it is treated as hostile: it reaches a
+`Content-Disposition` header, and a CR/LF in it would let the uploader append
+headers of their own. `DocumentNames.Safe` strips control characters, quotes and
+path separators, and keeps Arabic — a booklet is called كراسة الشروط, and renaming
+it to `document.pdf` is not a security measure, it is a worse product.
+
+### Three bugs the tests found
+
+**The upload failed in every deployment.** `DisablePayloadSigning = true` looked
+like a saving: this service already hashes the stream, so letting the SDK hash it
+again is wasted work. But the AWS SDK refuses to send an unsigned payload over
+plain HTTP, and MinIO in compose is plain HTTP — so every upload died in the
+signer with "the request must be sent over HTTPS". Found only by running against a
+real S3 endpoint; `InMemoryDocumentStore` cannot have this bug, and every other
+test in the assembly uses it.
+
+**A numeric classification read back as `Public`.** `Enum.TryParse` accepts
+numbers, including values outside the enum, so a stored `"0"` parsed to
+`DocumentAccess.Public` and `"99"` to `(DocumentAccess)99`. The fix is
+`Enum.IsDefined` plus a digit check; stored values are always names, so a number
+is never something to honour. The theory case that caught it asserts `"0"`, `"1"`,
+`"-1"` and `"99"` all read as `Restricted` — unrecognised means restricted, because
+failing open on an unknown classification is how a bank guarantee becomes
+anonymously readable after a deployment that renamed an enum member.
+
+**A sanitiser that behaved differently per OS.** `Path.GetFileName` asks the host
+what a separator is, so on Linux a Windows browser's `C:\dir\x.pdf` survived it
+whole and came out as `C:dirx.pdf`. A function whose job is to distrust input
+should not depend on which image the pod runs; it now splits on both separators
+explicitly.
+
+### Upload first, attach second
+
+Both portals upload to the document service and then record the id with
+auction-admin or the participant service. The other order leaves an auction
+pointing at a document that does not exist, and the auction looks complete.
+
+### What the tests cover
+
+55 tests: the access matrix (including that a `Restricted` document refuses its
+own uploader), the grant and each thing it must refuse — another person, another
+document, an expired grant, a forged signature, an edited expiry, and nine
+malformed strings that must be refused rather than throw, since a grant arrives in
+a query string. `S3DocumentStoreTests` runs against a real S3 endpoint and skips
+without `S3_ENDPOINT`, the same arrangement as the Kafka tests.
+
+### Still not verified
+
+- **Never run against MinIO itself.** The S3 tests ran against a standalone S3
+  server; MinIO's image and binary are both unreachable from this environment's
+  egress policy. The protocol surface is the same and path-style addressing is
+  exercised, but MinIO's own quirks are not.
+- **The cover image is uploaded and never shown.** Nothing renders it: the query
+  BFF does not carry `coverImageDocumentId` and neither catalogue has an `<img>`.
+  Doing so also means widening `img-src` in the CSP, which is a deliberate change
+  and not one to make speculatively.
+- **No virus scanning.** A government platform that accepts uploads from the
+  public will be asked for it, and ClamAV in the upload path is a different shape
+  of service — the bytes cannot be stored before the verdict.
+- **No deletion, no retention.** Nothing removes a document, ever. PDPL will have
+  something to say about a bank guarantee kept indefinitely after an auction
+  closes.
+- **Uploads are buffered in memory to hash them.** `Documents:MaxUploadBytes`
+  bounds it at 64MB and the chart asks for 1GiB of memory, but a streaming
+  multipart hash would be better than a bound.
+- **The grant is not revocable.** Five minutes is the whole of its lifecycle;
+  there is no list of grants and nothing to cancel one with. For a five-minute
+  token that is a reasonable trade, and it is a trade.

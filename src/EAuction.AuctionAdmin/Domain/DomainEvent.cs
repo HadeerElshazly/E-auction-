@@ -75,6 +75,19 @@ public sealed record AuctionApproved : DomainEvent
     /// </summary>
     public required string BidderVisibility { get; init; }
 
+    /// <summary>
+    /// كراسة الشروط, in the document service.
+    ///
+    /// On the public topic because the services that decide who may read it need
+    /// to know which document it is: the participant service mints a grant for a
+    /// bidder who has paid, and it learns the id here. The id alone discloses
+    /// nothing — the document is Restricted and opens only to a grant.
+    /// </summary>
+    public Guid? BookletDocumentId { get; init; }
+
+    /// <summary>The cover image, which is Public: it is on the catalogue an anonymous citizen reads.</summary>
+    public Guid? CoverImageDocumentId { get; init; }
+
     public required int PlotCount { get; init; }
     public required decimal TotalAreaSqm { get; init; }
 
