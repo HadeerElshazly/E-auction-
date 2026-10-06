@@ -223,32 +223,34 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
       {submitted.length > 0 && (
         <>
           <h3>مزايداتك في هذه الجلسة</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>المبلغ</th>
-                <th>الوقت</th>
-                <th>الترتيب في السجل</th>
-                <th>الحالة</th>
-                <th>الشهادة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {submitted.map((b) => (
-                <tr key={b.clientBidId}>
-                  <td className="num">{sar(b.amount, 'ar')}</td>
-                  <td className="num small">{clock(b.at)}</td>
-                  <td className="num small">{b.offset}</td>
-                  <td className="small">{outcome(b, price, verdicts)}</td>
-                  <td>
-                    <button className="small" onClick={() => setCertificateFor(b.offset)}>
-                      شهادة
-                    </button>
-                  </td>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>المبلغ</th>
+                  <th>الوقت</th>
+                  <th>الترتيب في السجل</th>
+                  <th>الحالة</th>
+                  <th>الشهادة</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {submitted.map((b) => (
+                  <tr key={b.clientBidId}>
+                    <td className="num">{sar(b.amount, 'ar')}</td>
+                    <td className="num small">{clock(b.at)}</td>
+                    <td className="num small">{b.offset}</td>
+                    <td className="small">{outcome(b, price, verdicts)}</td>
+                    <td>
+                      <button className="small" onClick={() => setCertificateFor(b.offset)}>
+                        شهادة
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="muted small">
             «مُسجَّلة» تعني أن المزايدة حُفظت في السجل ولم يصل حكمها بعد. الحكم يصدر
             من خدمة المعالجة بترتيب السجل، لا بوقت جهازك.

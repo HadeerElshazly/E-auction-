@@ -68,6 +68,36 @@ public sealed record LivePrice(
     DateTimeOffset EffectiveEndsAt, int ExtensionsUsed, int MaxExtensions,
     DateTimeOffset AsOf);
 
+/// <summary>
+/// One auction on the live monitor: what it is, plus where its bidding has got to.
+///
+/// The name and the channel ride along because a monitor showing six auctions has
+/// to say which is which, and the alternative — the portal joining this against the
+/// catalogue list by id on every tick — is a second request and a second thing to
+/// get out of step.
+///
+/// The leader label comes through <see cref="LeaderLabels"/> like every other
+/// caller's, so a masked auction stays masked here too (D-22). Staff watching the
+/// room are not an exception to that: the masking is the auction's own setting, and
+/// a screen that quietly unmasked it would make the setting a lie.
+/// </summary>
+public sealed record MonitorRow(
+    Guid AuctionId, string NameAr, string Channel,
+    string Status, long? PriceMinorUnits, long MinimumNextBidMinorUnits,
+    long OpeningPriceMinorUnits,
+    string? LeaderLabel,
+    DateTimeOffset StartsAt, DateTimeOffset EffectiveEndsAt,
+    int ExtensionsUsed, int MaxExtensions)
+{
+    public static MonitorRow From(AuctionEntry a, string? label) => new(
+        a.AuctionId, a.NameAr, a.Channel,
+        a.Status, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
+        a.OpeningPriceMinorUnits,
+        label,
+        a.StartsAt, a.EffectiveEndsAt ?? a.EndsAt,
+        a.ExtensionsUsed, a.MaxExtensions);
+}
+
 /// <summary>A bidder's own bid outcome. Sent to that bidder and to nobody else.</summary>
 public sealed record BidVerdictView(
     Guid AuctionId, Guid ClientBidId, bool Accepted, string? Reason,

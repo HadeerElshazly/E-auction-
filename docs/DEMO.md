@@ -48,7 +48,8 @@ sessions do not fight:
 | Bidder | http://localhost:3000 | `sara` |
 | Second bidder | http://localhost:3000 | `khalid` |
 | Administration | http://localhost:3001 | `admin-user` |
-| Committee | http://localhost:3001 | `committee-user` |
+| Committee | http://localhost:3001 | `committee-user` | 
+| **Live board** | http://localhost:3001 → المتابعة المباشرة | `committee-user` |
 | Reports | http://localhost:3001 | `reporting-user` |
 | Audit | http://localhost:3001 | `auditor-user` |
 
@@ -76,6 +77,13 @@ The sandbox's second panel is the payment gateway. It shows the booklet fee, the
 deposit, the brokerage and any refunds as they are charged, with the reference the
 bidder would quote — worth pointing at, because otherwise the money in this system
 moves entirely out of sight. It also has the switch described in §6.1.
+
+**Put المتابعة المباشرة on the second screen.** It shows every open auction at
+once — price, leader, countdown — and refreshes itself every two seconds, so while
+you drive a bid in one window the board moves beside it. An auction inside its last
+two minutes outlines itself in red, which is the moment worth pointing at. Nobody
+needs to touch it during the demonstration; it is the thing people watch while you
+talk.
 
 **Pick your times before you start.** When you create the auction, set it to open
 about four minutes out and close about three minutes after that. Too soon and you

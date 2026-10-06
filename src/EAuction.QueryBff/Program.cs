@@ -96,6 +96,32 @@ app.MapGet("/auctions", (string? state, CatalogueState catalogue) =>
     return Results.Ok(new { count = items.Length, items });
 }).AllowAnonymous();
 
+// ---------------------------------------------------------------------------
+// Every auction that is open right now, in one request.
+//
+// For the operations screen (§7.2's fan-out serves one auction to one bidder; this
+// serves every auction to one watcher). A monitor built on the per-auction endpoints
+// would open a stream or a poll each, and six of those is where a browser's
+// per-origin connection limit starts refusing — the screen would silently stop
+// updating the seventh auction rather than fail in any visible way.
+//
+// Anonymous like its neighbours, and that is not an oversight: every field here is
+// already served per auction by /auctions/{id}/price to anyone who asks, and the
+// auctions themselves are listed publicly by /auctions?state=live. This is those
+// calls folded into one, so it discloses nothing new. The leader label in
+// particular goes through LeaderLabels, so a masked auction is masked here too.
+// ---------------------------------------------------------------------------
+app.MapGet("/auctions/live", (CatalogueState catalogue, LeaderLabels labels) =>
+{
+    var rows = catalogue.All()
+        .Where(a => a.Status == "Live")
+        .OrderBy(a => a.EffectiveEndsAt ?? a.EndsAt)
+        .Select(a => MonitorRow.From(a, labels.For(a)))
+        .ToArray();
+
+    return Results.Ok(new { count = rows.Length, items = rows, asOf = DateTimeOffset.UtcNow });
+}).AllowAnonymous();
+
 app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
     catalogue.TryGet(id, out var a)
         ? Results.Ok(AuctionDetail.From(a))

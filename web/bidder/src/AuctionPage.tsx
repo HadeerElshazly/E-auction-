@@ -4,7 +4,7 @@ import type { AuctionDetail, Bidder, Subscription } from './types'
 import { useLivePrice } from './useLivePrice'
 import { SubscriptionSteps } from './SubscriptionSteps'
 import { BidBox } from './BidBox'
-import { statusAr } from './Catalogue'
+import { documentUrl, statusAr } from './Catalogue'
 
 const areaFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
 
@@ -93,6 +93,17 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
       {error && <div className="notice error">{error}</div>}
 
       <div className="card auction-hero">
+        {auction.coverImageDocumentId && (
+          <img
+            className="hero-cover"
+            src={documentUrl(auction.coverImageDocumentId)}
+            alt={`صورة ${auction.nameAr}`}
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
+
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <span className={`pill ${status.tone}`}>{status.ar}</span>
           {/* Said out loud, because the two differ in how stale the price can be
@@ -247,7 +258,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         </div>
         <p className="lede">تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.</p>
 
-        <div className="table-wrap">
+        <div className="table-scroll">
           <table>
             <thead>
               <tr>
@@ -290,6 +301,27 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           </table>
         </div>
       </div>
+
+      {auction.attachments.length > 0 && (
+        <div className="card">
+          <h2>المستندات العامة</h2>
+          <p className="lede">
+            مستندات متاحة للجميع دون تسجيل. كراسة الشروط ليست منها — تُتاح بعد شرائها.
+          </p>
+          <ul className="doc-list">
+            {auction.attachments.map((d) => (
+              <li key={d.documentId}>
+                {/* A plain link: these are Public, so no token or grant is needed,
+                    and the service answers with Content-Disposition: attachment. */}
+                <a href={documentUrl(d.documentId)} rel="noreferrer noopener">
+                  📄 {d.titleAr}
+                </a>
+                <span className="muted small">تنزيل</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </>
   )
 }
