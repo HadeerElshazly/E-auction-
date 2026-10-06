@@ -82,30 +82,52 @@ export function AuditTrail({ session }: { session: Session }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const load = useCallback(async () => {
+  /** Bumped by تحديث, so a manual refresh re-runs the fetch below. */
+  const [refresh, setRefresh] = useState(0)
+
+  /**
+   * Discards its own result if a filter changed while it was in flight.
+   *
+   * Without this, two filters applied in quick succession race, and the slower
+   * response wins whichever order they were asked for: the table shows one
+   * action's entries while the filter above it names another. On a screen whose
+   * entire purpose is answering "who did this", entries displayed under the wrong
+   * question are worse than no answer — somebody reads an entry, attributes it to
+   * the wrong search, and is confidently wrong about who did what.
+   *
+   * The columns here never change, so unlike التقارير this needs no second
+   * mechanism: the rows on screen always belong under the headings above them,
+   * whichever filter fetched them.
+   */
+  useEffect(() => {
+    let cancelled = false
+
     setBusy(true)
     setError(null)
-    try {
-      const parts = ['take=100']
-      if (action) parts.push(`action=${encodeURIComponent(action)}`)
-      if (subject) parts.push(`subject=${encodeURIComponent(subject)}`)
 
-      const page = await client.get<{ total: number; items: Entry[] }>(
-        `/audit?${parts.join('&')}`,
-      )
-      setEntries(page.items)
-      setTotal(page.total)
-    } catch (e) {
-      setError(describe(e))
-      setEntries([])
-    } finally {
-      setBusy(false)
+    const parts = ['take=100']
+    if (action) parts.push(`action=${encodeURIComponent(action)}`)
+    if (subject) parts.push(`subject=${encodeURIComponent(subject)}`)
+
+    client
+      .get<{ total: number; items: Entry[] }>(`/audit?${parts.join('&')}`)
+      .then((page) => {
+        if (cancelled) return
+        setEntries(page.items)
+        setTotal(page.total)
+        setBusy(false)
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        setError(describe(e))
+        setEntries([])
+        setBusy(false)
+      })
+
+    return () => {
+      cancelled = true
     }
-  }, [action, client, subject])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  }, [action, client, subject, refresh])
 
   useEffect(() => {
     void (async () => {
@@ -172,7 +194,7 @@ export function AuditTrail({ session }: { session: Session }) {
         </label>
 
         <span className="grow" />
-        <button onClick={() => void load()} disabled={busy}>
+        <button onClick={() => setRefresh((n) => n + 1)} disabled={busy}>
           تحديث
         </button>
         <button className="primary" data-testid="audit-verify" onClick={() => void verify()}>

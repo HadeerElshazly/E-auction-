@@ -261,6 +261,19 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
 // frame — the access check below must never be served from a cache keyed on
 // anything but the record.
 // ---------------------------------------------------------------------------
+// Two meters, because a hit and a miss cost different things.
+//
+// The read is what is expensive: a miss opens a consumer, seeks and reads one
+// record, on the service that owes /bids a 50ms budget. That stays at two a second.
+//
+// But a hit is not free either, and the first version of this cache let it be
+// unlimited: every cached request still recomputes an HMAC over the frame, decodes
+// a presented signature and serialises a certificate, so one caller in a loop could
+// still take the budget away from the bid path — and could do it against the
+// `?signature=` comparison without ever being slowed down. The floor applies to
+// every request, cached or not, and is loose enough that no person browsing their
+// own certificates will ever meet it.
+var certificateFloor = new System.Collections.Concurrent.ConcurrentDictionary<Guid, TokenBucket>();
 var certificateLimits = new System.Collections.Concurrent.ConcurrentDictionary<Guid, TokenBucket>();
 var certificateFrames = new FrameCache(capacity: 2048);
 
@@ -272,6 +285,12 @@ app.MapGet("/auctions/{auctionId:guid}/bids/{offset:long}/certificate", async (
     if (caller is null) return Results.Forbid();
 
     if (offset < 0) return Results.NotFound();
+
+    // Every request, whether or not it reaches Kafka.
+    var floor = certificateFloor.GetOrAdd(caller.Value, _ => new TokenBucket(20));
+    if (!floor.TryTake(DateTimeOffset.UtcNow))
+        return Results.Json(
+            new { reason = nameof(RejectionReason.RateLimited) }, statusCode: 429);
 
     if (!certificateFrames.TryGet(auctionId, offset, out var frame))
     {
