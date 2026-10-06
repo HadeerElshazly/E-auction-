@@ -244,10 +244,25 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
 //
 // Each call opens a consumer, seeks and reads one record. That is cheap but it is
 // not free, and this service is the one with a 50ms budget on its other endpoint,
-// so it is rate-limited per caller. If this ever carries real traffic it belongs
-// in its own service rather than beside the bid path.
+// so the read is rate-limited per caller. If this ever carries real traffic it
+// belongs in its own service rather than beside the bid path.
+//
+// The read, and not the request. A bid at a given offset is a record in an
+// append-only log: the frame can never change, so the second person to ask for it
+// — or the same person asking twice — can be answered from memory without touching
+// Kafka at all. Charging a token for a request that costs nothing would be
+// charging for the wrong thing, and it showed: a bidder opening their own
+// certificate got a 429, because a browser legitimately fetches twice (React's
+// development double-render, a re-render, or simply a second click) and the bucket
+// holds two.
+//
+// Note what is NOT cached: the certificate itself. That depends on the caller and
+// on the signature they presented, so it is rebuilt per request from the cached
+// frame — the access check below must never be served from a cache keyed on
+// anything but the record.
 // ---------------------------------------------------------------------------
 var certificateLimits = new System.Collections.Concurrent.ConcurrentDictionary<Guid, TokenBucket>();
+var certificateFrames = new FrameCache(capacity: 2048);
 
 app.MapGet("/auctions/{auctionId:guid}/bids/{offset:long}/certificate", async (
     Guid auctionId, long offset, string? signature,
@@ -256,19 +271,26 @@ app.MapGet("/auctions/{auctionId:guid}/bids/{offset:long}/certificate", async (
     var caller = http.User.SubjectId();
     if (caller is null) return Results.Forbid();
 
-    var bucket = certificateLimits.GetOrAdd(caller.Value, _ => new TokenBucket(2));
-    if (!bucket.TryTake(DateTimeOffset.UtcNow))
-        return Results.Json(
-            new { reason = nameof(RejectionReason.RateLimited) }, statusCode: 429);
-
     if (offset < 0) return Results.NotFound();
 
-    var frame = await ReadFrameAsync(log, auctionId, offset, ct);
-    if (frame is null) return Results.NotFound();
+    if (!certificateFrames.TryGet(auctionId, offset, out var frame))
+    {
+        // Only a miss reaches Kafka, so only a miss costs a token.
+        var bucket = certificateLimits.GetOrAdd(caller.Value, _ => new TokenBucket(2));
+        if (!bucket.TryTake(DateTimeOffset.UtcNow))
+            return Results.Json(
+                new { reason = nameof(RejectionReason.RateLimited) }, statusCode: 429);
+
+        var read = await ReadFrameAsync(log, auctionId, offset, ct);
+        if (read is null) return Results.NotFound();
+
+        frame = read.Value;
+        certificateFrames.Put(auctionId, offset, frame);
+    }
 
     // Built before the access check, because the check needs the recorded bidder
     // and the recomputed signature — both of which come out of the frame.
-    var certificate = BuildCertificate(frame.Value, offset, signature, receiptKey);
+    var certificate = BuildCertificate(frame, offset, signature, receiptKey);
 
     // A bidder may read their own. Staff may check one that has been handed to
     // them, which is what a dispute looks like — but only by presenting the

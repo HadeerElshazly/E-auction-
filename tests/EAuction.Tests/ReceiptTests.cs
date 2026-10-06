@@ -344,4 +344,62 @@ public class BidCertificateTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Reading_the_same_certificate_again_is_not_refused()
+    {
+        // A browser asks twice for ordinary reasons — a re-render, a second click, a
+        // reload — and the bucket holds two. The record at an offset cannot change,
+        // so the repeat is answered from memory and costs nothing to serve; metering
+        // it turned a bidder opening their own certificate into a 429.
+        using var factory = Catcher();
+        var (receipt, auction, bidder, _) = await PlaceBidAsync(factory);
+        var client = factory.CreateClient().As(bidder, Roles.Bidder);
+
+        for (var attempt = 1; attempt <= 10; attempt++)
+        {
+            var response = await client.GetAsync(Path(auction, receipt.Offset));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task Reading_one_offset_after_another_is_still_refused()
+    {
+        // The cache answers a repeat, not a sweep. Every distinct offset is a seek
+        // into the log, and walking the ladder one offset at a time is what the
+        // limit exists to stop — so a miss still costs a token even though a hit
+        // does not.
+        using var factory = Catcher();
+        var bidder = Guid.NewGuid();
+        var client = factory.CreateClient().As(bidder, Roles.Bidder);
+        var state = factory.Services.GetRequiredService<CatcherState>();
+
+        var now = DateTimeOffset.UtcNow;
+        var auction = TestAuction.Build(now.AddMinutes(-10), now.AddMinutes(30));
+        state.UpsertAuction(auction);
+        state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
+
+        var offsets = new List<long>();
+        for (var i = 0; i < 4; i++)
+        {
+            var placed = await client.PostAsync(
+                "/bids",
+                Body(TestAuction.Frame(
+                    auction.AuctionId, bidder, 1_200_000_00 + i * 100, now)));
+            Assert.Equal(HttpStatusCode.Accepted, placed.StatusCode);
+            offsets.Add((await placed.Content.ReadFromJsonAsync<BidReceipt>())!.Offset);
+        }
+
+        var answers = new List<HttpStatusCode>();
+        foreach (var offset in offsets)
+            answers.Add((await client.GetAsync(Path(auction.AuctionId, offset))).StatusCode);
+
+        // Two tokens, four fresh offsets: the first two are served and a later one
+        // is turned away. Which one depends on how fast the bucket refilled, so the
+        // assertion is on there being a refusal rather than on its position.
+        Assert.Equal(HttpStatusCode.OK, answers[0]);
+        Assert.Equal(HttpStatusCode.OK, answers[1]);
+        Assert.Contains(HttpStatusCode.TooManyRequests, answers);
+    }
 }

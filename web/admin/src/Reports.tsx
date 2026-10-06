@@ -127,7 +127,25 @@ export function Reports({ session }: { session: Session }) {
   const [groupBy, setGroupBy] = useState<'phase' | 'month' | 'channel'>('phase')
   const [phase, setPhase] = useState<string>('')
   const [phases, setPhases] = useState<PhaseRow[]>([])
-  const [rows, setRows] = useState<unknown[]>([])
+  /**
+   * The rows and the tab they belong to, in one piece of state.
+   *
+   * Not two. Pressing a tab changes `tab` at once while the fetch is still in
+   * flight, so with the rows held separately React renders the new tab's columns
+   * against the old tab's objects for one frame — every field `undefined`, every
+   * key missing, and a table of empty cells that resolves so fast a person reads it
+   * as a flicker. The browser walk-through caught it as a React key warning, which
+   * is the only visible trace it leaves.
+   *
+   * Keeping them together makes that pairing unrepresentable: a render either has
+   * this tab's rows or shows that it is still loading. The tab is `null` until the
+   * first fetch resolves, so the opening render says "loading" rather than "no data
+   * for this report yet" — which would be a lie, and one a test could pass on.
+   */
+  const [data, setData] = useState<{ tab: Tab | null; rows: unknown[] }>({
+    tab: null,
+    rows: [],
+  })
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -156,14 +174,14 @@ export function Reports({ session }: { session: Session }) {
     setError(null)
     try {
       const page = await client.get<Page<unknown>>(active.path + query())
-      setRows(page.items)
+      setData({ tab: active.id, rows: page.items })
     } catch (e) {
       setError(describe(e))
-      setRows([])
+      setData({ tab: active.id, rows: [] })
     } finally {
       setBusy(false)
     }
-  }, [active.path, client, query])
+  }, [active.id, active.path, client, query])
 
   useEffect(() => {
     void load()
@@ -256,17 +274,17 @@ export function Reports({ session }: { session: Session }) {
 
       {error && <div className="notice error">{error}</div>}
 
-      {busy && rows.length === 0 ? (
+      {data.tab !== tab ? (
         <p className="muted small">…</p>
-      ) : rows.length === 0 ? (
+      ) : data.rows.length === 0 ? (
         <p className="muted small" data-testid="report-empty">
           لا توجد بيانات لهذا التقرير بعد.
         </p>
       ) : (
-        <Table tab={tab} rows={rows} />
+        <Table tab={tab} rows={data.rows} />
       )}
 
-      {tab === 'revenue' && rows.length > 0 && (
+      {tab === 'revenue' && data.tab === tab && data.rows.length > 0 && (
         <p className="muted small" style={{ marginTop: 12 }}>
           قيمة الأراضي المبيعة لا تُجمع مع المتحصّلات: ثمن الأرض لا يمرّ عبر هذه
           المنصة — المنصة تحصّل قيمة الكراسة والسعي والتأمينات المحتجزة فقط.
