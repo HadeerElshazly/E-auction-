@@ -7,7 +7,8 @@
     "dev": "vite --port 3000 --strictPort",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 3000 --strictPort",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test \"src/*.test.ts\""
   },
   "dependencies": {
     "@eauction/shared": "*",

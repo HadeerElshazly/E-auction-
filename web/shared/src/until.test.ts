@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { untilText } from './money'
+import { untilText } from './money.ts'
 
 const now = new Date('2026-08-26T12:00:00Z')
 const at = (ms: number) => untilText(new Date(now.getTime() + ms), now)

@@ -47,6 +47,14 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
                   {a.plotCount} قطعة · {a.totalAreaSqm} م²
                 </span>
 
+                {/* Where the bidding happens, on the card rather than three
+                    screens in. A hall auction takes the same booklet and the same
+                    deposit as an online one and then needs the bidder in the room,
+                    so it is not a detail to find out after paying. */}
+                <span className="channel at-end">
+                  {a.channel === 'Onsite' ? '📍 حضوري' : '🌐 إلكتروني'}
+                </span>
+
                 {/* The clock, over the cover, as the proposal has it — but only
                     where there is actually a clock to show.
                     

@@ -61,6 +61,12 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
   const endsAt = price?.effectiveEndsAt ?? auction.effectiveEndsAt ?? auction.endsAt
   const eligible = subscription?.status === 'Eligible'
 
+  // A hall auction is bid in the hall: the clerk types what the room calls out and
+  // the catcher refuses an online frame for it with NotTheClerk (§29). Qualifying
+  // is still done from here — the booklet and the deposit are the same online — so
+  // what the channel changes is only the last step.
+  const onsite = auction.channel === 'Onsite'
+
   return (
     <>
       <div className="row" style={{ marginBottom: 14 }}>
@@ -115,12 +121,23 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           </div>
 
           <div>
-            <div className="muted small">{live ? 'الوقت المتبقي' : 'يبدأ'}</div>
-            <div className="big-number num">
-              {live
-                ? untilText(endsAt)
-                : when(auction.startsAt)}
+            <div className="muted small">
+              {live ? (onsite ? 'المزاد' : 'الوقت المتبقي') : 'يبدأ'}
             </div>
+            {live && onsite ? (
+              // No countdown in the hall: the hammer ends it, not a clock (§29), so
+              // endsAt is already behind while the auction is legitimately running
+              // and a countdown would say انتهى over a live auction. The same lie
+              // was fixed on the catalogue card; this is one screen further in.
+              //
+              // Without `num`, which isolates its contents left-to-right — right for
+              // a clock, wrong for a sentence.
+              <div className="big-number">جارٍ في القاعة</div>
+            ) : (
+              <div className="big-number num">
+                {live ? untilText(endsAt) : when(auction.startsAt)}
+              </div>
+            )}
             {price && price.extensionsUsed > 0 && (
               <div className="muted small" style={{ marginTop: 4 }}>
                 مُدّد {price.extensionsUsed} من {price.maxExtensions}
@@ -149,6 +166,17 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           </div>
         </div>
       </div>
+
+      {onsite && (
+        // Before the deposit, like the visibility notice below: a bidder about to
+        // commit a hundred thousand riyals needs to know they must be in the room
+        // on the day, not discover it once the money is gone.
+        <div className="notice info">
+          مزاد حضوري — تُقدّم المزايدات في قاعة المزاد ويُسجّلها موظف القاعة برقم
+          مجدافك. التأهّل — الكراسة والتأمين — يتم من هنا، أما المزايدة نفسها فلا
+          تُقبل إلا من القاعة.
+        </div>
+      )}
 
       {auction.bidderVisibility === 'Named' && (
         // Said before the deposit, not after. The administrator may run an auction
@@ -183,7 +211,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         />
       )}
 
-      {session && canBid && eligible && (
+      {session && canBid && eligible && !onsite && (
         <BidBox
           auction={auction}
           session={session}
@@ -192,6 +220,20 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           participant={participant}
           onBid={onRefresh}
         />
+      )}
+
+      {session && canBid && eligible && onsite && (
+        // Said rather than left blank. A qualified bidder who paid the deposit and
+        // then finds nothing to press would reasonably conclude the portal is
+        // broken, and the cost of that conclusion is a citizen who does not turn
+        // up to the hall.
+        <div className="card">
+          <h2>المزايدة</h2>
+          <div className="notice info">
+            المزايدة تجري في القاعة: ارفع مجدافك ويُسجّل موظف القاعة المبلغ باسمك فور
+            إعلانه. لا يوجد صندوق مزايدة هنا لأن مزايدة من هاتفك لا تعلم بها القاعة.
+          </div>
+        </div>
       )}
 
       <div className="card">

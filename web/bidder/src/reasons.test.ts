@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { reasons } from './reasons'
+import { reasons } from './reasons.ts'
 
 const FROM_THE_SERVER = [
   'AuctionClosed',
@@ -34,9 +34,12 @@ const FROM_THE_SERVER = [
   'BidderMismatch',
 ]
 
-// NotTheClerk is deliberately absent: it can only be returned to a clerk entering
-// a bid from the floor, and the admin portal's own map covers it. A bidder cannot
-// produce it.
+// NotTheClerk is deliberately absent: it is the refusal for an onsite frame from
+// somebody who is not the auction's clerk, and ClerkTerminal has the Arabic for it.
+// A bidder cannot produce it because AuctionPage does not render the bid box on a
+// hall auction at all — which is the condition this absence rests on, and was
+// briefly untrue: the box was offered on a hall auction once it went Live, and the
+// bidder who pressed it would have been shown the identifier.
 
 test('every refusal a bidder can receive has Arabic', () => {
   const missing = FROM_THE_SERVER.filter((r) => !reasons[r])
