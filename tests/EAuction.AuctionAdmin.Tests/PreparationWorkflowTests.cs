@@ -14,11 +14,11 @@ public class PreparationWorkflowTests
         var auction = Auction.CreateDraft(Build.Admin, "", "");
         var problems = auction.Validate(Now);
 
-        Assert.Contains(problems, p => p.Contains("Arabic name"));
-        Assert.Contains(problems, p => p.Contains("English name"));
+        Assert.Contains(problems, p => p.Contains("اسم المزاد بالعربي"));
+        Assert.Contains(problems, p => p.Contains("اسم المزاد بالإنجليزي"));
         Assert.Contains(problems, p => p.Contains("قطعة أرض واحدة على الأقل"));
         Assert.Contains(problems, p => p.Contains("كراسة الشروط"));
-        Assert.Contains(problems, p => p.Contains("Start and end"));
+        Assert.Contains(problems, p => p.Contains("تاريخ ووقت بداية المزاد"));
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class PreparationWorkflowTests
             brokerageFeePercent: 2.5m, bookletPriceMinorUnits: 1_000_00,
             quietPeriodSeconds: 120, maxExtensions: 3);
 
-        Assert.Contains(auction.Validate(Now), p => p.Contains("below the opening price"));
+        Assert.Contains(auction.Validate(Now), p => p.Contains("يقل عن سعر الافتتاح"));
     }
 
     [Fact]

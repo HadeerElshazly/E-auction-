@@ -195,7 +195,7 @@ public class SubscriptionTests
         var ex = Assert.Throws<ParticipantValidationException>(
             () => s.ConfirmDepositPayment("deposit", unverified, terms, Now));
 
-        Assert.Contains(ex.Problems, p => p.Contains("profile is incomplete"));
+        Assert.Contains(ex.Problems, p => p.Contains("بيانات المزايد غير مكتملة"));
         Assert.NotEqual(SubscriptionStatus.Eligible, s.Status);
         Assert.Empty(s.Events.OfType<ParticipantEligibilityChanged>());
     }
