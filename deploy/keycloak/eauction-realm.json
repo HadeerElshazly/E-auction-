@@ -39,6 +39,10 @@
         "description": "Floor operator entering bids for an on-site auction"
       },
       {
+        "name": "reporting",
+        "description": "مسؤول التقارير — reads التقارير and cannot touch an auction. Exists so the municipality's finance staff do not need auction-admin, which can change a reserve price."
+      },
+      {
         "name": "auditor",
         "description": "مراجع — reads the staff audit trail, and nothing else. Deliberately held by nobody who operates the platform: an auditor who could also approve an auction would be reading their own record."
       }
@@ -299,6 +303,24 @@
       ],
       "realmRoles": [
         "award-committee"
+      ]
+    },
+    {
+      "username": "reporting-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Finance",
+      "lastName": "Reporting",
+      "email": "reports@example.sa",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "reporting"
       ]
     },
     {

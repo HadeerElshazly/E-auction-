@@ -42,7 +42,8 @@ for a staff action is the subject acted on, so per-aggregate order is preserved 
 but see §34's "Still not verified": this connector has never been registered
 against a Connect cluster, and the audit trail is where that gap matters most.
 
-`auctions.sealed` must be ACL'd to the bid processor alone. That split is what
+`auctions.sealed` must be ACL'd to the bid processor alone — and specifically not
+to the reporting service, which §35 (D-45) keeps off it on purpose. That split is what
 makes "the reserve never reaches the public read path" an infrastructure
 guarantee rather than a thing every developer has to remember (D-06).
 

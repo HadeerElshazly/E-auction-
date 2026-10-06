@@ -14,7 +14,7 @@ tools/smoke/run-smoke.sh --keep-data  # do not recreate the databases
 Needs Postgres on `:5432`, a Kafka broker on `:9092`
 (`tools/kafka/run-local-broker.sh start`) and Keycloak with the `eauction` realm
 (`deploy/keycloak/run-local.sh`). The script provisions the topics, applies the
-migrations, starts the services on `:5101`–`:5109`, runs the walk-through and tears
+migrations, starts the services on `:5101`–`:5110`, runs the walk-through and tears
 everything down. Service logs land in `/tmp/eauction-smoke/`.
 
 `SMOKE_S3` points the document service at an object store; without it documents are
@@ -27,6 +27,21 @@ compacted topics, and the processor ends up driving a crowd of them until a new
 auction's `AuctionStarted` arrives too late for the walk-through to see.
 `--with-deps` wipes the broker; without it the failure looks like a timeout in
 section 12 and has nothing to do with the code.
+
+**Stop Keycloak by hand after changing the realm.** `--with-deps` deliberately
+leaves a running Keycloak alone, because `deploy/keycloak/run-local.sh` wipes its
+database to make an import take effect and that would reset every bidder's subject
+id mid-session. The consequence is that a realm change — a new role, a new dev user
+— is not picked up by a run against an already-running instance, and the failure is
+an `invalid_grant` on a user that is in the file:
+
+```bash
+pkill -f "[k]c.sh start-dev"
+tools/smoke/run-smoke.sh --with-deps
+```
+
+This has caught out the last two realm additions (`auditor-user`, then
+`reporting-user`), both times looking like a broken password.
 
 ## What it walks through
 
@@ -44,6 +59,7 @@ section 12 and has nothing to do with the code.
 | **11. Notifications** | each bidder's inbox; the loser is told he was outbid and not who won; one bidder cannot read another's (§32) |
 | **12. The hall** | a clerk enters bids from the floor, extends, and brings the hammer down (§29) |
 | **13. The audit trail** | the staff actions of the preceding twelve sections, read back by an auditor and verified: four operating roles refused, no write route, the approval named, the reserve figure absent, the chain intact (§34) |
+| **14. التقارير** | the reports read back after everything above, with nothing seeded: staff-only, the outcome and brokerage as the walk-through produced them, no reserve column anywhere, the funnel, the plot inventory, revenue split from cash, and the CSV (§35) |
 
 Documents run through sections 2 and 4: a real كراسة الشروط uploaded with an Arabic
 filename, the cover image readable with no token, the booklet refused even to the

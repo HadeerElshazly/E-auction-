@@ -163,6 +163,7 @@ services:
       ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
       ConnectionStrings__Notifications: "Host=postgres;Database=eauction_notifications;Username=eauction;Password=eauction"
       ConnectionStrings__Audit: "Host=postgres;Database=eauction_audit;Username=eauction;Password=eauction"
+      ConnectionStrings__Reporting: "Host=postgres;Database=eauction_reporting;Username=eauction;Password=eauction"
     depends_on:
       postgres:
         condition: service_healthy
@@ -403,6 +404,34 @@ services:
       # No portal reads the trail yet, so no browser origin is allowed. An auditor
       # reaches it through the API; adding a portal means adding its origin here.
       Cors__AllowedOrigins: ""
+    depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  # التقارير (§35). A read model rebuilt from the topics, so it can be dropped and
+  # repopulated; its own database because a report is a table scan with joins and
+  # should not compete with the approval workflow for locks.
+  reporting:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.reporting
+    container_name: eauction-reporting
+    ports:
+      - "5099:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
+      Kafka__BootstrapServers: kafka:9092
+      ConnectionStrings__Reporting: "Host=postgres;Database=eauction_reporting;Username=eauction;Password=eauction"
+      # The admin portal is where التقارير will be rendered when it has a screen for
+      # them; the CSV download needs the origin too.
+      Cors__AllowedOrigins: "http://localhost:3001"
     depends_on:
       provision-migrate:
         condition: service_completed_successfully

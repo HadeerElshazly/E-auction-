@@ -84,6 +84,7 @@ e-auction/
     ├── documents.yaml
     ├── notifications.yaml
     ├── audit.yaml
+    ├── reporting.yaml
     ├── query-bff.yaml
     └── NOTES.txt
 ```
@@ -112,7 +113,7 @@ service at startup:
 | Hook | Weight | What it does |
 |---|---|---|
 | `-topics` | `-10` | creates the control-plane topics with the cleanup policy each one needs |
-| `-migrate` | `-5` | applies the EF Core migrations for auction-admin, participant, notifications and audit |
+| `-migrate` | `-5` | applies the EF Core migrations for auction-admin, participant, notifications, audit and reporting |
 
 Both are `pre-install,pre-upgrade` hooks, both are idempotent, and both are
 `before-hook-creation` rather than `hook-succeeded`, so a failed run's logs

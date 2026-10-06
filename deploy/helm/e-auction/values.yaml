@@ -544,6 +544,78 @@ audit:
     - name: ASPNETCORE_URLS
       value: http://+:8080
 
+# التقارير (§35).
+#
+# A read model assembled from four control topics, so it is the one stateful service
+# here whose database can be dropped and rebuilt — restart it against an empty
+# schema and the reports come back. It has its own database all the same, for a
+# third reason after PDPL (participant) and separation of duty (audit): a report is
+# a table scan with joins, and running it against the auction service's database
+# would let a finance query compete with an approval workflow for the same locks.
+#
+# It never consumes auctions.sealed and must not be given that ACL (D-45). The
+# reserve price is the one secret in this platform and a service whose output is
+# spreadsheets is where a secret stops being one.
+reporting:
+  enabled: true
+  image: e-auction/reporting
+
+  # Two is safe here, unlike the audit and notification services.
+  #
+  # Every write is an upsert on a natural key and the outcome field never retreats,
+  # so two replicas reading the same topics converge on the same rows — and the one
+  # ledger table is keyed on the topic offset, so a settlement cannot be counted
+  # twice. The service also serialises its own writes across the four topics it
+  # follows, which is what stops one topic's handler losing another's update.
+  replicas: 2
+  port: 8080
+
+  # Internal. The admin portal will render التقارير through the API gateway when it
+  # has a screen for them; a CSV of every auction's winner and price is not a public
+  # document.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  # Off, but not for a correctness reason — unlike the audit service, this one would
+  # be safe to scale. It is off because reports are run by a handful of staff and a
+  # report that is slow is slow because of a query plan, not a replica count.
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: false
+
+  spreadAcrossNodes: false
+
+  # More memory than the other read services and deliberately so: a revenue report
+  # groups in memory over the settlements of every auction in range.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 768Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  #   secretEnv:
+  #     - name: ConnectionStrings__Reporting
+  #       secretName: eauction-reporting-db
+  #       secretKey: connection-string
+  secretEnv: []
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+
 # The files: كراسة الشروط, the cover image, bank guarantees and award letters.
 #
 # Holds no database. Everything it knows about a document rides on the object as S3

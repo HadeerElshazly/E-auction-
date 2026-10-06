@@ -23,6 +23,7 @@ src/
   EAuction.Documents/     كراسة الشروط, guarantees, award letters, on S3 (§31)
   EAuction.Notifications/ what a bidder is told, and the inbox they read it in (§32)
   EAuction.Audit/         who did it — the staff audit trail, hash-chained (§34)
+  EAuction.Reporting/     التقارير — a read model and the reports off it (§35)
   EAuction.QueryBff/      the public catalogue and the live price fan-out
   EAuction.Security/      roles, policies, the second factor, document grants
   EAuction.Outbox/        shared transactional-outbox machinery
@@ -60,7 +61,8 @@ dotnet run --project tools/migrate -- \
   --admin         "Host=localhost;Database=eauction_admin;Username=eauction;Password=eauction" \
   --participant   "Host=localhost;Database=eauction_participant;Username=eauction;Password=eauction" \
   --notifications "Host=localhost;Database=eauction_notifications;Username=eauction;Password=eauction" \
-  --audit         "Host=localhost;Database=eauction_audit;Username=eauction;Password=eauction"
+  --audit         "Host=localhost;Database=eauction_audit;Username=eauction;Password=eauction" \
+  --reporting     "Host=localhost;Database=eauction_reporting;Username=eauction;Password=eauction"
 ```
 
 The document service's tests need something that speaks S3; without `S3_ENDPOINT`
@@ -115,8 +117,12 @@ Architecture document is in review.
   through the acting service's outbox in the same transaction as the change it
   describes, hash-chained into a service with its own database, its own role and no
   write endpoint (§34).
+- **التقارير** — auction outcomes, revenue by phase, the participation funnel, plot
+  inventory, deposit exposure and disqualifications, as a read model rebuilt from
+  the topics, with a CSV export Excel reads correctly in Arabic. It never sees the
+  reserve price, and §35 says what that costs.
 
-**502 tests green** with a broker and an S3 endpoint running, 478 without — the
+**555 tests green** with a broker and an S3 endpoint running, 531 without — the
 Kafka and object-store integration tests skip rather than fail when their
 dependency is absent, so the suite runs anywhere.
 

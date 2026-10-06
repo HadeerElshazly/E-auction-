@@ -2,6 +2,7 @@ using EAuction.Audit.Persistence;
 using EAuction.AuctionAdmin.Persistence;
 using EAuction.Notifications.Persistence;
 using EAuction.Participant.Persistence;
+using EAuction.Reporting.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 // ---------------------------------------------------------------------------
@@ -16,11 +17,13 @@ using Microsoft.EntityFrameworkCore;
 //     --admin "Host=…;Database=eauction_admin;Username=…;Password=…" \
 //     --participant "Host=…;Database=eauction_participant;Username=…;Password=…" \
 //     --notifications "Host=…;Database=eauction_notifications;Username=…;Password=…" \
-//     --audit "Host=…;Database=eauction_audit;Username=…;Password=…"
+//     --audit "Host=…;Database=eauction_audit;Username=…;Password=…" \\
+//     --reporting "Host=…;Database=eauction_reporting;Username=…;Password=…"
 //
 // Any connection string may also come from ConnectionStrings__Admin /
 // ConnectionStrings__Participant / ConnectionStrings__Notifications /
-// ConnectionStrings__Audit, which is how the chart passes them.
+// ConnectionStrings__Audit / ConnectionStrings__Reporting, which is how the chart
+// passes them.
 // ---------------------------------------------------------------------------
 
 var args_ = args;
@@ -37,13 +40,15 @@ var participant = Arg("participant")
 var notifications = Arg("notifications")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Notifications");
 var audit = Arg("audit") ?? Environment.GetEnvironmentVariable("ConnectionStrings__Audit");
+var reporting = Arg("reporting")
+    ?? Environment.GetEnvironmentVariable("ConnectionStrings__Reporting");
 
-if (admin is null && participant is null && notifications is null && audit is null)
+if (admin is null && participant is null && notifications is null
+    && audit is null && reporting is null)
 {
     Console.Error.WriteLine(
-        "Nothing to do. Pass --admin, --participant, --notifications and/or --audit, "
-        + "or set ConnectionStrings__Admin / ConnectionStrings__Participant / "
-        + "ConnectionStrings__Notifications / ConnectionStrings__Audit.");
+        "Nothing to do. Pass --admin, --participant, --notifications, --audit and/or "
+        + "--reporting, or set the matching ConnectionStrings__* variables.");
     return 2;
 }
 
@@ -64,6 +69,10 @@ if (notifications is not null)
 if (audit is not null)
     failed |= !await Apply("audit", new DbContextOptionsBuilder<AuditDbContext>()
         .UseNpgsql(audit).Options, o => new AuditDbContext(o));
+
+if (reporting is not null)
+    failed |= !await Apply("reporting", new DbContextOptionsBuilder<ReportingDbContext>()
+        .UseNpgsql(reporting).Options, o => new ReportingDbContext(o));
 
 return failed ? 1 : 0;
 

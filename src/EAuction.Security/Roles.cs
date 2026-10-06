@@ -40,6 +40,22 @@ public static class Roles
     /// writes, by construction (D-44).
     /// </summary>
     public const string Auditor = "auditor";
+
+    /// <summary>
+    /// مسؤول التقارير — reads التقارير, and cannot touch an auction.
+    ///
+    /// Exists for the same reason as <see cref="Auditor"/>, by the same test: a
+    /// role is here only where its absence would let someone do something they
+    /// must not. Without it, the municipality's finance staff need
+    /// <see cref="AuctionAdmin"/> to read what a phase raised — and that role can
+    /// change an auction's reserve price. Reporting is read-only, so this grants
+    /// nothing but the reports.
+    ///
+    /// Unlike <see cref="Auditor"/> it is not exclusive: an administrator and a
+    /// committee member reach the reports too, because they are management
+    /// information about work those two already do.
+    /// </summary>
+    public const string Reporting = "reporting";
 }
 
 /// <summary>Authorization policy names.</summary>
@@ -50,6 +66,14 @@ public static class Policies
     public const string AwardCommittee = "policy:award-committee";
     public const string Operator = "policy:operator";
     public const string Auditor = "policy:auditor";
+
+    /// <summary>
+    /// Who may read التقارير: the finance staff the <see cref="Roles.Reporting"/>
+    /// role is for, and the two staff roles whose work the reports are about.
+    /// Deliberately not <see cref="Roles.Operator"/> — a clerk running a hall
+    /// needs the room's roster, not the programme's revenue.
+    /// </summary>
+    public const string Reporting = "policy:reporting";
 
     /// <summary>
     /// Who may post a frame to the bid catcher: a bidder bidding for themselves,

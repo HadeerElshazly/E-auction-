@@ -269,6 +269,7 @@ public sealed class Auction
             MaxExtensions = MaxExtensions,
             Channel = Channel.ToString(),
             BidderVisibility = BidderVisibility.ToString(),
+            Phase = Phase,
             PlotCount = _plots.Count,
             TotalAreaSqm = TotalAreaSqm,
             Plots = _plots
@@ -478,6 +479,7 @@ public sealed class Auction
             AwardId = award.Id,
             WinnerBidderId = award.BidderId,
             AmountMinorUnits = award.AmountMinorUnits,
+            ConfirmedAt = award.ConfirmedAt,
             ComplianceDeadline = award.ComplianceDeadline,
             CascadeStep = award.CascadeStep
         });
@@ -541,6 +543,18 @@ public sealed class Auction
         var award = RequireOpenAward();
         award.Settle(now);
         Status = AuctionStatus.Settled;
+
+        // The sale, as a fact on its own rather than something to be read out of
+        // the deposit event below. Reporting counts this as revenue (§35), and a
+        // report that inferred the sale from money moving would disagree with the
+        // register the first time the two diverged.
+        _events.Add(new AuctionSettled
+        {
+            AuctionId = Id,
+            WinnerBidderId = award.BidderId,
+            AmountMinorUnits = award.AmountMinorUnits,
+            At = now
+        });
 
         // Only now is the award final, so only now can the deposits held for
         // the bidders below the winner be released (§8.3).

@@ -88,6 +88,17 @@ public sealed record AuctionApproved : DomainEvent
     /// <summary>The cover image, which is Public: it is on the catalogue an anonymous citizen reads.</summary>
     public Guid? CoverImageDocumentId { get; init; }
 
+    /// <summary>
+    /// المخطط — which plan and phase this land belongs to, e.g. "مخطط السعيد — المرحلة الأولى".
+    ///
+    /// Added for the reporting service (§35), which groups almost everything by it:
+    /// a municipality asks what a *phase* raised and how much of it is left, not
+    /// what one auction did. Public information — it says where the land is, which
+    /// the deed numbers and coordinates on this same event already say — and it
+    /// answers P-1, the open question of whether the plan holds 327 plots or 372.
+    /// </summary>
+    public string? Phase { get; init; }
+
     public required int PlotCount { get; init; }
     public required decimal TotalAreaSqm { get; init; }
 
@@ -135,6 +146,17 @@ public sealed record AwardConfirmed : DomainEvent
     public required Guid AwardId { get; init; }
     public required Guid WinnerBidderId { get; init; }
     public required long AmountMinorUnits { get; init; }
+
+    /// <summary>
+    /// When the committee confirmed it.
+    ///
+    /// Added for reporting (§35), which had been deriving the award date from
+    /// <see cref="ComplianceDeadline"/> — a figure that is the deadline minus a
+    /// window the consumer does not know. The committee's confirmation is a legal
+    /// act with a date, and the date belongs on the event that announces it.
+    /// </summary>
+    public required DateTimeOffset ConfirmedAt { get; init; }
+
     public required DateTimeOffset ComplianceDeadline { get; init; }
     public required int CascadeStep { get; init; }
 
@@ -161,6 +183,27 @@ public sealed record WinnerDisqualified : DomainEvent
 public sealed record AuctionUnsold : DomainEvent
 {
     public required Guid AuctionId { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>
+/// The sale completed: البيع تم. On <c>auctions.lifecycle</c>.
+///
+/// Nothing published this before, which was a gap rather than a decision. Settling
+/// an auction already emitted <see cref="DepositsReleasable"/> with the winner in
+/// <c>AppliedToPurchaseForBidder</c>, so a consumer could infer the settlement from
+/// a deposit event — and the reporting service did, until it was clear that
+/// "the sale completed" is a lifecycle fact and inferring it from money moving is
+/// how a report comes to disagree with the register.
+/// </summary>
+public sealed record AuctionSettled : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid WinnerBidderId { get; init; }
+    public required long AmountMinorUnits { get; init; }
+    public required DateTimeOffset At { get; init; }
 
     public override string AggregateType => "auction-lifecycle";
     public override string AggregateId => AuctionId.ToString();

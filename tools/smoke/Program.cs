@@ -24,6 +24,7 @@ var bffUrl = Env("SMOKE_BFF_URL", "http://localhost:5105");
 var documentsUrl = Env("SMOKE_DOCUMENTS_URL", "http://localhost:5107");
 var notificationsUrl = Env("SMOKE_NOTIFICATIONS_URL", "http://localhost:5108");
 var auditUrl = Env("SMOKE_AUDIT_URL", "http://localhost:5109");
+var reportingUrl = Env("SMOKE_REPORTING_URL", "http://localhost:5110");
 var bootstrap = Env("SMOKE_KAFKA", "127.0.0.1:9092");
 var password = Env("SMOKE_PASSWORD", "dev-only-password");
 
@@ -1209,6 +1210,125 @@ try
             + $"{verified.GetProperty("head").GetString()![..16]}…");
     else
         n.Fail("the chain verifies", verified.ToString());
+
+    // -----------------------------------------------------------------------
+    n.Section("14. التقارير — what the two auctions add up to");
+    // -----------------------------------------------------------------------
+    //
+    // A read model off four topics, so nothing is seeded here: whatever the
+    // thirteen sections above actually did is what the reports say. That is the
+    // point of checking it last — a report asserted against its own fixtures proves
+    // the arithmetic and nothing about the wiring.
+
+    var reportsToken = await Keycloak.TokenAsync(
+        http, issuer, "admin-web", "reporting-user", password);
+    var finance = new Caller(http, reportingUrl, reportsToken, "reporting");
+
+    // A bidder's token, a clerk's and an auditor's are all refused: a CSV naming
+    // every winner and the price they paid is management information, not a public
+    // document, and the auditor role grants nothing outside the trail.
+    var reportRefusals = new List<string>();
+    foreach (var (role, token) in new[]
+             {
+                 ("sara", saraToken),
+                 ("clerk", clerkToken),
+                 ("auditor", auditorToken),
+             })
+    {
+        var (code, _) = await new Caller(http, reportingUrl, token, role)
+            .TryGetAsync("/reports/revenue");
+        if (code != System.Net.HttpStatusCode.Forbidden)
+            reportRefusals.Add($"{role}={(int)code}");
+    }
+
+    if (reportRefusals.Count == 0)
+        n.Step("التقارير are staff-only", "403 for a bidder, a clerk and an auditor alike");
+    else
+        n.Fail("التقارير are staff-only", string.Join(", ", reportRefusals));
+
+    var outcomes = await WaitForReportAsync(finance, auctionId, "Settled");
+    var online = outcomes.GetProperty("items").EnumerateArray()
+        .First(i => i.GetProperty("auctionId").GetGuid() == auctionId);
+
+    // The figures the walk-through produced, read back from a different service's
+    // database by way of four topics.
+    var reportedPrice = online.GetProperty("finalPriceMinorUnits").GetInt64();
+    var reportedBrokerage = online.GetProperty("brokerageDueMinorUnits").GetInt64();
+
+    if (reportedPrice == reserve && reportedBrokerage == (long)Math.Round(reserve * 2.5m / 100m))
+        n.Step("the online auction's outcome reaches التقارير",
+            $"{reportedPrice / 100:N0} SAR, سعي {reportedBrokerage / 100:N0} SAR");
+    else
+        n.Fail("the online auction's outcome reaches التقارير",
+            $"price {reportedPrice}, brokerage {reportedBrokerage}");
+
+    // The reserve price, from the far end of the platform. It was set through the
+    // admin API in section 2 and reached the processor on auctions.sealed; this
+    // service never subscribed to that topic (D-45), so no report has a column for
+    // it.
+    //
+    // Asserted on the field names rather than on the figure, deliberately. The
+    // winning bid here was *at* the reserve, so the number appears legitimately as
+    // the price the auction sold for — and a check that merely grepped for it would
+    // either fail for the wrong reason or, worse, pass because the amount happened
+    // not to match.
+    var reserveColumns = online.EnumerateObject()
+        .Select(f => f.Name)
+        .Where(name => name.Contains("reserve", StringComparison.OrdinalIgnoreCase))
+        .ToList();
+
+    if (reserveColumns.Count == 0)
+        n.Step("no report has a column for the reserve price",
+            "this service never subscribes to auctions.sealed — D-45");
+    else
+        n.Fail("no report has a column for the reserve price", string.Join(", ", reserveColumns));
+
+    var participation = await finance.GetAsync($"/reports/participation?take=200");
+    var funnel = participation.GetProperty("items").EnumerateArray()
+        .First(i => i.GetProperty("auctionId").GetGuid() == auctionId);
+
+    if (funnel.GetProperty("eligible").GetInt32() == 2
+        && funnel.GetProperty("depositPaid").GetInt32() == 2
+        && funnel.GetProperty("bidCount").GetInt32() > 0)
+        n.Step("the participation funnel counts both bidders",
+            $"{funnel.GetProperty("bookletPaid").GetInt32()} booklets, "
+            + $"{funnel.GetProperty("depositPaid").GetInt32()} deposits, "
+            + $"{funnel.GetProperty("bidCount").GetInt32()} bids judged");
+    else
+        n.Fail("the participation funnel counts both bidders", funnel.ToString());
+
+    var plots = await finance.GetAsync("/reports/plots?take=200");
+    var sold = plots.GetProperty("items").EnumerateArray()
+        .Where(p => p.GetProperty("auctionId").GetGuid() == auctionId)
+        .ToList();
+
+    if (sold.Count == 3 && sold.All(p => p.GetProperty("sold").GetBoolean()))
+        n.Step("the plot inventory says the package sold",
+            $"{sold.Count} deeds, one package rate — nobody bid on a plot (D-02)");
+    else
+        n.Fail("the plot inventory says the package sold", $"{sold.Count} plot(s)");
+
+    var revenue = await finance.GetAsync("/reports/revenue?groupBy=phase");
+    var cash = revenue.GetProperty("items").EnumerateArray()
+        .Sum(r => r.GetProperty("collectedMinorUnits").GetInt64());
+    var saleValue = revenue.GetProperty("items").EnumerateArray()
+        .Sum(r => r.GetProperty("saleValueMinorUnits").GetInt64());
+
+    if (cash > 0 && saleValue > 0 && cash != saleValue)
+        n.Step("revenue keeps the land's value apart from the cash collected",
+            $"{saleValue / 100:N0} SAR of land sold; {cash / 100:N0} SAR through the platform");
+    else
+        n.Fail("revenue keeps the land's value apart from the cash collected",
+            $"sale {saleValue}, cash {cash}");
+
+    var csv = await finance.TryGetAsync("/reports/auctions?format=csv");
+    if (csv.Status == System.Net.HttpStatusCode.OK
+        && csv.Body.Contains("مخطط السعيد")
+        && csv.Body.Contains("deed") == false
+        && csv.Body.Contains("name_ar"))
+        n.Step("every report downloads as a CSV", "UTF-8 with a BOM, so Excel reads the Arabic");
+    else
+        n.Fail("every report downloads as a CSV", $"{(int)csv.Status}");
 }
 catch (SmokeException e)
 {
@@ -1416,6 +1536,35 @@ static async Task WaitForTermsAsync(Caller who, Guid auctionId, Guid bidderId)
     throw new SmokeException(
         $"the participant service never learned auction {auctionId}; is it consuming "
         + Topics.Upcoming + "?");
+}
+
+/// <summary>
+/// Waits until التقارير have caught up with an auction.
+///
+/// The reporting service is four Kafka consumers behind an outbox relay, so its
+/// view of an auction trails the auction itself. Waited for rather than slept
+/// through, and filtered on the outcome because the auction appears in the report
+/// the moment it is approved — "it is in the report" would pass long before the
+/// report says it sold.
+/// </summary>
+static async Task<JsonElement> WaitForReportAsync(
+    Caller finance, Guid auctionId, string outcome)
+{
+    for (var i = 0; i < 60; i++)
+    {
+        var page = await finance.GetAsync("/reports/auctions?take=200");
+
+        if (page.GetProperty("items").EnumerateArray().Any(item =>
+                item.GetProperty("auctionId").GetGuid() == auctionId
+                && item.GetProperty("outcome").GetString() == outcome))
+            return page;
+
+        await Task.Delay(500);
+    }
+
+    throw new SmokeException(
+        $"التقارير never reported auction {auctionId} as {outcome}; is the reporting "
+        + "service consuming auctions.lifecycle?");
 }
 
 /// <summary>

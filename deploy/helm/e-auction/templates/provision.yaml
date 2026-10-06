@@ -152,6 +152,17 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- if .Values.reporting.enabled }}
+            {{- range .Values.reporting.secretEnv }}
+            {{- if eq .name "ConnectionStrings__Reporting" }}
+            - name: ConnectionStrings__Reporting
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.provision.resources | nindent 12 }}
           volumeMounts:

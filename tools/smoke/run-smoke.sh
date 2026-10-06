@@ -127,7 +127,8 @@ SERVICES_ONLY=0
 for a in "$@"; do [ "$a" = "--services-only" ] && SERVICES_ONLY=1; done
 
 PSQL="postgresql://eauction:eauction@localhost/postgres"
-for db in eauction_admin eauction_participant eauction_notifications eauction_audit; do
+for db in eauction_admin eauction_participant eauction_notifications eauction_audit \
+          eauction_reporting; do
   if [ "$KEEP_DATA" = 0 ]; then
     psql -qtAX "$PSQL" -c "DROP DATABASE IF EXISTS $db WITH (FORCE)" >/dev/null
   fi
@@ -162,7 +163,8 @@ dotnet "$REPO/tools/migrate/bin/Release/net8.0/EAuction.Migrate.dll" \
   --admin "$PG;Database=eauction_admin" \
   --participant "$PG;Database=eauction_participant" \
   --notifications "$PG;Database=eauction_notifications" \
-  --audit "$PG;Database=eauction_audit" || die "migrations failed"
+  --audit "$PG;Database=eauction_audit" \
+  --reporting "$PG;Database=eauction_reporting" || die "migrations failed"
 
 # --- services --------------------------------------------------------------
 
@@ -261,10 +263,16 @@ start notifications EAuction.Notifications 5108 \
 start audit EAuction.Audit 5109 \
   ConnectionStrings__Audit="$PG;Database=eauction_audit"
 
+# التقارير (§35). A read model off four topics, so it needs no seeding — whatever
+# the walk-through above did is what the reports will say.
+start reporting EAuction.Reporting 5110 \
+  ConnectionStrings__Reporting="$PG;Database=eauction_reporting" \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
+
 # --- wait for health -------------------------------------------------------
 
 for probe in "auction-admin 5101" "participant 5102" "query-bff 5105" "documents 5107" \
-             "notifications 5108" "audit 5109"; do
+             "notifications 5108" "audit 5109" "reporting 5110"; do
   set -- $probe
   for _ in $(seq 1 60); do
     curl -fsS --noproxy "*" -o /dev/null "http://127.0.0.1:$2/health/ready" 2>/dev/null && break
@@ -323,6 +331,7 @@ SMOKE_PARTICIPANT_URL=http://127.0.0.1:5102 \
 SMOKE_CATCHER_URL=http://127.0.0.1:5103 \
 SMOKE_BFF_URL=http://127.0.0.1:5105 \
 SMOKE_AUDIT_URL=http://127.0.0.1:5109 \
+SMOKE_REPORTING_URL=http://127.0.0.1:5110 \
 NO_PROXY='*' no_proxy='*' \
   dotnet "$REPO/tools/smoke/bin/Release/net8.0/EAuction.Smoke.dll"
 RESULT=$?

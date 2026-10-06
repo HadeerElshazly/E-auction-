@@ -32,6 +32,9 @@ Services:
 {{- if .Values.audit.enabled }}
   audit           {{ .Values.audit.replicas }} replica (read-only; `auditor` role)
 {{- end }}
+{{- if .Values.reporting.enabled }}
+  reporting       {{ .Values.reporting.replicas }} replicas (التقارير; `reporting` role)
+{{- end }}
 
 {{- if gt (int .Values.bidProcessor.replicas) 1 }}
 
@@ -83,6 +86,19 @@ its migration installs:
 Grant the `auditor` realm role in Keycloak to the people who review the trail and
 to nobody who operates the platform. An auditor who can also approve an auction is
 reading their own record.
+{{- end }}
+
+{{- if .Values.reporting.enabled }}
+
+The reporting service needs its own database secret. Unlike the others, its schema
+holds nothing that cannot be rebuilt — it is a read model assembled from the
+topics, so dropping it and restarting the service repopulates it:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic eauction-reporting-db \
+    --from-literal=connection-string='Host=...;Database=eauction_reporting;Username=...;Password=...'
+
+Grant the `reporting` realm role to the finance staff who read التقارير. It exists
+so they do not need `auction-admin`, which can change an auction's reserve price.
 {{- end }}
 
 {{- if .Values.auctionAdmin.enabled }}

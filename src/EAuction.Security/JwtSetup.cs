@@ -129,6 +129,11 @@ public static class JwtSetup
             // reach it would be reading their own record.
             auth.AddPolicy(Policies.Auditor, p => p.RequireRole(Roles.Auditor));
 
+            // Three roles, and the point of the first is that it is the only one of
+            // the three that cannot change an auction.
+            auth.AddPolicy(Policies.Reporting,
+                p => p.RequireRole(Roles.Reporting, Roles.AuctionAdmin, Roles.AwardCommittee));
+
             // Either role reaches the catcher; the catcher then decides which one
             // this auction's channel actually permits.
             auth.AddPolicy(Policies.SubmitsBids,

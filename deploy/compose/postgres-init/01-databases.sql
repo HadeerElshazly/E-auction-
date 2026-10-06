@@ -19,3 +19,9 @@ CREATE DATABASE eauction_notifications OWNER eauction;
 -- also append-only by trigger (see the service's InitialSchema migration), which
 -- is a guarantee a shared schema's other writers would be able to lift.
 CREATE DATABASE eauction_audit OWNER eauction;
+
+-- The reporting service keeps its own read model, rebuilt from the topics. It is
+-- separate for a third reason again: a report is a table scan with joins, and
+-- running it against the auction service's database would let a finance query
+-- compete with the approval workflow for the same locks.
+CREATE DATABASE eauction_reporting OWNER eauction;

@@ -32,6 +32,7 @@ its latency budget.
 | `auction-admin` | municipality staff | prepare an auction, publish it for approval |
 | `award-committee` | the award committee | confirm an award, disqualify a winner, offer the next candidate |
 | `operator` | platform operations, and the clerk on the floor | health and operational endpoints; a hall auction's signing key and hammer (§29) |
+| `reporting` | municipality finance staff | التقارير, and nothing else — it cannot touch an auction (§35) |
 | `auditor` | internal audit | the staff audit trail, and nothing else (§34) |
 
 `auditor` is the one role here that must not be combined with another. It grants
@@ -88,13 +89,28 @@ redeemed by someone else.
 
 `sara`, `khalid` (`bidder`, each with `national_id` and `name_ar`),
 `admin-user` (`auction-admin`), `committee-user` (`award-committee`),
-`clerk-user` (`operator`), `auditor-user` (`auditor`).
+`clerk-user` (`operator`), `reporting-user` (`reporting`), `auditor-user` (`auditor`).
 Password `dev-only-password`.
 
 `auditor-user` holds `auditor` and nothing else, on purpose: the separation §34
 asks for is only real if the seeded accounts respect it too, and an audit trail
 that the dev administrator could read would make the smoke test's refusal
 assertions pass for the wrong reason.
+
+### Changing the realm means restarting Keycloak
+
+The realm is imported on startup into a database `run-local.sh` wipes first, so an
+edit to `eauction-realm.json` has no effect on an instance that is already running —
+and `tools/smoke/run-smoke.sh --with-deps` deliberately leaves a running one alone,
+because wiping it resets every bidder's subject id mid-session. A new role or dev
+user therefore needs:
+
+```bash
+pkill -f "[k]c.sh start-dev"
+```
+
+before the next run. The symptom otherwise is `invalid_grant` for a user that is
+plainly in the file.
 
 ## Running it locally
 
@@ -245,7 +261,7 @@ Three behaviours are worth knowing before you debug this realm:
       token without driving a browser. Leaving it on in production means a
       stolen password is a token, with no Nafath in the path.
 - [ ] Delete every dev user (`sara`, `khalid`, `admin-user`, `committee-user`,
-      `clerk-user`, `auditor-user`).
+      `clerk-user`, `reporting-user`, `auditor-user`).
       They carry a known password, and three of them carry a known TOTP secret —
       which, until Nafath is wired in, is the whole of the second factor guarding
       deposits and awards.
@@ -258,7 +274,8 @@ Three behaviours are worth knowing before you debug this realm:
       from inside the cluster).
 - [ ] Nafath identity provider configured, with its secret from a sealed secret
       or the cluster's secret store — never from this file.
-- [ ] Staff accounts (`auction-admin`, `award-committee`, `operator`, `auditor`) federated
+- [ ] Staff accounts (`auction-admin`, `award-committee`, `operator`, `reporting`,
+      `auditor`) federated
       to the municipality's own directory. The award committee already needs a
       second factor to award, but it is the dev OTP credential; a real one has to
       come from the directory.

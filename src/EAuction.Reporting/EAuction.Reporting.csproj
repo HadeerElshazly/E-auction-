@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Invariant, and that is a decision about CSV rather than an omission.
+         Every figure here leaves as a number in JSON for a portal to format, or as
+         a plain ASCII decimal in a CSV that has to open in Excel — ١٢٠٠٠٠٠٫٠٠ in a
+         spreadsheet column is not a number any more. The Arabic in these reports is
+         text (names, phases, reasons), which is UTF-8 and not a culture concern. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>EAuction.Reporting</RootNamespace>
+    <AssemblyName>EAuction.Reporting</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../EAuction.Core/EAuction.Core.csproj" />
+    <ProjectReference Include="../EAuction.Security/EAuction.Security.csproj" />
+  </ItemGroup>
+</Project>

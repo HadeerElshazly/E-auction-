@@ -76,6 +76,7 @@ design change, not a configuration change.
 | D-41 | **A bidder's inbox is private even from staff** (§32) | It is a list of which auctions they are in, when they were outbid and what they won — the whole of what D-22 keeps off the public topics, assembled in one place |
 | D-43 | **A portal image is built per environment** (§33) | Vite inlines the service URLs and the Content-Security-Policy's connect-src is derived from the same table in the same build; one artifact for every environment needs the policy to move from the document to a response header |
 | D-44 | **The record of a staff action does not live in the service that performed it** (§34) | An administrator who can approve an auction and also amend the record of having approved it has no audit trail, only a story in a database. The row is written through the acting service's outbox in the same transaction as the change, so neither can exist alone, and it is consumed into a hash-chained append-only table with its own credentials, its own role, and no write endpoint |
+| D-45 | **The reporting service never sees the reserve price** (§35) | The reserve's secrecy is an ACL rather than a convention (D-06, D-23), and a service whose output is spreadsheets is exactly where a secret stops being one. The cost is stated: a report can say an auction was unsold and cannot say by how much it missed |
 | D-16 | **Debezium for the transactional outbox only**, never raw table CDC | Raw CDC leaks internal schema into the public event contract |
 | D-17 | **Event-driven domain; WSO2 MI only at integration edges** (payment, SADAD, municipality systems) | MI is an ESB, not a human-workflow engine. Workflows are state machines in the owning service |
 | D-18 | **React (web) + React Native/Expo (mobile)**, shared TypeScript contracts | |
@@ -142,15 +143,16 @@ bidding on the bundle. Total area and plot count are derived display fields.
 | **bid-processor** | .NET 8 worker | Order by offset, apply auction rules, determine winner, maintain the ladder and the hash-chained ledger. **Implemented** (§14) |
 | **auction-admin** | .NET 8 + Postgres + outbox | Auction CRUD, plots, documents, scheduling, preparation + award workflows. **Implemented** (§13) |
 | **participant** | .NET 8 + Postgres + outbox | Registration, profile, booklet purchase, deposit, eligibility. **Implemented** (§17) |
-| **payment** | .NET | Deposit, brokerage, refunds, settlement. PayTabs / SADAD adapters |
-| **document** | .NET + MinIO | Photos, booklets, signed award letters. AV scan |
-| **live-fanout** | .NET | SSE/WebSocket push of current price. Deliberately separate from the catcher |
-| **notification** | .NET | SMS, email, FCM/APNs push |
-| **query-bff** | .NET | Read model for web + mobile. Versioned API |
-| **reporting** | .NET | التقارير |
+| **payment** | .NET | Deposit, brokerage, refunds, settlement. **Implemented** (§30); PayTabs / SADAD adapters are not |
+| **document** | .NET + MinIO | Photos, booklets, signed award letters. **Implemented** (§31); no AV scan |
+| **live-fanout** | .NET | SSE/WebSocket push of current price. **Implemented** inside query-bff (§24); still a separate process from the catcher, which is what the note below is about |
+| **notification** | .NET | **Implemented** (§32) with an in-product inbox; SMS, email and push are not |
+| **query-bff** | .NET | Read model for web + mobile. **Implemented** (§23) |
+| **audit** | .NET + Postgres | Who did it — the hash-chained staff audit trail. **Implemented** (§34) |
+| **reporting** | .NET + Postgres | التقارير. **Implemented** (§35) |
 | **admin-web** | React | Admin + committee portal (RTL, AR/EN) |
 | **bidder-web** | React | Public catalogue + bidding (RTL, AR/EN) |
-| **bidder-mobile** | React Native (Expo) | iOS + Android |
+| **bidder-mobile** | React Native (Expo) | iOS + Android. **Not built** — the only service in this table with no code |
 
 ### Why live-fanout is separate from bid-catcher
 
@@ -3666,3 +3668,298 @@ plots leave three entries, and the chain verifies over all 26 of them.
   makes it obviously sufficient and the hash chain makes it necessary; if the
   volume ever argues otherwise, the answer is a chain per partition and a
   verification that spans them, not more partitions.
+
+---
+
+## 35. التقارير — the reporting service
+
+§11's service table has listed `reporting | .NET | التقارير` since the first draft
+of this document, with no code behind it. This is that service.
+
+The reports are the ones a municipality running a land-sale programme actually
+asks for, and the list is short because each one answers a question somebody has:
+
+| Report | The question |
+|---|---|
+| `GET /reports/auctions` | What did each auction do — opened, closed, sold, for how much, to whom, after how many extensions |
+| `GET /reports/revenue` | What did a phase, a month or a channel raise |
+| `GET /reports/participation` | How many registrations turned into deposits, and deposits into bidders |
+| `GET /reports/plots` | How much of مخطط السعيد is sold, how much is left, at what rate per m² |
+| `GET /reports/deposits` | Whose money are we holding, right now |
+| `GET /reports/disqualifications` | Who defaulted, why, and what the cascade cost |
+| `GET /reports/phases` | How big is the programme — which also settles P-1 |
+
+Every one of them takes `?format=csv`.
+
+### D-45: the reporting service never sees the reserve price
+
+This is the first decision about the service and it constrains everything else.
+
+`EAuction.Reporting` consumes four topics — `auctions.upcoming`,
+`auctions.lifecycle`, `auctions.participants`, `payments.settlements` — and
+deliberately **not** `auctions.sealed`. The reserve price is the one figure in this
+platform whose secrecy is the whole point (D-06), and D-23 moved it onto a
+restricted topic precisely so that "the reserve never leaves the processor" is an
+ACL rather than a thing every developer has to remember.
+
+A reporting service is exactly where a secret stops being one. Its output is
+spreadsheets, and spreadsheets get emailed.
+
+The cost is real and worth stating plainly: **a report can say an auction was
+unsold, and cannot say by how much it missed.** A municipality wanting "we set the
+reserve 12% too high across the phase" cannot get it here. If that number is
+genuinely needed, the right answer is for the auction service — which owns the
+figure — to publish a deliberate derived fact, not for this service to be handed
+the ACL. `InboundEvents.NotConsumed_AuctionReserveSet` exists as a named constant
+so the omission reads as a decision in the code too.
+
+### A read model, and the one service here whose database is disposable
+
+Nothing in this schema is a system of record. Drop `eauction_reporting`, restart,
+and the reports come back — the consumer replays all four topics from offset 0 and
+rebuilds every row. A test asserts exactly that: it builds a settled auction,
+`TRUNCATE`s all four tables, and watches the same figures reappear.
+
+Two things make that true rather than hoped for:
+
+- **Every write is an upsert on a natural key**, so a replay rewrites rather than
+  appends. The exception is the settlement ledger, which is keyed on the topic
+  offset — the same device the audit trail uses (D-44), for the same reason: a
+  money ledger that double-counted a replay would report twice the revenue.
+- **`AuctionRecord.Reach` never lets an outcome retreat.** `auctions.lifecycle` is
+  an event log replayed in full on every start, so `AuctionStarted` arrives again
+  for an auction that settled months ago. Without the guard every completed auction
+  would be reported as live on the first restart.
+
+Note what this service does *not* have, which the notification service does: a
+watermark. That contrast is the clearest statement of what each is for. A notice is
+not idempotent to a person, so the notification service must know what it has
+already sent (D-42); a payment is not idempotent to a bank, so the payment service
+writes a marker (D-38). A report is pure state. Replaying everything is not merely
+safe here — it is the mechanism.
+
+It also means no report ever queries another service's database. A finance query
+cannot compete with an approval workflow for the same locks, and the auction
+service's load cannot make a report time out.
+
+### Two events it needed, and did not exist
+
+Building this turned up two gaps in the published contracts.
+
+**`AuctionApproved` carried no `Phase`.** Almost every report groups by المخطط — a
+municipality asks what a *phase* raised and how much of it is left, not what one
+auction did — and the plan name was in the auction entity but on no event. It is
+public information: the deed numbers and coordinates on that same event already say
+where the land is.
+
+**Nothing published "the sale completed".** `Settle()` emitted only
+`DepositsReleasable`, with the winner in `AppliedToPurchaseForBidder`, so a
+consumer could *infer* the settlement from a deposit event — and this service did,
+until it was clear that inferring a sale from money moving is how a report comes to
+disagree with the register. `AuctionSettled` now says it directly.
+
+A third was a bug rather than a gap: `AwardConfirmed` carried
+`ComplianceDeadline` but not when the committee confirmed it, so the first version
+of this service dated every award from the deadline — five business days late, on
+every award in every report. `ConfirmedAt` was added to the event. The committee's
+confirmation is a legal act with a date, and the date belongs on the event that
+announces it.
+
+### What the reports can and cannot say
+
+Three limits, each a consequence of the architecture rather than an oversight.
+
+**There is no "which bidders bid" column.** Bids are binary frames on a per-auction
+topic that nothing here consumes (D-12), so the participation report has the
+processor's per-auction total from `AuctionClosed` and no per-bidder breakdown. The
+funnel runs booklet → deposit → eligible → won, with the bidding step missing in
+the middle. Closing it means either consuming every bid topic — which is the hot
+path's volume arriving in a reporting service — or having the processor publish a
+per-bidder count. Neither is built.
+
+**A masked auction names nobody.** D-22's setting is enforced upstream: the
+participants topic carries no name at all for a masked auction, so there is none to
+print. A staff report does not override it, which is a deliberate answer to a
+question that could have gone the other way — the committee does see the winner's
+name, in the auction service, where it signs the award letter.
+
+**Eligibility and rejection dates are approximate.** `auctions.participants` and
+`AuctionRejected` carry no timestamp, so those dates are when this service saw the
+record — which on a cold replay is "now" for everyone at once. The counts are
+exact; those two dates are not. Fixing it means a timestamp on each event, as
+`AwardConfirmed` now has.
+
+The rejection date matters more than it looks, and its absence was a bug before it
+was a limitation. A rejected auction has no closing date at all — bidding never
+opened — so the reports date it by its schedule, and a placeholder for an auction
+rejected before it was ever published had no schedule either. It sorted to
+0001-01-01 and fell out of every report with a `from` filter, which defeats the one
+thing recording it is for. The date chain is now
+`ClosedAt ?? RejectedAt ?? ScheduledStartsAt`, and a test asserts a rejection
+appears inside "the last hour".
+
+### The price per square metre is the package's, not the plot's
+
+An auction sells 1..N plots as one indivisible package keyed on `auctionId` (D-02).
+Nobody bids on a plot, so a per-plot price does not exist. The inventory report
+divides the package price by the package area and prints the same rate against
+every plot in it, which is the only honest figure available — and the alternative,
+apportioning by area, would invent a number that no bidder ever offered and that a
+valuer would then quote back.
+
+### Revenue separates the land's value from the cash this platform took
+
+The payment service takes three things and only three: the booklet fee, the deposit
+and brokerage (§30). **The price of the land does not pass through this platform.**
+
+So the revenue report has two halves that are never added together:
+
+```
+sale_value          contracted value of land sold (accrual, by settlement date)
+brokerage_charged   ┐
+booklet_fees        ├─ collected: cash this platform actually moved
+deposits_forfeited  ┘
+deposits_refunded   money returned to bidders
+deposits_held       the municipality's current liability
+```
+
+A report that summed `sale_value` into `collected` would claim the platform
+received millions of riyals it never touched. A test asserts the two stay apart.
+
+Three more distinctions the money reports are careful about, all of them cases
+where the obvious arithmetic is wrong:
+
+- **A disqualified award is not revenue.** When a winner defaults the record's price
+  is cleared until the cascade lands, so the figure reported is the price the
+  municipality was actually paid — the cascade's, which is lower. A revenue report
+  that kept the defaulter's bid would report money nobody ever paid.
+- **A forfeited deposit is not a refund**, and the winner's applied deposit is
+  neither. No money moves at either instant — the deposit was taken when it was
+  paid — and reporting them as refunds would overstate what went back to bidders by
+  the largest deposit in the auction.
+- **Dates follow the event, not the row.** A sale is dated by its settlement and a
+  charge by when it was taken, so a sale settled on the 31st whose brokerage is
+  charged on the 1st appears in two months. That is what happened.
+- **`deposits_held` is reported by phase and channel, and is zero by month.** The
+  figure has no date — it is what is held *now* — and dropping it into a month
+  bucket invites somebody to read "March: 2,000,000 held" as money taken in March.
+  `GET /reports/deposits` is the point-in-time report and the only place the figure
+  is exact.
+
+### `reporting`, a role that cannot change an auction
+
+The third role added to this platform, by the same test as `auditor` (D-44): a role
+exists only where its absence would let someone do something they must not.
+
+Without it, the municipality's finance staff need `auction-admin` to read what a
+phase raised — and that role can change an auction's reserve price. So
+`Policies.Reporting` accepts `reporting`, `auction-admin` or `award-committee`:
+the first exists so a finance officer needs none of the others, and the other two
+are there because these are management information about work they already do.
+
+Deliberately not `operator` — a clerk running a hall needs the room's roster, not
+the programme's revenue — and deliberately not `auditor`, which keeps the promise
+made in §34 that the audit role grants nothing anywhere else.
+
+There is no write endpoint. The rows come from the topics and nowhere else, so a
+wrong figure is fixed at its source rather than corrected in place, which is what
+keeps a report and the register in agreement.
+
+### The CSV is where this service meets a spreadsheet
+
+Four details, none of them optional for this client, and the tests are about all
+four.
+
+**A UTF-8 byte-order mark.** Excel on Windows reads a BOM-less UTF-8 file in the
+system code page, so مخطط السعيد arrives as mojibake. In a report whose every name
+is Arabic that is the whole file ruined.
+
+**Halalas rendered as riyals.** `1200000.00`, not `120000000`. A column of minor
+units is a column every reader divides by a hundred in their head and a quarter get
+wrong. The JSON API hands back the integer; this is the human-facing edge.
+
+**A formula guard, which is the one that matters for safety.** Excel and
+LibreOffice execute a field beginning `=`, `+`, `-`, `@`, a tab or a carriage
+return when the file is opened — `=HYPERLINK(...)`, or a DDE call. Every text field
+in these reports is staff-entered: an auction name, a rejection reason, a
+disqualification reason. This is the one place the platform hands that text to a
+spreadsheet.
+
+The guard applies to text and **nothing else**, and that distinction is not
+cosmetic. `-` is both a formula lead-in and a minus sign, so guarding rendered
+numbers turned every negative figure in the revenue report into the text
+`'-5000.00` and broke the column. A test pins it.
+
+**A choice of separator.** The comma is the default because RFC 4180 says so and
+every tool reads it — but Excel splits on the *locale's* list separator, which on a
+Windows machine set to Arabic (Saudi Arabia) is a semicolon. Such a machine opens a
+comma-separated file with every row in one column, which is the single most common
+complaint about any CSV export and the one this client would hit first.
+`?separator=semicolon` is the answer, rather than the usual `sep=,` preamble that
+Excel honours and every RFC 4180 parser reads as a first row of data. The quoting
+follows whichever separator was chosen, because quoting against a fixed comma
+produces a file that reparses wrongly in exactly the locale the option exists for.
+
+Not a separator: the Arabic comma ، (U+060C). It appears in the middle of rejection
+reasons constantly and needs no quoting. Written down because the first version of
+the test assumed otherwise.
+
+### What the tests cover
+
+**53 tests** in `tests/EAuction.Reporting.Tests`.
+
+| Claim | Where |
+|---|---|
+| An approved auction and its plots are recorded | `ConsumerTests` |
+| An auction walks approved → live → closed → awarded → settled | `ConsumerTests` |
+| The award is dated by the committee's confirmation, not the compliance deadline | `ConsumerTests` |
+| A replay does not move a settled auction back to live | `ConsumerTests` |
+| A replay does not double-count money | `ConsumerTests` |
+| A refund releases the hold; a forfeiture does not read as a refund | `ConsumerTests` |
+| A disqualification clears the price until the cascade lands | `ConsumerTests` |
+| An unsold auction has no price — and no reserve, by construction | `ConsumerTests` |
+| An auction rejected before publication still gets a row | `ConsumerTests` |
+| …and stays inside a dated report instead of sorting to 0001-01-01 | `ApiTests` |
+| A masked auction names nobody; a named one names its bidders | `ConsumerTests` |
+| A revoked eligibility is recorded without erasing that it was granted | `ConsumerTests` |
+| A settlement arriving before the eligibility it paid for still counts | `ConsumerTests` |
+| The whole model rebuilds from the topics after the database is emptied | `ConsumerTests` |
+| No report is readable without a token; a bidder, clerk and auditor are refused | `ApiTests` |
+| The three staff roles that should read them can | `ApiTests` |
+| There is no write route on any report | `ApiTests` |
+| The outcome report tells sold, unsold and cascaded apart | `ApiTests` |
+| Brokerage is computed on the price actually awarded, not the defaulter's bid | `ApiTests` |
+| Revenue keeps the land's value apart from the cash collected | `ApiTests` |
+| A refund is not reported as income | `ApiTests` |
+| An unknown `groupBy` is refused rather than silently defaulted | `ApiTests` |
+| Deposit exposure is what is held now — including on a settled auction | `ApiTests` |
+| `deposits_held` appears by phase and not by month, because it has no date | `ApiTests` |
+| Every plot in a package carries the package's rate | `ApiTests` |
+| Every report downloads as a CSV with a BOM, a dated filename and `nosniff` | `ApiTests` |
+| The BOM, CRLF, riyal rendering, formula guard, quoting and separator | `CsvTests` |
+| A negative figure stays a number | `CsvTests` |
+| An Arabic comma is not a separator | `CsvTests` |
+
+Section 14 of the smoke walk-through reads the reports back after the thirteen
+sections above have run, which is the only way to check the wiring: nothing is
+seeded, so whatever the walk-through actually did is what the reports say.
+
+### Still not verified
+
+- **No portal.** التقارير are reachable with a token and `curl`, and the CSV is the
+  deliverable. A screen in the admin portal is the obvious next step, and P-2 —
+  "report definitions" — is still an open product question, so building one now
+  would be guessing at layouts.
+- **Never run with Debezium** instead of the polling relay, as with every other
+  consumer here (§16).
+- **The revenue report groups in memory.** It loads the settlements of every auction
+  in range and buckets them in the service rather than in SQL, which is right for a
+  phase of a few hundred auctions and wrong for a decade of them. The fix is a
+  `GROUP BY` and a date-truncation per dialect; the honest statement today is that
+  it has been run against three auctions.
+- **No retention.** The same gap as §31 and §32: nothing here expires, and the
+  bidder rows are personal data. A read model is the easiest of the three to age
+  out — it can be rebuilt — but nothing does it.
+- **P-1 is answerable now and not answered.** `GET /reports/phases` returns the
+  plot count per phase, which is what settles whether the plan holds 327 or 372.
+  Nobody has loaded the real plan data to ask it.
