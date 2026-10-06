@@ -160,9 +160,8 @@ services:
       # The same master key the catcher holds: the auction-admin service derives a
       # hall clerk's signing key from it (§29).
       Admin__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-      # The key the document service verifies grants with. Must match it.
-      Documents__GrantKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
+      ConnectionStrings__Notifications: "Host=postgres;Database=eauction_notifications;Username=eauction;Password=eauction"
     depends_on:
       postgres:
         condition: service_healthy
@@ -353,6 +352,86 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+
+  # What a bidder is told: eligible, outbid, awarded, deposit returned.
+  #
+  # The in-product inbox is the delivered channel. SMS and push both need
+  # contracts that do not exist yet (P-7), so only the log channel is wired —
+  # and unlike the payment gateway there is no production guard, because an
+  # unsent SMS leaves the inbox working exactly as it should.
+  notifications:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.notifications
+    container_name: eauction-notifications
+    ports:
+      - "5097:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Jwt__Authority: http://keycloak:8080/realms/eauction
+      Jwt__Audience: eauction
+      Jwt__RequireHttpsMetadata: "false"
+      Kafka__BootstrapServers: kafka:9092
+      ConnectionStrings__Notifications: "Host=postgres;Database=eauction_notifications;Username=eauction;Password=eauction"
+      Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
+    depends_on:
+      provision-migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  # --- the portals ---------------------------------------------------------
+  #
+  # The service URLs are build arguments rather than environment variables, which
+  # makes each image environment-specific. Vite inlines them and the
+  # Content-Security-Policy is derived from the same table in the same build, so
+  # one artifact for several environments needs both to become runtime concerns —
+  # see docs/ARCHITECTURE.md §33 (D-43).
+  #
+  # Here they are localhost, because that is where a browser on the developer's
+  # machine reaches these containers' published ports.
+
+  bidder-portal:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.portal
+      args:
+        PORTAL: bidder
+        VITE_ISSUER: http://localhost:8080/realms/eauction
+        VITE_ADMIN_API: http://localhost:5090
+        VITE_PARTICIPANT_API: http://localhost:5095
+        VITE_CATCHER_API: http://localhost:5080
+        VITE_QUERY_API: http://localhost:5094
+        VITE_DOCUMENTS_API: http://localhost:5096
+        VITE_NOTIFICATIONS_API: http://localhost:5097
+    container_name: eauction-bidder-portal
+    ports:
+      - "3000:8080"
+    depends_on:
+      query-bff:
+        condition: service_started
+
+  admin-portal:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.portal
+      args:
+        PORTAL: admin
+        VITE_ISSUER: http://localhost:8080/realms/eauction
+        VITE_ADMIN_API: http://localhost:5090
+        VITE_PARTICIPANT_API: http://localhost:5095
+        VITE_CATCHER_API: http://localhost:5080
+        VITE_QUERY_API: http://localhost:5094
+        VITE_DOCUMENTS_API: http://localhost:5096
+        VITE_NOTIFICATIONS_API: http://localhost:5097
+    container_name: eauction-admin-portal
+    ports:
+      - "3001:8080"
+    depends_on:
+      auction-admin:
+        condition: service_started
 
 volumes:
   postgres-data:

@@ -1,0 +1,34 @@
+{{/*
+  Both portals from one template.
+
+  The dict is built before the range is entered, where `.` is still the root —
+  inside the range `.` is the loop value, so `.Values` there would fail. `$` is the
+  root throughout, which is what $ctx passes down.
+
+  One template rather than two files because the two differ only in their values:
+  which image, whether they face the internet, and whether they autoscale. Two
+  near-identical files would drift the first time a shared property changed.
+*/}}
+{{- range $name, $svc := dict "bidder-portal" .Values.bidderPortal "admin-portal" .Values.adminPortal }}
+{{- if $svc.enabled }}
+---
+{{- $ctx := dict "root" $ "name" $name "svc" $svc }}
+{{ include "e-auction.serviceAccount" $ctx }}
+---
+{{ include "e-auction.deployment" $ctx }}
+---
+{{ include "e-auction.service" $ctx }}
+{{- with (include "e-auction.hpa" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.pdb" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.expose" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -335,7 +335,10 @@ export function SubscriptionSteps({
                 ref={guaranteeInput}
                 type="file"
                 accept="application/pdf,image/*"
-                aria-label="رفع الضمان البنكي"
+                // Distinct from the button's text: an input[type=file] has role
+                // `button` too, so the same name on both makes
+                // getByRole('button', { name }) ambiguous.
+                aria-label="ملف الضمان البنكي"
                 // Hidden rather than display:none, so it stays focusable and a
                 // test can set files on it.
                 style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}

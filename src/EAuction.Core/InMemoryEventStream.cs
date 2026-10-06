@@ -62,5 +62,11 @@ public sealed class InMemoryEventStream : IEventStream
         }
     }
 
+    public Task<long> LatestOffsetAsync(string topic, CancellationToken ct)
+    {
+        var t = _topics.GetOrAdd(topic, _ => new Topic());
+        lock (t.Gate) return Task.FromResult<long>(t.Records.Count - 1);
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

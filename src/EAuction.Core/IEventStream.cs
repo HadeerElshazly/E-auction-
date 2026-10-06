@@ -15,6 +15,24 @@ public interface IEventStream : IAsyncDisposable
     /// its state without a database.
     /// </summary>
     IAsyncEnumerable<StreamEvent> ReadAsync(string topic, CancellationToken ct);
+
+    /// <summary>
+    /// The offset of the last record on a topic, or -1 when it has none.
+    ///
+    /// Exists because "have I reached the end of the history" cannot be answered by
+    /// waiting for silence. A consumer takes a second or two to be assigned a
+    /// partition and deliver its first record, which is indistinguishable from an
+    /// empty topic — and a service that guesses wrong in that direction treats the
+    /// platform's entire history as news.
+    ///
+    /// <para>
+    /// That is not a hypothetical. The notification service's first version used a
+    /// two-second quiet period, saw nothing because the broker had not answered
+    /// yet, and announced every auction on the cluster to every bidder who had ever
+    /// registered. This answers the question instead of estimating it.
+    /// </para>
+    /// </summary>
+    Task<long> LatestOffsetAsync(string topic, CancellationToken ct);
 }
 
 public readonly record struct StreamEvent(

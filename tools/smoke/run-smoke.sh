@@ -127,7 +127,7 @@ SERVICES_ONLY=0
 for a in "$@"; do [ "$a" = "--services-only" ] && SERVICES_ONLY=1; done
 
 PSQL="postgresql://eauction:eauction@localhost/postgres"
-for db in eauction_admin eauction_participant; do
+for db in eauction_admin eauction_participant eauction_notifications; do
   if [ "$KEEP_DATA" = 0 ]; then
     psql -qtAX "$PSQL" -c "DROP DATABASE IF EXISTS $db WITH (FORCE)" >/dev/null
   fi
@@ -160,7 +160,8 @@ dotnet "$REPO/tools/topics/bin/Release/net8.0/EAuction.Topics.dll" \
 say "Applying migrations…"
 dotnet "$REPO/tools/migrate/bin/Release/net8.0/EAuction.Migrate.dll" \
   --admin "$PG;Database=eauction_admin" \
-  --participant "$PG;Database=eauction_participant" || die "migrations failed"
+  --participant "$PG;Database=eauction_participant" \
+  --notifications "$PG;Database=eauction_notifications" || die "migrations failed"
 
 # --- services --------------------------------------------------------------
 
@@ -247,9 +248,16 @@ start documents EAuction.Documents 5107 \
   Storage__SecretKey="${SMOKE_S3_SECRET_KEY:-eauction123}" \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
+# What a bidder is told. The in-product inbox is the delivered channel; SMS needs
+# an aggregator contract that does not exist (P-7), so only the log channel runs.
+start notifications EAuction.Notifications 5108 \
+  ConnectionStrings__Notifications="$PG;Database=eauction_notifications" \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
+
 # --- wait for health -------------------------------------------------------
 
-for probe in "auction-admin 5101" "participant 5102" "query-bff 5105" "documents 5107"; do
+for probe in "auction-admin 5101" "participant 5102" "query-bff 5105" "documents 5107" \
+             "notifications 5108"; do
   set -- $probe
   for _ in $(seq 1 60); do
     curl -fsS --noproxy "*" -o /dev/null "http://127.0.0.1:$2/health/ready" 2>/dev/null && break

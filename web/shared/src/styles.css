@@ -196,3 +196,68 @@ tbody tr:hover { background: var(--bg); }
 .bar .ltr-id {
   margin-inline-end: 12px;
 }
+
+/* --- the notification bell -------------------------------------------------
+ *
+ * Absolutely positioned under the button rather than in a modal: a notification
+ * is a glance, and a dialog that has to be dismissed interrupts an auction a
+ * bidder is watching.
+ *
+ * inset-inline-end rather than right, because the portals are RTL and `right`
+ * would pin the panel to the wrong edge. */
+.notifications-panel {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 8px);
+  width: min(360px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  z-index: 20;
+  text-align: start;
+}
+
+ul.notifications {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul.notifications li {
+  border-top: 1px solid var(--border);
+}
+
+ul.notifications li:first-child {
+  border-top: none;
+}
+
+/* The unread marker is a border on the inline-start edge, which flips with the
+ * writing direction on its own. */
+ul.notifications li.unread {
+  border-inline-start: 3px solid var(--accent);
+}
+
+button.notice-row {
+  display: block;
+  width: 100%;
+  text-align: start;
+  background: none;
+  border: none;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+button.notice-row:hover {
+  background: var(--accent-weak);
+}
+
+.notice-title {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.notice-body {
+  display: block;
+}

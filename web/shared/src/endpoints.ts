@@ -24,6 +24,7 @@ export const ENDPOINTS = {
   catcherApi: { env: 'VITE_CATCHER_API', dev: 'http://localhost:5103' },
   queryApi: { env: 'VITE_QUERY_API', dev: 'http://localhost:5105' },
   documentsApi: { env: 'VITE_DOCUMENTS_API', dev: 'http://localhost:5107' },
+  notificationsApi: { env: 'VITE_NOTIFICATIONS_API', dev: 'http://localhost:5108' },
 } as const satisfies Record<string, Endpoint>
 
 export type EndpointName = keyof typeof ENDPOINTS

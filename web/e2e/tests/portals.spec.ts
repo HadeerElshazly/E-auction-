@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   ADMIN_URL,
+  attachDocument,
   actor,
   openAuction,
   openAuctionInPlace,
@@ -79,10 +80,20 @@ test('an auction runs from draft to award through the portals', async ({ browser
         ).toBeVisible()
       }
 
-      await page.getByRole('button', { name: 'إرفاق كراسة' }).click()
-      await expect(page.getByText('كراسة الشروط: ✓')).toBeVisible()
-      await page.getByRole('button', { name: 'إرفاق غلاف' }).click()
-      await expect(page.getByText('صورة الغلاف: ✓')).toBeVisible()
+      // Real files, through the document service, and the ids it hands back. The
+      // Arabic filename is the case that matters: S3 user metadata is ASCII-only,
+      // so this is what turns a booklet's name into question marks.
+      await attachDocument(
+        page,
+        'ملف كراسة الشروط',
+        'كراسة الشروط.pdf',
+        '%PDF-1.7\n% كراسة الشروط\n%%EOF\n',
+        'application/pdf',
+      )
+      await expect(page.getByText('كراسة الشروط: ✓')).toBeVisible({ timeout: 30_000 })
+
+      await attachDocument(page, 'ملف صورة الغلاف', 'cover.svg', '<svg/>', 'image/svg+xml')
+      await expect(page.getByText('صورة الغلاف: ✓')).toBeVisible({ timeout: 30_000 })
 
       // Two minutes and then one, not seconds: datetime-local has minute precision,
       // so a start and an end inside the same minute arrive at the server identical
@@ -262,6 +273,49 @@ test('an auction runs from draft to award through the portals', async ({ browser
       // D-22 cuts both ways: she is told she is behind, not who is ahead.
       const body = await page.locator('body').innerText()
       expect(body, "the leading bidder's name leaked").not.toContain('خالد')
+    })
+
+    await test.step('the bell carries the notices her tab would have missed', async () => {
+      // The other half of being outbid. The row above is pushed to a bidder who is
+      // watching; this is the one who closed the tab, and it is the whole reason
+      // the notification service exists.
+      const page = sara.page
+
+      const bell = page.getByRole('button', { name: /الإشعارات/ })
+      await expect(bell).toBeVisible()
+
+      // Every assertion below names this auction.
+      //
+      // An inbox belongs to a bidder, not to an auction, so it holds notices for
+      // every auction they are registered for — including the hall one from the
+      // other spec and anything left by an earlier run. A bare
+      // getByText('بدأ المزاد') matched four notices and failed strict mode, which
+      // is the test being wrong about its subject rather than the product.
+      const notice = (title: string) =>
+        page.locator('ul.notifications li').filter({ hasText: title }).filter({ hasText: nameAr })
+
+      // The panel polls every twenty seconds, so the notice may not be there the
+      // instant the bid lands. Waited for by reopening rather than by one long
+      // expect: the panel closes on an outside click and a stale open panel would
+      // be asserted against for ever.
+      await expect(async () => {
+        await bell.click()
+        await expect(notice('تمت المزايدة عليك')).toBeVisible({ timeout: 2_000 })
+      }).toPass({ timeout: 90_000 })
+
+      // Registered and qualified earlier in this walk-through, so both are here too.
+      await expect(notice('مؤهّل للمزايدة')).toBeVisible()
+      await expect(notice('بدأ المزاد')).toBeVisible()
+
+      // D-22 holds in the inbox as well: she is told she is behind, not who is
+      // ahead, and nothing here names the other bidder.
+      const panel = await page.locator('.notifications-panel').innerText()
+      expect(panel, "the leading bidder's name leaked into the inbox").not.toContain('خالد')
+
+      // Reading them clears the unread count they were contributing to.
+      await page.getByRole('button', { name: 'تعليم الكل كمقروء' }).click()
+      await expect(page.getByRole('button', { name: 'الإشعارات' })).toBeVisible()
+      await expect(page.locator('ul.notifications li.unread')).toHaveCount(0)
     })
 
     await test.step('an onlooker sees the price but not who is leading', async () => {

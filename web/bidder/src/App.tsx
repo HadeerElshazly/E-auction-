@@ -12,6 +12,7 @@ import { authConfig } from './authConfig'
 import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
+import { Notifications } from './Notifications'
 
 
 export function App() {
@@ -106,6 +107,7 @@ export function App() {
         <span className="grow" />
         {session ? (
           <>
+            {isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
             <span className="who">
               {session.nameAr ?? session.name}
               {session.nationalId && <span className="ltr"> · {session.nationalId}</span>}

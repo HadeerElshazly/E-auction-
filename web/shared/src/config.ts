@@ -38,6 +38,7 @@ const ENV: Record<string, string | undefined> = {
   VITE_CATCHER_API: import.meta.env.VITE_CATCHER_API,
   VITE_QUERY_API: import.meta.env.VITE_QUERY_API,
   VITE_DOCUMENTS_API: import.meta.env.VITE_DOCUMENTS_API,
+  VITE_NOTIFICATIONS_API: import.meta.env.VITE_NOTIFICATIONS_API,
 }
 
 export const config = {
@@ -47,4 +48,5 @@ export const config = {
   catcherApi: resolve('catcherApi'),
   queryApi: resolve('queryApi'),
   documentsApi: resolve('documentsApi'),
+  notificationsApi: resolve('notificationsApi'),
 } as const

@@ -1,0 +1,28 @@
+# Notification service image.
+#
+# Runs as a non-root user with an explicit UID: the on-prem Kubernetes
+# distribution is not yet known, and OpenShift refuses root containers
+# (docs/ARCHITECTURE.md §10.1). Costs nothing here, avoids a rewrite there.
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY src/EAuction.Core/EAuction.Core.csproj src/EAuction.Core/
+COPY src/EAuction.Security/EAuction.Security.csproj src/EAuction.Security/
+COPY src/EAuction.Notifications/EAuction.Notifications.csproj src/EAuction.Notifications/
+RUN dotnet restore src/EAuction.Notifications/EAuction.Notifications.csproj
+COPY src/ src/
+RUN dotnet publish src/EAuction.Notifications/EAuction.Notifications.csproj \
+      -c Release -o /app --no-restore
+
+# aspnet, and the full image rather than a trimmed one, because this service
+# formats riyals with the ar-SA culture — ١٢٠٠٠٠٠٫٠٠ ر.س is the number a Saudi
+# reader expects, and an image without ICU renders it as 1200000.00. It is the one
+# project here that does not set InvariantGlobalization, for that reason.
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eauction
+USER 10001
+
+ENTRYPOINT ["./EAuction.Notifications"]

@@ -26,6 +26,9 @@ Services:
 {{- if .Values.documents.enabled }}
   documents       {{ .Values.documents.replicas }} replicas
 {{- end }}
+{{- if .Values.notifications.enabled }}
+  notifications   {{ .Values.notifications.replicas }} replica
+{{- end }}
 
 {{- if gt (int .Values.bidProcessor.replicas) 1 }}
 
@@ -33,6 +36,15 @@ WARNING
   bidProcessor.replicas is {{ .Values.bidProcessor.replicas }}. Auctions are not yet sharded
   across processor instances, so every replica would drive every auction and
   publish duplicate winners. Set it back to 1.
+{{- end }}
+
+{{- if gt (int .Values.notifications.replicas) 1 }}
+
+WARNING
+  notifications.replicas is {{ .Values.notifications.replicas }}. The unique index stops a notice
+  being stored twice, so nothing is duplicated — but the outbid notice keeps the
+  previous leader per auction in memory, and two replicas each hold half the
+  picture, so some bidders would not be told they had been outbid. Set it back to 1.
 {{- end }}
 
 {{- if gt (int .Values.payments.replicas) 1 }}

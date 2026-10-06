@@ -71,6 +71,10 @@ design change, not a configuration change.
 | D-37 | **Eligibility follows a settlement, so the deposit endpoint returns 202** (§30) | The caller used to invent the payment reference and the service believed it, so a bidder could reach the bid floor of a land auction without a riyal having moved |
 | D-38 | **The payment service proves its replay with a marker it writes, rather than a quiet period** (§30) | A quiet period is a guess about whether money has already been taken; a slow broker looks exactly like an empty topic, and an empty topic means charge everybody again |
 | D-39 | **The document service does not know what an auction is: restricted documents open to a signed grant, never to a role** (§31) | Whether a bidder may read the booklet depends on whether they paid; that fact lives in the participant service, and a document service that learned it would have to consume the auction domain |
+| D-40 | **A notification is sent once because of a unique index, not a check** (§32) | Every topic is at-least-once and the compacted ones replay in full on start, so a restart would otherwise tell every bidder again that they won |
+| D-42 | **The notification service keeps a watermark per topic** (§32) | A notice is not idempotent to a person: below the watermark a record is history to absorb silently, above it news to send — including what happened while the service was down |
+| D-41 | **A bidder's inbox is private even from staff** (§32) | It is a list of which auctions they are in, when they were outbid and what they won — the whole of what D-22 keeps off the public topics, assembled in one place |
+| D-43 | **A portal image is built per environment** (§33) | Vite inlines the service URLs and the Content-Security-Policy's connect-src is derived from the same table in the same build; one artifact for every environment needs the policy to move from the document to a response header |
 | D-16 | **Debezium for the transactional outbox only**, never raw table CDC | Raw CDC leaks internal schema into the public event contract |
 | D-17 | **Event-driven domain; WSO2 MI only at integration edges** (payment, SADAD, municipality systems) | MI is an ESB, not a human-workflow engine. Workflows are state machines in the owning service |
 | D-18 | **React (web) + React Native/Expo (mobile)**, shared TypeScript contracts | |
@@ -531,7 +535,9 @@ These block the كراسة الشروط, and legal review is slow. Start them no
 |---|---|---|
 | P-1 | 327 or 372 plots? Deck says 372 total but 165 + 162 = 327 | Reference data only |
 | P-2 | Report definitions for التقارير | Framework stubbed |
-| P-3 | Confirm PayTabs and SADAD merchant accounts exist | Adapter interface built either way |
+| P-3 | Confirm PayTabs and SADAD merchant accounts exist | Adapter interface built either way (§30) |
+| P-7 | An SMS aggregator and a registered sender name | Channel interface built either way; the in-product inbox works without one (§32) |
+| P-8 | Where the object store lives on-premise, and its retention policy | Anything that speaks S3 drops in; nothing deletes a document yet (§31) |
 
 ### Known risk
 
@@ -997,7 +1003,7 @@ cluster as a pod that will not schedule.
 | Reactive autoscaling only | CPU-driven pods arrive after the spike. KEDA on auction end times is the real answer (§7.4) |
 | No charts for Kafka, Postgres, Keycloak, MinIO | Strimzi and CloudNativePG have their own operators; these are dependencies to declare, not to reimplement |
 | No NetworkPolicy | `auctions.sealed` is ACL'd at the Kafka level (D-23), but pod-level isolation is not expressed |
-| No front-end charts | React apps and the mobile BFF are not built yet |
+| ~~No front-end charts~~ | *Superseded by §33.* Both portals have a chart entry and an image; the mobile BFF is still not built |
 | No chart for `payments` at the time | *Superseded by §30:* `templates/payments.yaml` exists, pinned to one replica, and `values-jeddah.yaml` deliberately withholds the simulator flag so a production install refuses to start without a real gateway |
 
 ---
@@ -2957,3 +2963,317 @@ without `S3_ENDPOINT`, the same arrangement as the Kafka tests.
 - **The grant is not revocable.** Five minutes is the whole of its lifecycle;
   there is no list of grants and nothing to cancel one with. For a five-minute
   token that is a reasonable trade, and it is a trade.
+
+---
+
+## 32. الإشعارات — telling a bidder what happened
+
+A bidder who closes the tab currently finds out nothing. The live stream tells
+whoever is watching the page, in milliseconds; everything else — the deposit
+settling, the auction opening, being outbid, winning — reached nobody.
+
+`EAuction.Notifications` follows six topics and produces nine kinds of notice.
+
+| It reads | It tells | Whom |
+|---|---|---|
+| `auctions.participants` | you are eligible / your registration was revoked | that bidder |
+| `payments.settlements` | a payment was refused, and why | that bidder |
+| `auctions.lifecycle` | the auction opened, the auction closed | every eligible bidder |
+| `auctions.lifecycle` | you won, and comply by *date* | **the winner only** |
+| `auctions.lifecycle` | the award was cancelled | the disqualified bidder |
+| `auctions.current-winner` | you have been outbid at *price* | whoever just stopped leading |
+| `auctions.deposits` | returned / kept / applied to the price | every bidder in the auction |
+
+The rule for what belongs here is narrow: a bidder has to act, or money moved, or
+the thing they were waiting for happened. A successful charge gets no notice — the
+step completing is the news and the eligibility notice says it better. A channel
+people learn to ignore is worse than no channel, because the one notice that
+mattered arrives in the same list.
+
+### D-40: once is a unique index, not a check
+
+Every topic here is at-least-once, and the compacted ones are replayed in full on
+every start. Without a natural key, a restart tells every bidder in the country
+again that they are eligible, that they were outbid, and that they won.
+
+Each notification therefore carries a `Dedup` string, and
+`(BidderId, AuctionId, Kind, Dedup)` is unique in the database. The consumer
+**inserts and swallows the unique violation** rather than checking first: one
+replica reading two topics, or two replicas, reach the same notice at the same
+moment and a check would pass for both.
+
+What `Dedup` holds is the interesting part:
+
+- Empty for the things that happen once — eligibility, the close, the deposit's
+  fate.
+- The **price that beat them** for an outbid notice, so four raises produce four
+  notices and a redelivery of the same record produces none.
+- The **settlement's own timestamp** for a refusal, which is in the payload and so
+  survives a replay. A second genuine decline has a different one and is a second
+  notice — the bidder tried twice and failed twice, and being told once would hide
+  the second attempt.
+- The **amount** for an award, because a disqualification moves the award down the
+  cascade and that is a new award, not a repeat.
+
+This was checked by breaking it: with the outbid dedup replaced by a fresh GUID,
+the test that trades the lead twice each way and then redelivers every record sees
+four notices per bidder instead of two.
+
+### D-42: a watermark per topic, because a notice is not idempotent to a person
+
+`IEventStream` has no offset store on purpose: every consumer gets a unique group
+and replays from offset 0, which is what lets the bid catcher and the bid processor
+rebuild their state from nothing (D-12). Those services only need the latest value
+per key, so replaying costs them nothing.
+
+This one has to tell a person something, once. So it keeps a `topic_watermark` row
+per topic — how far it has already read — and that single number does both jobs:
+
+- **Below the watermark**, a record is history. It is absorbed into the roster and
+  the auction names, and announced to nobody.
+- **Above it**, a record is news — including everything that happened while the
+  service was down, which is exactly what a restart should catch up on and send.
+
+On a genuinely new database there are no watermarks, so the service first reads
+every topic to a quiet point with announcements suppressed, recording where each
+one ended. A quiet period is the right tool here and was the wrong one for the
+payment service (D-38): being slightly wrong at this boundary costs one notice
+missed or one sent, where there it would have been a second charge on a land
+deposit.
+
+This cost three attempts, each wrong in an instructive way:
+
+1. **Dedup alone.** The unique index stops a *redelivery* becoming a second notice
+   but says nothing about history: `auctions.participants` is compacted and holds
+   an eligibility row for every bidder of every auction there has ever been, so a
+   service deployed onto an existing cluster read all of it and sent a notice for
+   each. A smoke run against a broker carrying a few earlier runs produced
+   **seventeen "you are eligible" notices where four were due** — found by running
+   it, not by a test.
+2. **A suppressed first-run drain, then follow.** Two independent reads of the same
+   topic, both from offset 0, so the follow announced everything the drain had just
+   absorbed. No better than (1).
+3. **The watermark.** One read per topic, and the offset decides.
+
+### The outbid notice, and why a restart must not send one
+
+`auctions.current-winner` is compacted, so a restart replays it. The service keeps
+the previous leader per auction **in memory, deliberately empty on a cold start**:
+the first record seen for an auction establishes a baseline and notifies nobody.
+Without that, restarting during a live auction would tell whoever led at each
+replayed step that they had been outbid — about an auction they are probably still
+winning.
+
+That is also why `notifications.replicas` is 1 and the chart warns if it is
+raised. The unique index means two replicas cannot duplicate a notice; the
+in-memory leader map means they would each hold half the picture and *miss* some
+outbid notices instead. Sharding by auction is the fix and it is not built.
+
+### D-41: the inbox is private even from staff
+
+`GET /notifications` returns the caller's own and there is deliberately no
+administrator override. One bidder's inbox is a list of which auctions they are
+registered for, when they were outbid and what they won — which is the whole of
+what D-22 keeps off the public topics, assembled in one place and indexed by
+person. Staff who need to know whether a notice was sent have the service's logs.
+
+The same reasoning runs through the notices themselves. `AwardConfirmed` tells the
+winner and nobody else: the losers of a masked auction learn that it closed, which
+is all they are entitled to. Naming the winner to them would undo the masking by
+notification, and the smoke test asserts khalid's inbox contains `Outbid` and not
+`Awarded`.
+
+`LogChannel` does not log the body for the same reason. A notification body names
+an auction, a price and sometimes an award; a log carrying all of it would be a
+readable record of who is bidding on what, retained wherever logs go.
+
+### The text is stored, not re-rendered
+
+Titles and bodies are composed once, in Arabic, and stored. The portal renders
+them verbatim — there is no second copy of the wording in the front end to drift
+from this one, and a bidder who disputes what they were told is shown the row that
+was stored rather than a template re-rendered by a newer build.
+
+Amounts use `ar-SA`, which is why this project alone does not set
+`InvariantGlobalization`: ١٢٠٠٠٠٠٫٠٠ ر.س is the number, and `1200000.00` is a
+different document.
+
+### What is actually delivered
+
+The in-product inbox, and only that. SMS to Saudi numbers needs a licensed
+aggregator and a registered sender name; push needs the mobile app. Neither
+exists, and `INotificationChannel` is the seam they drop into (P-7).
+
+Unlike the payment gateway, there is **no production guard** here, and the
+difference is deliberate: a simulated gateway that settles everything qualifies
+bidders who have not paid, while an unsent SMS leaves the inbox — a real delivered
+channel — working exactly as it should.
+
+Note what `INotificationChannel` does not take: a phone number or an email
+address. Those live in the participant service with the national ID, and this
+service does not hold them. A notification database that accumulated every
+bidder's contact details would be a second copy of the PDPL-sensitive data the
+participant service exists to confine; an adapter resolves the recipient at send
+time, from the service that owns them.
+
+### The bell polls
+
+The auction's price has a dedicated SSE stream because a second matters there. A
+notification is something you catch up on, and a second connection held open per
+signed-in bidder for a whole session is a real cost for no benefit. It polls every
+twenty seconds and backs off while the tab is hidden, like the catalogue.
+
+### What the tests cover
+
+13 tests, and the interesting ones are all about not sending something: the same
+eligibility republished three times is one notice, four lead changes are four
+notices and a redelivery of all four is none, a loser is never told who won, a
+settled payment is not announced at all. Two have their own class and their own
+database because their subject is an empty one: a first run absorbs the whole
+history and announces none of it, and a restart on the same database catches up on
+what it missed. Both were checked by breaking the thing they test — with the
+watermark comparison forced to `true` the first-run test sees the history it is
+supposed to have swallowed, and with the outbid dedup replaced by a fresh GUID the
+redelivery test sees four notices per bidder instead of two.
+
+Every test gets its own database. The watermark is global to a database while
+offsets are per stream, so a shared one leaves the previous test's watermark above
+the new test's offsets and classifies its records as history — a timeout waiting
+for a notice that was deliberately suppressed, which says nothing about the cause.
+
+### Still not verified
+
+- **No SMS, no email, no push.** Everything above reaches a bidder who opens the
+  portal. A bidder who does not open the portal is told nothing, which for "comply
+  by Sunday or forfeit your deposit" is not good enough and is a contract
+  dependency rather than a coding one.
+- **No per-bidder preferences.** Everyone gets everything. A bidder in thirty
+  auctions gets thirty "auction opened" notices and cannot turn them off.
+- **Nothing expires.** Rows accumulate for ever, and they are personal data —
+  PDPL will ask about retention, as it will for the documents.
+- **The outbid notice can be late.** It is produced by a consumer following a
+  topic, so in the last seconds of an auction it may arrive after the close. The
+  live stream is what serves a bidder who is actually watching; this is the
+  catch-up path and is not a substitute.
+- **No delivery receipt.** `DispatchedAt` records that a channel accepted it, not
+  that a person saw it. `ReadAt` records a click in the portal, which is the only
+  evidence there is.
+- **One replica, enforced by a warning.** As above.
+
+---
+
+## 33. Deploying the portals
+
+Both portals were runnable and neither was deployable: a Vite dev server on a
+developer's machine, or `vite preview` from `run-portals.sh`, and nothing else.
+They are now a static bundle behind nginx, with a chart entry each.
+
+| | bidder | admin |
+|---|---|---|
+| image | `e-auction/bidder` | `e-auction/admin` |
+| replicas | 2, autoscaling to 8 | 2, no autoscaling |
+| internet-facing | yes | no |
+| resources | 50m / 64Mi | 50m / 64Mi |
+
+The bidder portal faces the internet because it is the one surface a citizen
+reaches before signing in — the same reason the query BFF does. The admin portal
+reaches staff through whatever the municipality fronts internal applications with.
+
+nginx listens on **8080**, not 80, so the container needs no privileged port and
+runs as UID 10001 like every other image here. Its pid and scratch directories are
+under `/tmp`, which is the emptyDir the chart already mounts for
+`readOnlyRootFilesystem`.
+
+### One health contract
+
+The portal serves `/health/live` and `/health/ready`, the same two paths as every
+.NET service, so `e-auction-common` needs no special case for a portal. Both
+answer the same thing, because for nginx serving pre-built files they are the same
+question: it is ready when it is listening. There is no warm-up, no database, and
+no topic to replay.
+
+### Caching, and the one file that must not be cached
+
+The bundle's filename carries its content hash, so `assets/*` is
+`max-age=31536000, immutable` — the browser should never ask twice. `index.html`
+is `no-cache`, because it is the file that *names* the current bundle, and a
+cached one points at a bundle the next deployment deleted.
+
+### Three headers that a meta tag cannot carry
+
+The Content-Security-Policy stays where it was: a meta tag in `index.html`, put
+there at build time from the same endpoint table the bundle is built from
+(§21). nginx does not repeat it, because two copies of a policy drift and the one
+that drifts is the one nobody tested.
+
+What nginx adds is the three things a meta policy cannot express at all:
+`frame-ancestors 'none'` (the modern anti-framing directive, ignored in meta),
+`X-Content-Type-Options: nosniff`, and `Referrer-Policy`.
+
+### D-43: the image is built per environment, and that is a real cost
+
+The service URLs are **build arguments**. Vite inlines `import.meta.env`
+textually, and the Content-Security-Policy's `connect-src` is derived from the
+same table in the same build so that it permits exactly the origins the bundle
+will call and nothing else.
+
+The consequence is that `e-auction/bidder:0.1.0` built for Jeddah is not the same
+artifact as one built for a test environment, and **a tag cannot be promoted
+between them**. For a chart that is explicitly one-chart-per-client, that is the
+wrong shape, and it is recorded here as a cost rather than a conclusion.
+
+Making one image serve any environment needs both halves to become runtime
+concerns:
+
+1. A `config.js` written by the container's entrypoint from environment variables
+   and loaded by `index.html` before the bundle, with `config.ts` reading a global
+   instead of `import.meta.env` in a production build.
+2. The policy moving from the document to a response header, because a CSP built
+   at image-build time cannot know origins supplied at container start — and a
+   `<meta>` CSP inserted by script is ignored by design.
+
+(2) is what makes it more than an afternoon: `buildPolicy` is the single source of
+the directive list and it is TypeScript, while the thing that would have to emit
+the header at container start is nginx. Splitting them means two copies of the
+policy, which is the failure this design was arranged to prevent, and `csp.test.ts`
+exists because that policy is a security control rather than a convenience. The
+honest options are a Node entrypoint in the runtime image that calls `buildPolicy`
+itself, or templating the origins into a policy whose directives are still
+generated at build time. Either is a deliberate piece of work, not a tidy-up.
+
+Until then, the build refuses rather than guesses: the Dockerfile fails if any
+`VITE_*` argument is missing, because `config.ts` only throws at runtime and a
+missing variable would otherwise put `http://localhost` in the `connect-src` of a
+bundle served from a government domain. `csp.test.ts` asserts the same thing from
+the other side.
+
+### Not building scripts
+
+`npm ci --ignore-scripts`, for two reasons. It is the right default in any build —
+a postinstall script from any transitive dependency runs with the build's
+privileges. And the `e2e` workspace depends on `@playwright/test`, whose
+postinstall fetches several hundred megabytes of browsers this image will never
+run; that is what made the first attempt die with npm's "Exit handler never
+called". The whole workspace is installed rather than one member, because the
+portals reach `@eauction/shared` through a workspace link and the lockfile covers
+every member — leaving one out makes npm refuse the install rather than skip it.
+
+### Still not verified
+
+- **The image was never built.** This environment's network policy denies the
+  Docker build a route to `registry.npmjs.org`, so `npm ci` cannot run inside it.
+  What *was* verified is the half that is new: the nginx configuration, run against
+  a bundle built on the host, serving both health paths, falling back to
+  `index.html` for `/auctions/<id>`, and returning the three headers and both
+  cache policies above. The bundle itself is built by `run-portals.sh` on every
+  Playwright run. The layering in between — `npm ci`, the workspace build, the
+  copy into nginx — is plain and unexercised.
+- **Never deployed.** As for every other chart here: linted, rendered and
+  validated, never applied to a cluster.
+- **No `Cache-Control` on the Keycloak redirect.** Signing in leaves a code and
+  state in the URL; nothing stops an intermediary caching that response, because
+  nothing serves it — Keycloak does.
+- **The admin portal has no ingress at all by default.** `expose.enabled: false`
+  means a fresh install leaves staff with no way in until someone sets a host. That
+  is deliberate — guessing an internal hostname would be worse — and it will
+  surprise whoever installs it first.

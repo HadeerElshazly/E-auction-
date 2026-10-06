@@ -1,4 +1,5 @@
 using EAuction.AuctionAdmin.Persistence;
+using EAuction.Notifications.Persistence;
 using EAuction.Participant.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,7 +13,8 @@ using Microsoft.EntityFrameworkCore;
 //
 //   dotnet EAuction.Migrate.dll \
 //     --admin "Host=…;Database=eauction_admin;Username=…;Password=…" \
-//     --participant "Host=…;Database=eauction_participant;Username=…;Password=…"
+//     --participant "Host=…;Database=eauction_participant;Username=…;Password=…" \
+//     --notifications "Host=…;Database=eauction_notifications;Username=…;Password=…"
 //
 // Either connection string may also come from ConnectionStrings__Admin /
 // ConnectionStrings__Participant, which is how the chart passes them.
@@ -29,12 +31,15 @@ string? Arg(string name)
 var admin = Arg("admin") ?? Environment.GetEnvironmentVariable("ConnectionStrings__Admin");
 var participant = Arg("participant")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Participant");
+var notifications = Arg("notifications")
+    ?? Environment.GetEnvironmentVariable("ConnectionStrings__Notifications");
 
-if (admin is null && participant is null)
+if (admin is null && participant is null && notifications is null)
 {
     Console.Error.WriteLine(
-        "Nothing to do. Pass --admin and/or --participant, or set "
-        + "ConnectionStrings__Admin / ConnectionStrings__Participant.");
+        "Nothing to do. Pass --admin, --participant and/or --notifications, or set "
+        + "ConnectionStrings__Admin / ConnectionStrings__Participant / "
+        + "ConnectionStrings__Notifications.");
     return 2;
 }
 
@@ -47,6 +52,10 @@ if (admin is not null)
 if (participant is not null)
     failed |= !await Apply("participant", new DbContextOptionsBuilder<ParticipantDbContext>()
         .UseNpgsql(participant).Options, o => new ParticipantDbContext(o));
+
+if (notifications is not null)
+    failed |= !await Apply("notifications", new DbContextOptionsBuilder<NotificationsDbContext>()
+        .UseNpgsql(notifications).Options, o => new NotificationsDbContext(o));
 
 return failed ? 1 : 0;
 

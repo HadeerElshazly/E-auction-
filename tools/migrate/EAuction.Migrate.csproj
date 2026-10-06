@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/EAuction.AuctionAdmin/EAuction.AuctionAdmin.csproj" />
     <ProjectReference Include="../../src/EAuction.Participant/EAuction.Participant.csproj" />
+    <ProjectReference Include="../../src/EAuction.Notifications/EAuction.Notifications.csproj" />
   </ItemGroup>
 
 </Project>

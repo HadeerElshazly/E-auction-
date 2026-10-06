@@ -228,6 +228,28 @@ export function watchPage(page: Page): PageProblems {
   return problems
 }
 
+/**
+ * Attaches a document in the admin portal by setting files on the hidden input.
+ *
+ * Not by pressing the button: that opens the operating system's file dialog,
+ * which Playwright cannot drive. Setting files on the input fires the same change
+ * handler the button's click would have produced, which is the whole point of
+ * driving it through an input rather than a bespoke dialog.
+ */
+export async function attachDocument(
+  page: Page,
+  inputLabel: string,
+  fileName: string,
+  body: string,
+  mimeType: string,
+): Promise<void> {
+  await page.getByLabel(inputLabel).setInputFiles({
+    name: fileName,
+    mimeType,
+    buffer: Buffer.from(body, 'utf8'),
+  })
+}
+
 /** A datetime-local value, in the browser's own local time. */
 export function localInput(at: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')

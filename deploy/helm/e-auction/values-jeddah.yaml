@@ -107,3 +107,15 @@ participant:
   env:
     - name: ASPNETCORE_URLS
       value: http://+:8080
+
+notifications:
+  secretEnv:
+    - name: ConnectionStrings__Notifications
+      secretName: eauction-notifications-db
+      secretKey: connection-string
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+  # No SMS adapter is configured, and none can be until an aggregator and a
+  # registered sender name exist (P-7). The in-product inbox works regardless;
+  # this is the line to change when that contract lands.

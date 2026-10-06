@@ -1,0 +1,20 @@
+{{- if .Values.notifications.enabled }}
+{{- $ctx := dict "root" $ "name" "notifications" "svc" .Values.notifications }}
+{{ include "e-auction.serviceAccount" $ctx }}
+---
+{{ include "e-auction.deployment" $ctx }}
+---
+{{ include "e-auction.service" $ctx }}
+{{- with (include "e-auction.hpa" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.pdb" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- with (include "e-auction.expose" $ctx) }}
+---
+{{ . }}
+{{- end }}
+{{- end }}

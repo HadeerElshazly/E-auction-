@@ -1,4 +1,5 @@
 using Confluent.Kafka;
+using Confluent.Kafka.Admin;
 
 namespace EAuction.Core;
 
@@ -38,6 +39,55 @@ public sealed class KafkaEventStream(KafkaEventStreamOptions options) : IEventSt
 
         if (result.Status != PersistenceStatus.Persisted)
             throw new InvalidOperationException($"Event not persisted to {topic}: {result.Status}");
+    }
+
+    /// <summary>
+    /// Asks the broker where the topic ends, over a short-lived consumer.
+    ///
+    /// <c>QueryWatermarkOffsets</c> rather than <c>GetWatermarkOffsets</c>: the
+    /// second returns what this client has already learned from its own fetches,
+    /// which for a consumer that has not read anything is nothing at all.
+    ///
+    /// The bid path's topics have exactly one partition and the control topics are
+    /// provisioned with more, so this sums the partitions' ends and returns the
+    /// largest single offset. A caller comparing a record's offset to it is
+    /// therefore conservative on a multi-partition topic — it may treat a few of
+    /// the newest records as history — which is the direction to be wrong in: the
+    /// alternative is announcing the past.
+    /// </summary>
+    public Task<long> LatestOffsetAsync(string topic, CancellationToken ct)
+    {
+        using var consumer = new ConsumerBuilder<string, string>(new ConsumerConfig
+        {
+            BootstrapServers = options.BootstrapServers,
+            GroupId = $"{options.ConsumerGroup}-watermark-{Guid.NewGuid():N}",
+            EnableAutoCommit = false,
+        }).Build();
+
+        // The admin client borrows the consumer's handle, so this is one connection
+        // to the broker rather than two.
+        using var admin = new DependentAdminClientBuilder(consumer.Handle).Build();
+
+        var metadata = admin.GetMetadata(topic, TimeSpan.FromSeconds(10));
+        var found = metadata.Topics.FirstOrDefault(t => t.Topic == topic);
+
+        if (found is null || found.Partitions.Count == 0)
+            return Task.FromResult(-1L);
+
+        var last = -1L;
+
+        foreach (var partition in found.Partitions)
+        {
+            var offsets = consumer.QueryWatermarkOffsets(
+                new TopicPartition(topic, new Partition(partition.PartitionId)),
+                TimeSpan.FromSeconds(10));
+
+            // High is the offset the next record will get, so the last existing
+            // one is High - 1. An empty partition has High == Low and gives -1.
+            last = Math.Max(last, offsets.High.Value - 1);
+        }
+
+        return Task.FromResult(last);
     }
 
     public async IAsyncEnumerable<StreamEvent> ReadAsync(

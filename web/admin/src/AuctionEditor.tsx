@@ -560,6 +560,7 @@ function Documents({
         <Attach
           label="كراسة الشروط"
           buttonLabel="إرفاق كراسة"
+          inputLabel="ملف كراسة الشروط"
           // Restricted: a bidder reads it with a grant the participant service
           // mints once they have paid for it. No role opens it.
           access="Restricted"
@@ -575,6 +576,7 @@ function Documents({
         <Attach
           label="صورة الغلاف"
           buttonLabel="إرفاق غلاف"
+          inputLabel="ملف صورة الغلاف"
           // Public: it is on the catalogue an anonymous citizen reads before
           // deciding whether to register at all.
           access="Public"
@@ -595,6 +597,14 @@ function Documents({
 interface AttachProps {
   label: string
   buttonLabel: string
+  /**
+   * The hidden input's own accessible name, which must differ from the button's.
+   *
+   * An `input[type=file]` has role `button` in the accessibility tree, so giving
+   * both the same name makes `getByRole('button', { name })` ambiguous and every
+   * test that presses the button fails strict mode. Found exactly that way.
+   */
+  inputLabel: string
   access: 'Public' | 'Private' | 'Restricted'
   accept: string
   attached: string | null | undefined
@@ -614,6 +624,7 @@ interface AttachProps {
 function Attach({
   label,
   buttonLabel,
+  inputLabel,
   access,
   accept,
   attached,
@@ -643,7 +654,7 @@ function Attach({
             ref={input}
             type="file"
             accept={accept}
-            aria-label={buttonLabel}
+            aria-label={inputLabel}
             // Hidden rather than display:none, so the input is still focusable and
             // Playwright can set files on it.
             style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}

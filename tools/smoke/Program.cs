@@ -22,6 +22,7 @@ var participantUrl = Env("SMOKE_PARTICIPANT_URL", "http://localhost:5102");
 var catcherUrl = Env("SMOKE_CATCHER_URL", "http://localhost:5103");
 var bffUrl = Env("SMOKE_BFF_URL", "http://localhost:5105");
 var documentsUrl = Env("SMOKE_DOCUMENTS_URL", "http://localhost:5107");
+var notificationsUrl = Env("SMOKE_NOTIFICATIONS_URL", "http://localhost:5108");
 var bootstrap = Env("SMOKE_KAFKA", "127.0.0.1:9092");
 var password = Env("SMOKE_PASSWORD", "dev-only-password");
 
@@ -862,7 +863,58 @@ try
     _ = applied;
 
     // -----------------------------------------------------------------------
-    n.Section("11. قاعة المزاد — the hall, where a clerk enters the bids");
+    n.Section("11. الإشعارات — what each bidder was actually told");
+    // -----------------------------------------------------------------------
+    //
+    // The in-product inbox is the delivered channel: SMS needs an aggregator
+    // contract that does not exist (P-7), and a bidder who closed the tab still
+    // has to find out they were outbid.
+    //
+    // What is asserted here is mostly what a bidder was NOT told. Sara and khalid
+    // took opposite sides of this auction, so the two inboxes should differ in
+    // exactly the ways D-22 requires.
+
+    var saraInbox = new Caller(http, notificationsUrl, saraToken, "sara");
+    var khalidInbox = new Caller(http, notificationsUrl, khalidToken, "khalid");
+
+    var saraNotices = await WaitForNoticesAsync(saraInbox, "Awarded");
+    var khalidNotices = await WaitForNoticesAsync(khalidInbox, "Outbid");
+
+    static string[] Kinds(JsonElement inbox) =>
+        inbox.GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("kind").GetString() ?? "")
+            .ToArray();
+
+    var saraKinds = Kinds(saraNotices);
+    var khalidKinds = Kinds(khalidNotices);
+
+    if (saraKinds.Contains("Eligible") && saraKinds.Contains("AuctionStarted"))
+        n.Step("sara was told she is eligible and the auction opened",
+            string.Join(", ", saraKinds.Distinct()));
+    else
+        n.Fail("sara was told she is eligible and the auction opened",
+            string.Join(", ", saraKinds));
+
+    // The winner is told she won. The loser is not told who did — that would undo
+    // the masking by notification (D-22).
+    if (khalidKinds.Contains("Outbid") && !khalidKinds.Contains("Awarded"))
+        n.Step("khalid was told he was outbid, and not who won", "D-22 holds in the inbox");
+    else
+        n.Fail("khalid was told he was outbid, and not who won",
+            string.Join(", ", khalidKinds));
+
+    // And one bidder cannot read another's inbox: it is a list of which auctions
+    // they are in and what they bid.
+    var firstNotice = saraNotices.GetProperty("items")[0].GetProperty("id").GetGuid();
+    var (borrowedRead, _) = await khalidInbox.TryPostAsync($"/notifications/{firstNotice}/read");
+
+    if (borrowedRead == System.Net.HttpStatusCode.NotFound)
+        n.Step("one bidder cannot read another's notifications", "404");
+    else
+        n.Fail("one bidder cannot read another's notifications", $"got {(int)borrowedRead}");
+
+    // -----------------------------------------------------------------------
+    n.Section("12. قاعة المزاد — the hall, where a clerk enters the bids");
     // -----------------------------------------------------------------------
     //
     // A second auction, run the other way (§29). Everything a bidder does is
@@ -1198,6 +1250,30 @@ static async Task WaitForStageAsync(Caller who, string sub, string stage, string
     throw new SmokeException(
         $"{what} never settled for {who.Who}; is the payment service running and "
         + "consuming " + Topics.ParticipantPayments + "?");
+}
+
+/// <summary>
+/// Waits until a bidder's inbox holds a notice of the given kind.
+///
+/// Notifications are produced by a consumer following six topics, so they arrive
+/// after the thing they are about rather than with it — which is the whole shape of
+/// this channel and worth waiting for rather than sleeping through.
+/// </summary>
+static async Task<JsonElement> WaitForNoticesAsync(Caller who, string kind)
+{
+    for (var i = 0; i < 60; i++)
+    {
+        var inbox = await who.GetAsync("/notifications?take=50");
+
+        if (inbox.GetProperty("items").EnumerateArray()
+            .Any(item => item.GetProperty("kind").GetString() == kind))
+            return inbox;
+
+        await Task.Delay(500);
+    }
+
+    throw new SmokeException(
+        $"{who.Who} was never told {kind}; is the notification service running?");
 }
 
 /// <summary>

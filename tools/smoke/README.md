@@ -1,8 +1,9 @@
 # End-to-end smoke test
 
-One complete auction through all four services, against real Keycloak, real Kafka
-and real Postgres. 33 checks, no stubs, nothing seeded behind the services' backs:
-every piece of state arrives the way it would in deployment.
+Two complete auctions — one online, one in the hall — through every service,
+against real Keycloak, real Kafka, real Postgres and a real object store. No
+stubs, and nothing seeded behind the services' backs: every piece of state
+arrives the way it would in deployment.
 
 ```bash
 tools/smoke/run-smoke.sh              # dependencies already running
@@ -13,8 +14,19 @@ tools/smoke/run-smoke.sh --keep-data  # do not recreate the databases
 Needs Postgres on `:5432`, a Kafka broker on `:9092`
 (`tools/kafka/run-local-broker.sh start`) and Keycloak with the `eauction` realm
 (`deploy/keycloak/run-local.sh`). The script provisions the topics, applies the
-migrations, starts the four services on `:5101`–`:5104`, runs the walk-through and
-tears everything down. Service logs land in `/tmp/eauction-smoke/`.
+migrations, starts the services on `:5101`–`:5108`, runs the walk-through and tears
+everything down. Service logs land in `/tmp/eauction-smoke/`.
+
+`SMOKE_S3` points the document service at an object store; without it documents are
+held in memory, which is enough for a single-process walk-through and is why this
+still runs on a machine with no MinIO.
+
+**Run it with `--with-deps` after a few runs.** Nothing closes an onsite auction on
+a clock (§29), so each run leaves another permanently-running auction on the
+compacted topics, and the processor ends up driving a crowd of them until a new
+auction's `AuctionStarted` arrives too late for the walk-through to see.
+`--with-deps` wipes the broker; without it the failure looks like a timeout in
+section 12 and has nothing to do with the code.
 
 ## What it walks through
 
@@ -28,6 +40,14 @@ tears everything down. Service logs land in `/tmp/eauction-smoke/`.
 | **6. Bidding** | impersonation refused, forged signature refused, five binary frames accepted, below-floor refused |
 | **7. Verdict** | `AuctionStarted`, current winner, `AuctionClosed`, candidate offered above the reserve |
 | **8. Award** | committee confirms; letter → signed → notify order enforced; the winner cannot drive it |
+| **10. Payments** | brokerage at 2.5% of the price won at; the winner's deposit applied, the loser's refunded, and the winner not refunded as well (§30) |
+| **11. Notifications** | each bidder's inbox; the loser is told he was outbid and not who won; one bidder cannot read another's (§32) |
+| **12. The hall** | a clerk enters bids from the floor, extends, and brings the hammer down (§29) |
+
+Documents run through sections 2 and 4: a real كراسة الشروط uploaded with an Arabic
+filename, the cover image readable with no token, the booklet refused even to the
+administrator who uploaded it, and the bidder who paid for it reading it with a
+grant that is useless in anyone else's hands (§31).
 
 ## Why it exists
 

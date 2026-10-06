@@ -125,6 +125,17 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{- if .Values.notifications.enabled }}
+            {{- range .Values.notifications.secretEnv }}
+            {{- if eq .name "ConnectionStrings__Notifications" }}
+            - name: ConnectionStrings__Notifications
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.provision.resources | nindent 12 }}
           volumeMounts:

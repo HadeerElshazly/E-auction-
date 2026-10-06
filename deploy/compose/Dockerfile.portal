@@ -1,0 +1,97 @@
+# Both portals, from one Dockerfile.
+#
+#   docker build -f deploy/compose/Dockerfile.portal \
+#     --build-arg PORTAL=bidder \
+#     --build-arg VITE_ISSUER=https://id.jeddah.gov.sa/realms/eauction \
+#     --build-arg VITE_ADMIN_API=https://api.jeddah.gov.sa/auctions \
+#     ... .
+#
+# The URLs are BUILD arguments, not environment variables, and that is a real
+# constraint rather than an oversight. Vite inlines `import.meta.env` textually at
+# build time, and the Content-Security-Policy is derived from the same table in the
+# same build (`web/shared/vite-csp.ts`) so that connect-src permits exactly the
+# origins the bundle will call. One artifact serving several environments would
+# need both to become runtime concerns, and the policy would have to move from the
+# document to a response header. See docs/ARCHITECTURE.md §33 (D-43) for the
+# trade-off and the migration.
+#
+# What follows from it: the image tag is per-environment. `e-auction/bidder:0.1.0`
+# built for Jeddah is not the same artifact as one built for a test environment,
+# and a tag cannot be promoted between them.
+
+ARG PORTAL=bidder
+
+FROM node:22-alpine AS build
+WORKDIR /src
+
+# The workspace root first, so an unchanged dependency set is a cached layer.
+COPY web/package.json web/package-lock.json ./
+COPY web/shared/package.json shared/
+COPY web/admin/package.json admin/
+COPY web/bidder/package.json bidder/
+COPY web/e2e/package.json e2e/
+
+# `npm ci` over the whole workspace, because the portals reach @eauction/shared
+# through a workspace link and the lockfile covers every member — leaving one out
+# makes npm refuse the install rather than skip it.
+#
+# --ignore-scripts for two reasons. It is the right default in a build: a
+# postinstall script from any transitive dependency runs with the build's
+# privileges. And the e2e workspace depends on @playwright/test, whose postinstall
+# downloads several hundred megabytes of browsers that this image will never run —
+# which is what made the first attempt here die with npm's "Exit handler never
+# called", the message it gives when it runs out of room.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN npm ci --no-audit --no-fund --ignore-scripts
+
+COPY web/ ./
+
+ARG PORTAL
+ARG VITE_ISSUER
+ARG VITE_ADMIN_API
+ARG VITE_PARTICIPANT_API
+ARG VITE_CATCHER_API
+ARG VITE_QUERY_API
+ARG VITE_DOCUMENTS_API
+ARG VITE_NOTIFICATIONS_API
+
+# Fails the build rather than the browser.
+#
+# web/shared/src/config.ts throws on a missing URL in a production build, so a
+# bundle built without its environment is a portal that shows a blank page with a
+# console error. Checked here instead, where the message names the variable and the
+# build stops.
+RUN for v in VITE_ISSUER VITE_ADMIN_API VITE_PARTICIPANT_API VITE_CATCHER_API \
+             VITE_QUERY_API VITE_DOCUMENTS_API VITE_NOTIFICATIONS_API; do \
+      eval "value=\$$v"; \
+      if [ -z "$value" ]; then \
+        echo "$v is not set. The portal's Content-Security-Policy is built from" >&2; \
+        echo "these URLs, so a missing one would permit a localhost origin in a" >&2; \
+        echo "bundle served from a government domain." >&2; \
+        exit 1; \
+      fi; \
+    done
+
+RUN npm run build --workspace "$PORTAL"
+
+# A copy at a fixed path, because COPY cannot take an ARG in its source in a way
+# that works across builders.
+RUN cp -r "/src/$PORTAL/dist" /dist
+
+FROM nginx:1.27-alpine
+
+# A read-only root filesystem needs nginx's scratch directories to be writable, and
+# a non-root user needs a pid file it can write. Both are mounted as emptyDir by the
+# chart; this is where they go.
+COPY deploy/compose/nginx-portal.conf /etc/nginx/nginx.conf
+COPY --from=build /dist /usr/share/nginx/html
+
+# The same UID as every other image here (docs/ARCHITECTURE.md §10.1). nginx:alpine
+# ships an `nginx` user at 101; this adds ours so the chart's runAsUser matches.
+RUN adduser --uid 10001 --disabled-password --no-create-home eauction \
+ && chown -R 10001 /usr/share/nginx/html
+
+USER 10001
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]

@@ -15,6 +15,7 @@ COPY src/EAuction.Outbox/EAuction.Outbox.csproj src/EAuction.Outbox/
 COPY src/EAuction.Security/EAuction.Security.csproj src/EAuction.Security/
 COPY src/EAuction.AuctionAdmin/EAuction.AuctionAdmin.csproj src/EAuction.AuctionAdmin/
 COPY src/EAuction.Participant/EAuction.Participant.csproj src/EAuction.Participant/
+COPY src/EAuction.Notifications/EAuction.Notifications.csproj src/EAuction.Notifications/
 COPY tools/migrate/EAuction.Migrate.csproj tools/migrate/
 COPY tools/topics/EAuction.Topics.csproj tools/topics/
 RUN dotnet restore tools/migrate/EAuction.Migrate.csproj \
@@ -34,4 +35,4 @@ USER 10001
 
 # No ENTRYPOINT: the Job picks which tool to run.
 #   dotnet EAuction.Topics.dll  --bootstrap … --replication …
-#   dotnet EAuction.Migrate.dll --admin … --participant …
+#   dotnet EAuction.Migrate.dll --admin … --participant … --notifications …

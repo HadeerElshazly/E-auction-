@@ -19,13 +19,26 @@ src/
   EAuction.BidProcessor/  winner determination, auction supervision
   EAuction.AuctionAdmin/  auction data, workflows, transactional outbox
   EAuction.Participant/   registration, subscription, deposit, eligibility
+  EAuction.Payments/      booklet fee, deposit, brokerage, refunds (§30)
+  EAuction.Documents/     كراسة الشروط, guarantees, award letters, on S3 (§31)
+  EAuction.Notifications/ what a bidder is told, and the inbox they read it in (§32)
+  EAuction.QueryBff/      the public catalogue and the live price fan-out
+  EAuction.Security/      roles, policies, the second factor, document grants
   EAuction.Outbox/        shared transactional-outbox machinery
+web/
+  bidder/             the bidder portal (React)
+  admin/              the administration and committee portal (React)
+  shared/             endpoints, auth, the bid frame, the CSP plugin
+  e2e/                Playwright, driving both portals against the real stack
 deploy/
   helm/               portable chart (plain Kubernetes + OpenShift)
   compose/            local development stack
   debezium/           outbox connector configuration
 tools/
   loadtest/           k6 harness for the bid hot path
+  smoke/              one auction through every service, against the real stack
+  topics/             provisions the control topics with the policy each needs
+  migrate/            applies the EF Core migrations, as a deployment step
 ```
 
 ## Build and test
@@ -39,8 +52,17 @@ dotnet build EAuction.sln
 dotnet test EAuction.sln
 ```
 
-Apply the schemas with `dotnet ef database update --project src/EAuction.AuctionAdmin`
-and the same for `src/EAuction.Participant`.
+Apply the schemas with `tools/migrate`, which is the step a Helm hook runs:
+
+```bash
+dotnet run --project tools/migrate -- \
+  --admin         "Host=localhost;Database=eauction_admin;Username=eauction;Password=eauction" \
+  --participant   "Host=localhost;Database=eauction_participant;Username=eauction;Password=eauction" \
+  --notifications "Host=localhost;Database=eauction_notifications;Username=eauction;Password=eauction"
+```
+
+The document service's tests need something that speaks S3; without `S3_ENDPOINT`
+they skip, like the Kafka ones.
 
 The Kafka integration tests need a broker. Without `KAFKA_BOOTSTRAP` they skip:
 
@@ -64,16 +86,33 @@ Architecture document is in review.
 - **Bid processor wiring** — implemented and tested. The loop closes: an
   approved auction runs itself through bidding, a close, a candidate for the
   committee, and a cascade if that candidate fails. A restart no longer
-  republishes handled bids. 103 tests green overall.
+  republishes handled bids.
 - **Helm charts** — portable across plain Kubernetes and OpenShift behind one
   `platform` value, with a test script that verifies the portability holds.
   See [deploy/helm](deploy/helm/README.md).
 - **Participant service + catcher wiring** — registration through to
   eligibility, and the catcher now fills its state from the control topics
   rather than from nothing.
-- **Kafka verified against a real broker** — 151 tests green with one running,
-  135 without. Found and fixed a silent data-loss bug no in-memory test could
-  have caught.
+- **Kafka verified against a real broker** — found and fixed a silent data-loss
+  bug no in-memory test could have caught.
+- **One auction end to end** — `tools/smoke` drives every service against real
+  Keycloak, Kafka, PostgreSQL and an S3 endpoint, and `tools/smoke/run-portals.sh`
+  drives both portals through a browser with Playwright.
+
+- **Payments** — the booklet fee, the deposit, brokerage on the award, and the
+  three different fates of a deposit at the end. Eligibility now follows a
+  settlement rather than a string the caller invented (§30).
+- **Documents** — the five documents are real files on an S3 object store, and
+  who may read one is decided by the service that owns the rule rather than by a
+  role (§31).
+- **Notifications** — eligible, outbid, awarded, deposit returned, in an
+  in-product inbox. SMS needs an aggregator contract that does not exist (§32).
+- **Both portals deployable** — a static bundle behind nginx, with a chart entry
+  each. The image is built per environment, which is a recorded cost (§33).
+
+**439 tests green** with a broker and an S3 endpoint running, 419 without — the
+Kafka and object-store integration tests skip rather than fail when their
+dependency is absent, so the suite runs anywhere.
 
 The Kafka clients now run against a real single-node broker. Still outstanding:
 the Debezium connector has never been registered against a Connect cluster, the

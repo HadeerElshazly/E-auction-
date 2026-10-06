@@ -310,6 +310,161 @@ participant:
 #
 # Scales out freely — every replica keeps its own full copy of a small read model,
 # and nothing it serves is a write.
+# ---------------------------------------------------------------------------
+# The portals
+#
+# Static bundles behind nginx on :8080. Stateless, so they scale on request rate
+# and nothing else, and both probes are the same static /healthz.
+#
+# Their service URLs are baked in at build time, which makes each image
+# environment-specific — the tag here is the artifact for *this* environment and
+# cannot be promoted from another. docs/ARCHITECTURE.md §33 (D-43) has the reason
+# and the migration away from it.
+
+bidderPortal:
+  enabled: true
+  image: e-auction/bidder
+  replicas: 2
+  port: 8080
+
+  # The one surface a citizen reaches before signing in, so it faces the internet
+  # alongside the query BFF.
+  expose:
+    enabled: true
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  spreadAcrossNodes: true
+
+  # Small: nginx serving pre-built files. The memory is for the file cache, not
+  # for a runtime.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  secretEnv: []
+
+  # Nothing. The bundle is already built, and its endpoints are inside it.
+  env: []
+
+adminPortal:
+  enabled: true
+  image: e-auction/admin
+  replicas: 2
+  port: 8080
+
+  # Staff-only, so it does not face the internet: it reaches administrators and the
+  # committee through whatever the municipality fronts internal applications with.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  secretEnv: []
+  env: []
+
+# What a bidder is told: eligible, outbid, awarded, deposit returned.
+#
+# Its own database, because its rows say which auctions a bidder is registered for,
+# when they were outbid and what they won — the whole of what D-22 keeps off the
+# public topics, assembled in one place.
+notifications:
+  enabled: true
+  image: e-auction/notifications
+
+  # One instance.
+  #
+  # Two is safe — the unique index on (bidder, auction, kind, dedup) is what
+  # actually decides whether a notice has been sent, not an in-memory check — but
+  # the outbid notice keeps the previous leader per auction in memory, so two
+  # replicas would each hold half the picture and some outbid notices would be
+  # missed rather than duplicated. Sharding by auction is the fix and it is not
+  # built.
+  replicas: 1
+  port: 8080
+
+  # Internal: the bidder portal reaches it through the API gateway.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: false
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  #   secretEnv:
+  #     - name: ConnectionStrings__Notifications
+  #       secretName: eauction-notifications-db
+  #       secretKey: connection-string
+  secretEnv: []
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+
 # The files: كراسة الشروط, the cover image, bank guarantees and award letters.
 #
 # Holds no database. Everything it knows about a document rides on the object as S3

@@ -70,6 +70,7 @@ export VITE_PARTICIPANT_API="${VITE_PARTICIPANT_API:-http://localhost:5102}"
 export VITE_CATCHER_API="${VITE_CATCHER_API:-http://localhost:5103}"
 export VITE_QUERY_API="${VITE_QUERY_API:-http://localhost:5105}"
 export VITE_DOCUMENTS_API="${VITE_DOCUMENTS_API:-http://localhost:5107}"
+export VITE_NOTIFICATIONS_API="${VITE_NOTIFICATIONS_API:-http://localhost:5108}"
 
 if [ "$BUILT" = 1 ]; then
   say "Building the portals…"

@@ -27,6 +27,7 @@ const PRODUCTION_ENV = {
   VITE_CATCHER_API: 'https://bids.jeddah.gov.sa',
   VITE_QUERY_API: 'https://api.jeddah.gov.sa/public',
   VITE_DOCUMENTS_API: 'https://api.jeddah.gov.sa/documents',
+  VITE_NOTIFICATIONS_API: 'https://api.jeddah.gov.sa/notifications',
 }
 
 function directive(policy: string, name: string): string {
@@ -71,7 +72,7 @@ test('connect-src is exactly the origins this build calls', () => {
   assert.ok(origins.includes('https://api.jeddah.gov.sa'))
   assert.ok(origins.includes('https://bids.jeddah.gov.sa'))
 
-  // Four services behind one gateway are one origin. A policy that repeated it
+  // Five services behind one gateway are one origin. A policy that repeated it
   // would still work; one that failed to deduplicate would be read less carefully.
   assert.equal(origins.length, 4)
 

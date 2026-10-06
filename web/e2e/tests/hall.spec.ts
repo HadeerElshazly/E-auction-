@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   ADMIN_URL,
+  attachDocument,
   BIDDER_URL,
   actor,
   arabicRiyals,
@@ -66,10 +67,20 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
         page.getByRole('heading', { level: 3, name: /قطع الأرض \(1\)/ }),
       ).toBeVisible()
 
-      await page.getByRole('button', { name: 'إرفاق كراسة' }).click()
-      await expect(page.getByText('كراسة الشروط: ✓')).toBeVisible()
-      await page.getByRole('button', { name: 'إرفاق غلاف' }).click()
-      await expect(page.getByText('صورة الغلاف: ✓')).toBeVisible()
+      // Real files, through the document service, and the ids it hands back. The
+      // Arabic filename is the case that matters: S3 user metadata is ASCII-only,
+      // so this is what turns a booklet's name into question marks.
+      await attachDocument(
+        page,
+        'ملف كراسة الشروط',
+        'كراسة القاعة.pdf',
+        '%PDF-1.7\n% كراسة الشروط\n%%EOF\n',
+        'application/pdf',
+      )
+      await expect(page.getByText('كراسة الشروط: ✓')).toBeVisible({ timeout: 30_000 })
+
+      await attachDocument(page, 'ملف صورة الغلاف', 'cover.svg', '<svg/>', 'image/svg+xml')
+      await expect(page.getByText('صورة الغلاف: ✓')).toBeVisible({ timeout: 30_000 })
 
       // Onsite is the whole point: it is what makes the clerk's screen appear and
       // what stops sara bidding from her own portal.
