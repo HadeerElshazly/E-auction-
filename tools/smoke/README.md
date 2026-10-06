@@ -14,7 +14,7 @@ tools/smoke/run-smoke.sh --keep-data  # do not recreate the databases
 Needs Postgres on `:5432`, a Kafka broker on `:9092`
 (`tools/kafka/run-local-broker.sh start`) and Keycloak with the `eauction` realm
 (`deploy/keycloak/run-local.sh`). The script provisions the topics, applies the
-migrations, starts the services on `:5101`–`:5108`, runs the walk-through and tears
+migrations, starts the services on `:5101`–`:5109`, runs the walk-through and tears
 everything down. Service logs land in `/tmp/eauction-smoke/`.
 
 `SMOKE_S3` points the document service at an object store; without it documents are
@@ -43,6 +43,7 @@ section 12 and has nothing to do with the code.
 | **10. Payments** | brokerage at 2.5% of the price won at; the winner's deposit applied, the loser's refunded, and the winner not refunded as well (§30) |
 | **11. Notifications** | each bidder's inbox; the loser is told he was outbid and not who won; one bidder cannot read another's (§32) |
 | **12. The hall** | a clerk enters bids from the floor, extends, and brings the hammer down (§29) |
+| **13. The audit trail** | the staff actions of the preceding twelve sections, read back by an auditor and verified: four operating roles refused, no write route, the approval named, the reserve figure absent, the chain intact (§34) |
 
 Documents run through sections 2 and 4: a real كراسة الشروط uploaded with an Arabic
 filename, the cover image readable with no token, the booklet refused even to the

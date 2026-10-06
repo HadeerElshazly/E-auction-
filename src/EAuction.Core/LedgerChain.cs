@@ -13,7 +13,29 @@ namespace EAuction.Core;
 /// </summary>
 public sealed class LedgerChain
 {
-    private byte[] _head = new byte[32];
+    public const int HashLength = 32;
+
+    private byte[] _head = new byte[HashLength];
+
+    /// <summary>A fresh chain, starting from the all-zero head.</summary>
+    public LedgerChain() { }
+
+    /// <summary>
+    /// Resumes a chain whose earlier records are already written down.
+    ///
+    /// The bid processor rebuilds its chain by replaying the topic from the start,
+    /// so it never needs this. The audit service does: its records are rows in a
+    /// table it has already committed, and on restart it continues from the last
+    /// one's hash rather than recomputing a trail that may be years long.
+    /// </summary>
+    public LedgerChain(ReadOnlySpan<byte> head)
+    {
+        if (head.Length != HashLength)
+            throw new ArgumentException(
+                $"A chain head is {HashLength} bytes; got {head.Length}.", nameof(head));
+
+        _head = head.ToArray();
+    }
 
     public ReadOnlySpan<byte> Head => _head;
 
@@ -33,9 +55,17 @@ public sealed class LedgerChain
     /// it lands on <paramref name="expectedHead"/>. Used by audit and by the
     /// processor on restart.
     /// </summary>
-    public static bool Verify(IEnumerable<ReadOnlyMemory<byte>> frames, ReadOnlySpan<byte> expectedHead)
+    /// <param name="from">
+    /// The head the first frame builds on. Empty means the start of the chain,
+    /// which is what a processor replaying a bid topic from offset 0 wants. The
+    /// audit service passes the hash of the entry before the range it is checking,
+    /// so a page of the trail can be verified without rereading all of it.
+    /// </param>
+    public static bool Verify(
+        IEnumerable<ReadOnlyMemory<byte>> frames, ReadOnlySpan<byte> expectedHead,
+        ReadOnlySpan<byte> from = default)
     {
-        var chain = new LedgerChain();
+        var chain = from.IsEmpty ? new LedgerChain() : new LedgerChain(from);
         foreach (var frame in frames) chain.Append(frame.Span);
         return CryptographicOperations.FixedTimeEquals(chain.Head, expectedHead);
     }

@@ -11,6 +11,14 @@
   <ItemGroup>
     <ProjectReference Include="../EAuction.Core/EAuction.Core.csproj" />
     <ProjectReference Include="../EAuction.Security/EAuction.Security.csproj" />
+    <!-- For StaffActionRecorded alone. This service has no outbox and no
+         database, so it publishes its own audit records straight onto the topic
+         (§34) and uses nothing else from here.
+
+         It does pick up EF Core Relational transitively and never loads it. The
+         alternative is a second copy of the event contract, which is the drift
+         the shared type exists to prevent — see the note on StaffAuditOutbox. -->
+    <ProjectReference Include="../EAuction.Outbox/EAuction.Outbox.csproj" />
   </ItemGroup>
 
   <ItemGroup>

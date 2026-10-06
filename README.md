@@ -22,6 +22,7 @@ src/
   EAuction.Payments/      booklet fee, deposit, brokerage, refunds (§30)
   EAuction.Documents/     كراسة الشروط, guarantees, award letters, on S3 (§31)
   EAuction.Notifications/ what a bidder is told, and the inbox they read it in (§32)
+  EAuction.Audit/         who did it — the staff audit trail, hash-chained (§34)
   EAuction.QueryBff/      the public catalogue and the live price fan-out
   EAuction.Security/      roles, policies, the second factor, document grants
   EAuction.Outbox/        shared transactional-outbox machinery
@@ -58,7 +59,8 @@ Apply the schemas with `tools/migrate`, which is the step a Helm hook runs:
 dotnet run --project tools/migrate -- \
   --admin         "Host=localhost;Database=eauction_admin;Username=eauction;Password=eauction" \
   --participant   "Host=localhost;Database=eauction_participant;Username=eauction;Password=eauction" \
-  --notifications "Host=localhost;Database=eauction_notifications;Username=eauction;Password=eauction"
+  --notifications "Host=localhost;Database=eauction_notifications;Username=eauction;Password=eauction" \
+  --audit         "Host=localhost;Database=eauction_audit;Username=eauction;Password=eauction"
 ```
 
 The document service's tests need something that speaks S3; without `S3_ENDPOINT`
@@ -109,15 +111,24 @@ Architecture document is in review.
   in-product inbox. SMS needs an aggregator contract that does not exist (§32).
 - **Both portals deployable** — a static bundle behind nginx, with a chart entry
   each. The image is built per environment, which is a recorded cost (§33).
+- **A staff audit trail** — every consequential act by a member of staff, written
+  through the acting service's outbox in the same transaction as the change it
+  describes, hash-chained into a service with its own database, its own role and no
+  write endpoint (§34).
 
-**439 tests green** with a broker and an S3 endpoint running, 419 without — the
+**502 tests green** with a broker and an S3 endpoint running, 478 without — the
 Kafka and object-store integration tests skip rather than fail when their
 dependency is absent, so the suite runs anywhere.
 
 The Kafka clients now run against a real single-node broker. Still outstanding:
-the Debezium connector has never been registered against a Connect cluster, the
-broker here is one node at replication factor 1 rather than the three
-deployment uses, and the end-to-end p99 ≤ 50 ms @ 10k bids/sec target is not
-yet measured with Kafka in the path. See
+the Debezium connector has never been registered against a Connect cluster, and
+the broker here is one node at replication factor 1 rather than the three
+deployment uses.
+
+The 50 ms budget at 10k bids/sec **is** met with Kafka and authentication in the
+path — 11,308 req/s at p99 35.4 ms, measured, with the caveat that validating an
+RS256 signature on every request rather than once per token missed it by 40 ms.
+What is still unmeasured is the longer loop: a bid through the processor to a
+winner published and fanned out to the other bidders. See
 [Validation status](docs/ARCHITECTURE.md#12-validation-status) for the full
 list of what is and is not verified.

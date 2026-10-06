@@ -18,6 +18,7 @@ public static class TopicMap
     public const string Lifecycle = Topics.Lifecycle;
     public const string Deposits = Topics.Deposits;
     public const string Participants = Topics.Participants;
+    public const string StaffActions = Topics.StaffActions;
 
     public static string BidTopicFor(Guid auctionId) => Topics.BidTopicFor(auctionId);
 
@@ -32,6 +33,13 @@ public static class TopicMap
         // whose key signs a frame for this auction — so it goes there rather than
         // onto a topic of its own.
         "auction-clerk" => Participants,
+
+        // Who did it, rather than what happened. The only aggregate type here that
+        // is not an auction fact, and the only one three services produce — see
+        // StaffActionRecorded. Routed, not skipped: the relay stops on a row it
+        // cannot place, so forgetting this line would stall every auction event
+        // behind the first audited action.
+        "staff-action" => StaffActions,
         _ => null
     };
 }

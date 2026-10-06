@@ -55,6 +55,36 @@ public class ControlTopicsTests
         Assert.Equal(TopicShape.EventLog, lifecycle.Shape);
     }
 
+    [Fact]
+    public void The_audit_trail_gets_exactly_one_partition_and_no_compaction()
+    {
+        // Both halves are part of the design rather than tuning, which is why this
+        // is the one topic that carries its own partition count (D-44).
+        //
+        // One partition, because the audit service hash-chains the entries in offset
+        // order and more than one partition gives no total order to chain along —
+        // the trail would verify in whatever sequence the consumer happened to see.
+        // An event log, because compaction keeps the last record per key and the key
+        // is the subject acted on: an auction approved and later rejected would lose
+        // the approval, which is the history the trail exists for.
+        var staffActions = ControlTopics.All.Single(t => t.Name == Topics.StaffActions);
+
+        Assert.Equal(1, staffActions.Partitions);
+        Assert.Equal(TopicShape.EventLog, staffActions.Shape);
+    }
+
+    [Fact]
+    public void Nothing_else_overrides_its_partition_count()
+    {
+        // Partition count is a throughput decision and belongs to the environment.
+        // A second topic pinning it here would almost certainly be someone tuning in
+        // the wrong place — and if it is deliberate, this test is where the reason
+        // goes.
+        Assert.Equal(
+            new[] { Topics.StaffActions },
+            ControlTopics.All.Where(t => t.Partitions is not null).Select(t => t.Name));
+    }
+
     [Theory]
     [InlineData(nameof(Topics.Upcoming))]
     [InlineData(nameof(Topics.Participants))]

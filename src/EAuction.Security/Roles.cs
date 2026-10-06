@@ -28,6 +28,18 @@ public static class Roles
 
     /// <summary>Floor operator entering bids for an on-site auction (في الموقع).</summary>
     public const string Operator = "operator";
+
+    /// <summary>
+    /// مراجع — reads the staff audit trail, and nothing else.
+    ///
+    /// Deliberately held by nobody who operates the platform. An auditor who is
+    /// also an administrator can read the record of their own actions, which is
+    /// most of the value gone: the point of the trail is that the person who did
+    /// the thing is not the person who holds the only account that can see it.
+    /// The role grants no write anywhere — the audit service has no endpoint that
+    /// writes, by construction (D-44).
+    /// </summary>
+    public const string Auditor = "auditor";
 }
 
 /// <summary>Authorization policy names.</summary>
@@ -37,6 +49,7 @@ public static class Policies
     public const string AuctionAdmin = "policy:auction-admin";
     public const string AwardCommittee = "policy:award-committee";
     public const string Operator = "policy:operator";
+    public const string Auditor = "policy:auditor";
 
     /// <summary>
     /// Who may post a frame to the bid catcher: a bidder bidding for themselves,

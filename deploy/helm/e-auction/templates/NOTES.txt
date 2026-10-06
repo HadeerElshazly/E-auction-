@@ -29,6 +29,9 @@ Services:
 {{- if .Values.notifications.enabled }}
   notifications   {{ .Values.notifications.replicas }} replica
 {{- end }}
+{{- if .Values.audit.enabled }}
+  audit           {{ .Values.audit.replicas }} replica (read-only; `auditor` role)
+{{- end }}
 
 {{- if gt (int .Values.bidProcessor.replicas) 1 }}
 
@@ -55,6 +58,31 @@ WARNING
   idempotency key stops that becoming two charges, but two settlements would be
   published for one payment and the audit trail would say something that did not
   happen. Set it back to 1.
+{{- end }}
+
+{{- if not .Values.audit.enabled }}
+
+WARNING
+  audit.enabled is false. The auction and participant services still write their
+  staff-action rows to their outboxes and the relays still publish them, so
+  nothing stalls — but nobody consumes staff.actions, and there is no record of
+  who approved an auction, changed a reserve price or accepted a bank guarantee
+  beyond each service's own logs. That is the arrangement D-44 exists to avoid.
+{{- end }}
+
+{{- if .Values.audit.enabled }}
+
+The audit service needs its own database secret, and it must NOT be the one any
+other service holds — the trail has to survive the compromise of the services it
+records, and a shared schema's other writers could lift the append-only trigger
+its migration installs:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic eauction-audit-db \
+    --from-literal=connection-string='Host=...;Database=eauction_audit;Username=...;Password=...'
+
+Grant the `auditor` realm role in Keycloak to the people who review the trail and
+to nobody who operates the platform. An auditor who can also approve an auction is
+reading their own record.
 {{- end }}
 
 {{- if .Values.auctionAdmin.enabled }}

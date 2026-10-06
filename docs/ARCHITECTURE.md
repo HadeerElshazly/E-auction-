@@ -75,6 +75,7 @@ design change, not a configuration change.
 | D-42 | **The notification service keeps a watermark per topic** (§32) | A notice is not idempotent to a person: below the watermark a record is history to absorb silently, above it news to send — including what happened while the service was down |
 | D-41 | **A bidder's inbox is private even from staff** (§32) | It is a list of which auctions they are in, when they were outbid and what they won — the whole of what D-22 keeps off the public topics, assembled in one place |
 | D-43 | **A portal image is built per environment** (§33) | Vite inlines the service URLs and the Content-Security-Policy's connect-src is derived from the same table in the same build; one artifact for every environment needs the policy to move from the document to a response header |
+| D-44 | **The record of a staff action does not live in the service that performed it** (§34) | An administrator who can approve an auction and also amend the record of having approved it has no audit trail, only a story in a database. The row is written through the acting service's outbox in the same transaction as the change, so neither can exist alone, and it is consumed into a hash-chained append-only table with its own credentials, its own role, and no write endpoint |
 | D-16 | **Debezium for the transactional outbox only**, never raw table CDC | Raw CDC leaks internal schema into the public event contract |
 | D-17 | **Event-driven domain; WSO2 MI only at integration edges** (payment, SADAD, municipality systems) | MI is an ESB, not a human-workflow engine. Workflows are state machines in the owning service |
 | D-18 | **React (web) + React Native/Expo (mobile)**, shared TypeScript contracts | |
@@ -3277,3 +3278,391 @@ every member — leaving one out makes npm refuse the install rather than skip i
   means a fresh install leaves staff with no way in until someone sets a host. That
   is deliberate — guessing an internal hostname would be worse — and it will
   surprise whoever installs it first.
+
+---
+
+## 34. سجل المراجعة — the staff audit trail
+
+Everything above describes what the platform does. This section is about who did
+it.
+
+Every consequential act in the platform is performed by a member of staff: an
+administrator sets an auction's terms and its reserve price, a committee member
+approves it and confirms the award, a clerk collects the key that signs for the
+hall, an administrator accepts a bank guarantee in place of money and makes a
+citizen eligible to bid. Each of those was already recorded by the service that
+performed it — in its own database, in rows that service can also change.
+
+That is not an audit trail. It is a story that happens to be in a database, told
+by the party with the most reason to change it.
+
+### D-44: the record of an action does not live in the service that performed it
+
+`staff.actions` is a one-partition event log. The services that perform audited
+actions write to it **through their own transactional outbox**, which is the whole
+of the guarantee:
+
+```
+BEGIN
+  UPDATE auction SET status = 'Approved' WHERE id = …
+  INSERT INTO outbox (aggregatetype, aggregateid, type, payload)
+       VALUES ('staff-action', 'auction/…', 'StaffActionRecorded', …)
+COMMIT
+```
+
+An auction cannot be approved without the record of who approved it, and a record
+cannot survive a change that was rolled back. The relay — or Debezium; the contract
+is the table, not the publisher — carries the row onto the topic, and
+`EAuction.Audit` consumes it into a database nothing else writes to.
+
+`StaffActionRecorded` is the one event contract in this codebase that is **shared**
+rather than redeclared per service, and it lives in `EAuction.Outbox`. Everywhere
+else the dependency points from the consumer to the producer's own type, because
+each event belongs to a domain. This one does not: it is not an auction fact or a
+participant fact, it is a fact about a person using the platform, and three
+services raise the identical shape. Three copies would drift, and the audit
+service's whole value is that the entries are comparable.
+
+### The actor comes from the token, never from the body
+
+```csharp
+public static StaffActor ActorOf(HttpContext http) => new(
+    http.User.SubjectId() ?? Guid.Empty,
+    RolesOf(http.User),
+    SourceOf(http));
+```
+
+A service that read a name out of a request body would produce an audit trail
+saying whatever the audited person typed. `AuditTrailTests` asserts this directly:
+`POST /auctions` takes a `createdByUserId`, and the entry records the token's
+subject instead.
+
+The **roles** are recorded as the token carried them, not looked up later. An
+auditor asking "was this person entitled to approve that?" needs what was true
+then. `SourceAddress` is the connection's own peer and never `X-Forwarded-For`:
+unless ASP.NET's forwarded-headers middleware has been configured to accept it
+from a known proxy, that header is whatever the client wrote, and an audit trail
+carrying a self-declared address is worse than one carrying none, because it reads
+as evidence.
+
+### What is recorded, and what deliberately is not
+
+The rule is narrow: every state change a member of staff makes, and the few reads
+that hand over something a citizen would not expect staff to have seen.
+
+| Service | Recorded |
+|---|---|
+| auction-admin | all 22 state changes — `CreateAuctionDraft`, the 21 that go through `Mutate`, from `UpdateAuctionDetails` to `SettleAuction` |
+| auction-admin | `ReadClerkSigningKey` — a read, audited because of what it hands over |
+| participant | `VerifyBankGuarantee`, `RevokeEligibility`, `RotateBidderKey` (by staff) |
+| documents | `ReadDocument` / `ReadDocumentMetadata`, for a non-public file opened by someone who is not its owner |
+
+The audited reads earn their place. The clerk's key lets whoever holds it sign a bid for
+any eligible bidder in that auction (§29), so "who collected it, and when" is
+exactly the question asked after a disputed hall auction — and auditing it means
+writing on a `GET`, which is the smaller oddity. A bank guarantee names a citizen's
+bank account; a signed خطاب ترسية is the winner's instrument.
+
+What is **not** recorded is as deliberate:
+
+- **A bidder's own steps.** Buying a booklet, accepting terms, paying a deposit,
+  rotating their own key. One row per bidder per step would be hundreds of
+  thousands of entries for an auction of any size, and the handful that matter
+  would be unfindable among them. The same endpoint — `rotate-key` — is recorded
+  or not depending on who called it.
+- **Public document reads.** The cover image on the catalogue, fetched by every
+  visitor.
+- **An owner reading their own file.** A citizen using the product.
+- **Two staff reads of citizens' details** — `GET /bidders/{id}`, which returns a
+  name, a phone number and an email, and `GET /auctions/{id}/subscriptions`, the
+  clerk's roster, which names every eligible bidder in an auction regardless of
+  the masking setting (§29). These are genuine judgement calls rather than
+  obvious exclusions, and they are the two most likely to be wrong. Both are left
+  out because a portal calls them on every page render — the roster on a clerk's
+  terminal, repeatedly, throughout a hall auction — and a trail dominated by
+  routine lookups is a trail nobody reads. If that turns out to be the wrong call,
+  the fix is a deduplicated or rate-limited entry (one row per staff member per
+  auction per session, say), not simply switching them on.
+- **Refused attempts.** The audit row shares the transaction a rejection rolls
+  back, which is the design and its cost: somebody probing what they are allowed
+  to do is invisible here. The service logs have the 403s and 409s. The
+  alternative — a second transaction for the attempt — buys a trail that a
+  portal's ordinary validation failures would fill.
+
+`AuditTrailTests` and `ParticipantAuditTests` assert the exclusions as well as the
+inclusions, because an exclusion nobody checks becomes an omission.
+
+### The reserve price is the one entry where the obvious summary is wrong
+
+An entry reading "reserve changed from 1,200,000 to 1,400,000" would put السعر
+الاحتياطي — the single figure the outcome of an auction turns on, kept off every
+other topic by D-23 and leaving the auction service only on the ACL-restricted
+`auctions.sealed` — onto a second topic, in a row, in a different service's
+database, for ever.
+
+So `Details` is composed **at the call site**, not derived centrally, because only
+the call site knows what may be said. That site records that the reserve changed
+and by whom, and no figures. The smoke test sets a real reserve through the API and
+then asserts the number appears nowhere on `staff.actions`; `AuditTrailTests`
+asserts the same from the producing side.
+
+### The offset is the primary key
+
+```csharp
+public long Offset { get; private set; }
+```
+
+Not a generated id, and deliberately on three counts.
+
+Kafka delivers at least once and `IEventStream` replays every topic from the start
+on each restart (D-12), so a replay has to be a no-op — with the offset as the key
+it is a unique violation the consumer swallows rather than a second copy of the
+same action. The topic has **one partition**, so the offset is also a total order,
+which is what a hash chain needs; `ControlTopics` fixes the partition count at one
+rather than leaving it to the environment, because that number is part of the
+design and not a throughput choice. And a missing entry becomes visible rather
+than a matter of inference: consecutive offsets are what the trail should hold, so
+`verify` walks them and lists every break.
+
+### The chain attests to what the topic said, not to what the service understood
+
+```
+hash_n = SHA256( offset ‖ len(eventType) ‖ eventType ‖ len(key) ‖ key
+                        ‖ len(payload) ‖ payload ‖ hash_{n-1} )
+```
+
+The frame covers the record **verbatim** — the raw payload, stored as `text` rather
+than `jsonb`, because `jsonb` normalises: it reorders keys and rewrites numbers,
+and a column that quietly rewrote the evidence would make every entry fail
+verification for a reason no auditor could be expected to guess.
+
+Three properties fall out of that choice.
+
+**Length-prefixed, not delimited.** A separator would make the frame ambiguous:
+`Details` is free text from a call site, and whatever character was chosen could
+appear in it. Two different records producing one hash is the one property a chain
+must not have.
+
+**Replica-independent.** Every byte hashed comes from the record; `RecordedAt` is
+outside the frame. Two instances reading the same topic in the same order compute
+identical hashes, so the consumer can adopt another replica's row on a unique
+violation instead of having to reconcile with it. `ChainTests` asserts it with two
+chains fed from clocks three hours apart.
+
+**A malformed record never breaks the chain.** A payload the service cannot parse
+still becomes an entry — `Malformed = true`, the projection empty, the evidence
+intact. Dropping it would leave a hole in the offsets and break every hash after
+it, so an unreadable payload must never cost the chain. A payload that parses but
+is missing a required field counts as malformed too: an entry with an empty actor
+would read as an action nobody performed.
+
+The projected columns — actor, action, subject, details — are **not** hashed, and
+that is not a gap left open: they are a pure function of the payload, so hashing
+them would add nothing. What it does mean is that the stored projection could be
+altered without breaking a link, and the projection is what the API returns and
+filters on. `ProjectionMatchesPayload()` closes that, and `GET /audit/verify`
+checks it on every entry alongside the hashes. This was found by a test that
+expected a tampered `Details` to be caught and watched the chain verify
+perfectly.
+
+### `GET /audit/verify`
+
+Everything else the service exposes is a convenient view of rows in a database,
+which is to say something a sufficiently determined administrator could have
+written. This endpoint recomputes every hash from the payload beside it, checks
+every link against its predecessor, re-derives every projection, and reports the
+first thing that does not follow — with `brokeAt` and a `broke` of `previous-hash`,
+`hash` or `projection`.
+
+It walks the table by offset rather than with `Skip`/`Take`, so it does not
+degrade over a trail with years in it, and takes `from`/`to` to check a page
+seeded from the previous entry's hash.
+
+It reports two things it does **not** fold into `intact`:
+
+```json
+{ "storedThrough": 412, "topicEnd": 413, "missingTail": 1 }
+```
+
+A hash chain cannot see its own truncation: lop entries off the end and what
+remains verifies perfectly. The broker can, because it still holds the records —
+which is why `IEventStream.LatestOffsetAsync` exists (§32) and why these are
+reported separately. An auditor needs to tell "truncated" from "a second behind",
+and only these numbers can. Where the topic's retention has already passed, the
+comparison says nothing, which makes `staff.actions` retention a compliance
+decision rather than a tuning one.
+
+The response has the same shape whether there was anything to check or not, and
+that is not tidiness. The first version returned a shorter object for an empty
+range, which meant the one state most worth shouting about — the table emptied
+while the topic still holds every record — reported `intact: true` and left out
+the two numbers that would have shown it. A test now wipes the table and asserts
+`missingTail`.
+
+### Three locks, and an honest account of each
+
+**No write endpoint exists.** Not "a write that is forbidden": none at all.
+Entries arrive from Kafka and nowhere else, which makes "the trail cannot be
+edited through the API" a property of the code rather than of the authorization
+configuration. The smoke test and `ApiTests` both assert that an auditor's own
+token gets a 404 or 405 from every write verb.
+
+**The table is append-only by trigger.**
+
+```sql
+CREATE TRIGGER audit_entry_append_only
+    BEFORE UPDATE OR DELETE ON audit_entry
+    FOR EACH ROW EXECUTE FUNCTION audit_entry_append_only();
+```
+
+This covers what the code cannot: somebody at a psql prompt with the service's own
+credentials. It is **not** a claim that the trail cannot be altered — a superuser
+can drop the trigger, and nothing in a database the operator controls can stop the
+operator. What it buys is that tampering is no longer a single `UPDATE`: it needs a
+privileged, deliberate, separately auditable act, and the chain still shows it
+afterwards. The tests that prove an alteration is caught have to disable the
+trigger first, which is the honest version of that attack.
+
+**Its own database and its own role.** `eauction_audit` is separate for a
+different reason from the participant service's (PDPL) and the notification
+service's (D-41): separation of duty. The trail has to survive the compromise of
+the services it records, so its credentials reach the audit service and the
+migration Job and nothing else. Reading it needs the `auditor` realm role, which
+grants nothing anywhere else and is held by nobody who operates the platform — an
+auditor who could also approve an auction would be reading their own record. The
+dev realm has exactly one such user, with no other role.
+
+### The document service is the exception, deliberately
+
+It has no outbox and no database, so it publishes its audit record straight onto
+the topic. There is nothing to join: the "change" being recorded is that bytes
+left the building, which has already happened by the time anything could be rolled
+back. So that record is **best-effort** — if the broker is unreachable the read
+still succeeds and the record is lost to the topic, with a log line as the
+remaining copy.
+
+That is the right way round. A document service that refused to hand a winner
+their award letter because Kafka was unavailable would be a worse service *and* a
+worse audit story, because the pressure would be to turn the auditing off.
+`DocumentAuditTests` asserts the degradation with a stream that refuses everything.
+
+### The consumer stops rather than writing out of order
+
+Every other consumer here logs and carries on, because a notice not sent or a
+payment not matched is a loss confined to that record. Here the next record's hash
+is built on this one, so carrying on would write a chain with a hole in it that
+verifies as tampering for ever:
+
+```
+LogCritical: Audit: failed to record offset N. The consumer is stopping rather
+than writing a record out of order — the trail is hash-chained and a gap cannot
+be repaired. Records are still on the topic and will be read when this is fixed.
+```
+
+A stalled audit consumer is recoverable; a corrupted trail is not. The same
+reasoning sets `audit.replicas: 1` and `autoscaling.enabled: false` in the chart —
+not for throughput, which is a few records per auction, but because scaling out a
+hash-chained writer on load is how a trail acquires a gap.
+
+**One thing deliberately does not stop it**: an offset that jumps forward, meaning
+records existed between the last one written and this one that the service will
+never see — the topic's retention passed while it was down, most likely. The first
+version threw there, on the reasoning above. That was wrong: the cause of a jump is
+usually permanent, so a crash loop meant the trail never recorded anything again,
+and anyone who could arrange a retention lapse could switch auditing off. It now
+logs critically and carries on, **on the same chain**. Nothing untrue is claimed by
+that — the hashes still follow over everything that was written — and the hole in
+the offsets is what shows the loss: `verify` lists it as a gap and reports the
+trail as not intact. A permanent, visible, bounded gap beats a working chain that
+stops growing.
+
+It is also why the projected columns are unbounded `text` rather than capped. A
+length this service chose could be exceeded by a producer it does not control — a
+rejection reason is 2,000 characters in the auction service — and the result would
+be a `22001` on insert, which stops the consumer. Anyone who can produce to
+`staff.actions` can already put anything in `Payload`, so capping the projection
+beside it buys nothing and risks the one failure mode that costs the trail.
+
+A restart is O(1): the chain resumes from the last entry's stored hash rather than
+recomputing a trail that in a few years is the record of every auction the
+municipality has held. Whether the stored chain actually holds is a question for
+`GET /audit/verify`, asked when an auditor asks it and not on every pod start.
+
+### What the tests cover
+
+**38 tests** in `tests/EAuction.Audit.Tests`, plus the producing side in the three
+services that write to the topic — 25 more across `AuditTrailTests`,
+`ParticipantAuditTests`, `DocumentAuditTests` and `ControlTopicsTests`.
+
+| Claim | Where |
+|---|---|
+| The first entry chains onto the zero head; each carries its predecessor's hash | `ChainTests` |
+| An entry's hash is recomputable from the payload stored beside it | `ChainTests` |
+| Two instances with clocks three hours apart compute identical hashes | `ChainTests` |
+| One byte of a payload, or the offset, changes the hash | `ChainTests` |
+| Two records differing only in where the fields divide hash differently | `ChainTests` |
+| An unparseable payload is recorded and still chains; so is valid JSON missing a required field | `ChainTests` |
+| A resumed chain continues where the stored one stopped | `ChainTests` |
+| Each record becomes an entry keyed on its offset | `ConsumerTests` |
+| A restart replays the topic and writes nothing twice — the same rows, hashes included | `ConsumerTests` |
+| A restart continues the chain, including records published while it was down | `ConsumerTests` |
+| Two consumers on one database produce one unbroken chain | `ConsumerTests` |
+| `UPDATE` and `DELETE` on the trail are refused by the database | `ConsumerTests` |
+| An offset jump becomes a visible gap rather than a dead service | `ConsumerTests` |
+| Admin, committee, clerk and bidder tokens are all refused | `ApiTests` |
+| No write route exists for any verb, even for an auditor | `ApiTests` |
+| The trail reads newest first by offset, not by timestamp | `ApiTests` |
+| Filters narrow by actor, action and subject prefix | `ApiTests` |
+| An altered payload is caught as `hash`; a removed entry as a gap *and* `previous-hash` | `ApiTests` |
+| A rewritten `Details` or relabelled `Action` is caught as `projection` | `ApiTests` |
+| A truncated tail verifies, and shows against `topicEnd` instead | `ApiTests` |
+| A trail wiped entirely still reports `missingTail` against the topic | `ApiTests` |
+| A bounded verify checks a page seeded from the previous hash | `ApiTests` |
+| The actor is the token's subject, not the request body's | `AuditTrailTests` |
+| The reserve change is recorded without the figure, anywhere in the row | `AuditTrailTests` |
+| An edit that leaves the reserve alone says nothing about it | `AuditTrailTests` |
+| The award workflow's trail names the committee member, not the administrator | `AuditTrailTests` |
+| A rejected change leaves no entry | `AuditTrailTests`, `ParticipantAuditTests` |
+| Collecting the hall's key is recorded; a refused attempt is not | `AuditTrailTests` |
+| A staff action routes to `staff.actions` from both producers' routers | `AuditTrailTests`, `ParticipantAuditTests` |
+| A bidder's own steps are not staff actions; the same endpoint by staff is | `ParticipantAuditTests` |
+| The two staff lookups left out stay out — the exclusion is pinned, not assumed | `ParticipantAuditTests` |
+| A staff read of someone else's non-public file is recorded | `DocumentAuditTests` |
+| An owner's own read, a public read and a refused read are not | `DocumentAuditTests` |
+| The read still succeeds when the audit topic refuses it | `DocumentAuditTests` |
+
+Section 13 of the smoke walk-through runs the whole of it against real Keycloak,
+real Kafka and real Postgres — 82 checks, all passing. The staff actions of the
+preceding twelve sections arrive on the topic, four operating roles are refused,
+the write verbs are absent, the approval names the committee member who gave it,
+the reserve figure appears nowhere, the clerk's key collection is recorded, three
+plots leave three entries, and the chain verifies over all 26 of them.
+
+### Still not verified
+
+- **Never run with Debezium instead of the polling relay.** The same gap as every
+  other producer here (§16), and the audit trail is the one place where the
+  ordering guarantee matters most: the chain is built in offset order, so a
+  publisher that reordered rows within an aggregate would produce a trail whose
+  hashes are fine and whose sequence is a lie. The EventRouter SMT preserves
+  per-aggregate order and every staff action shares an aggregate id only with
+  actions on the same subject, so the risk is bounded — but it is unexercised.
+- **Retention is undecided.** A government land-sale record is probably kept for
+  years or decades, which is a policy question rather than a technical one, and
+  `missingTail` is only meaningful as far back as the topic reaches.
+- **No portal.** An auditor reaches the trail with a token and `curl`. The compose
+  stack gives the service no browser origin at all; the chart shares one
+  `config.cors.allowedOrigins` across every service, so there it does inherit the
+  portals' origins. That is harmless — CORS governs what a browser may do with a
+  response, and no page on either portal calls this service — but it is not the
+  same thing as allowing nothing, and it is worth separating if a portal is ever
+  built for the trail.
+- **The append-only trigger is not tested under a non-owner role.** It fires for
+  every row regardless of who is connected, but the stronger arrangement — a
+  Postgres role with `INSERT` and `SELECT` and no `UPDATE`/`DELETE`, so the service
+  could not alter the trail even with the trigger gone — needs role names the
+  deployment has not chosen yet.
+- **One partition is a ceiling nobody has measured.** A few records per auction
+  makes it obviously sufficient and the hash chain makes it necessary; if the
+  volume ever argues otherwise, the answer is a chain per partition and a
+  verification that spans them, not more partitions.

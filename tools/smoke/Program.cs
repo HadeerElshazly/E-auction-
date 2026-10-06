@@ -23,6 +23,7 @@ var catcherUrl = Env("SMOKE_CATCHER_URL", "http://localhost:5103");
 var bffUrl = Env("SMOKE_BFF_URL", "http://localhost:5105");
 var documentsUrl = Env("SMOKE_DOCUMENTS_URL", "http://localhost:5107");
 var notificationsUrl = Env("SMOKE_NOTIFICATIONS_URL", "http://localhost:5108");
+var auditUrl = Env("SMOKE_AUDIT_URL", "http://localhost:5109");
 var bootstrap = Env("SMOKE_KAFKA", "127.0.0.1:9092");
 var password = Env("SMOKE_PASSWORD", "dev-only-password");
 
@@ -51,7 +52,7 @@ using var watcher = new TopicWatcher(bootstrap, new[]
 {
     Topics.Upcoming, Topics.Sealed, Topics.Participants,
     Topics.Lifecycle, Topics.CurrentWinner, Topics.BidsRejected,
-    Topics.ParticipantPayments, Topics.Settlements
+    Topics.ParticipantPayments, Topics.Settlements, Topics.StaffActions
 });
 
 try
@@ -1090,6 +1091,124 @@ try
             $"{hallAmount / 100:N0} SAR — the same الترسية workflow as online");
     else
         n.Fail("the committee is offered the hall's candidate", $"{hallWinner} at {hallAmount}");
+
+    // -----------------------------------------------------------------------
+    n.Section("13. سجل المراجعة — who did all of that");
+    // -----------------------------------------------------------------------
+    //
+    // Everything above was done by four members of staff, and this is the record of
+    // it (D-44). The service that performed each act does not hold that record: the
+    // row went into its own outbox in the same transaction as the change, onto
+    // staff.actions, and into a service with its own database and no endpoint that
+    // writes.
+
+    await watcher.WaitForAsync(
+        // The event type as a literal, like the others here: the smoke test is a
+        // client of the wire contract, and a nameof() would follow a rename that
+        // broke every real consumer.
+        Topics.StaffActions, "StaffActionRecorded", auctionId, timeout: TimeSpan.FromSeconds(20));
+    n.Step($"staff actions reach {Topics.StaffActions}", "through the same outbox as every other event");
+
+    var auditorToken = await Keycloak.TokenAsync(
+        http, issuer, "admin-web", "auditor-user", password);
+    var auditor = new Caller(http, auditUrl, auditorToken, "auditor");
+
+    // The separation that makes the trail worth keeping. Every role that can change
+    // something is refused, including the committee's — an auditor who could also
+    // approve an auction would be reading their own record.
+    var refused = new List<string>();
+    foreach (var (role, token) in new[]
+             {
+                 ("auction-admin", adminToken),
+                 ("award-committee", committeeToken),
+                 ("clerk", clerkToken),
+                 ("sara", saraToken),
+             })
+    {
+        var (code, _) = await new Caller(http, auditUrl, token, role).TryGetAsync("/audit");
+        if (code != System.Net.HttpStatusCode.Forbidden) refused.Add($"{role}={(int)code}");
+    }
+
+    if (refused.Count == 0)
+        n.Step("nobody who operates the platform can read the trail",
+            "403 for admin, committee, clerk and bidder alike");
+    else
+        n.Fail("nobody who operates the platform can read the trail", string.Join(", ", refused));
+
+    // Writing is not forbidden, it is absent. Entries arrive from Kafka and nowhere
+    // else, so "the trail cannot be edited through the API" is a property of the
+    // code rather than of a policy somebody could relax.
+    var (writeCode, _) = await auditor.TryPostAsync("/audit", new { action = "invented" });
+    if (writeCode is System.Net.HttpStatusCode.NotFound
+                  or System.Net.HttpStatusCode.MethodNotAllowed)
+        n.Step("the trail has no write endpoint at all", $"{(int)writeCode} even for an auditor");
+    else
+        n.Fail("the trail has no write endpoint at all", $"got {(int)writeCode}");
+
+    var trail = await WaitForTrailAsync(auditor, auctionId, "ApproveAuction");
+
+    // A lookup, not a dictionary keyed on the action: this auction has three plots,
+    // so AddPlot appears three times. The first version keyed a dictionary and threw
+    // on the second one — a reminder that a trail is a log, not a record per verb.
+    var entries = trail.GetProperty("items").EnumerateArray().ToList();
+    JsonElement Entry(string action) =>
+        entries.First(i => i.GetProperty("action").GetString() == action);
+
+    var approval = Entry("ApproveAuction");
+    if (approval.GetProperty("actorSubject").GetGuid() == committeeUser
+        && approval.GetProperty("actorRoles").GetString()!.Contains("award-committee"))
+        n.Step("the approval names the committee member who gave it",
+            "the token's subject, and the roles it carried at the time");
+    else
+        n.Fail("the approval names the committee member who gave it", approval.ToString());
+
+    // The reserve price, end to end. It was set through the API minutes ago, it is
+    // on auctions.sealed where the processor reads it, and the one place a summary
+    // of "an administrator changed the reserve" could have leaked it is here.
+    var figure = reserve.ToString();
+    var leaked = entries
+        .Where(i => i.GetProperty("payload").GetString()!.Contains(figure))
+        .ToList();
+
+    var reserveEntry = Entry("UpdateAuctionDetails");
+    if (leaked.Count == 0
+        && reserveEntry.GetProperty("details").GetString()!.Contains("reserve price was changed"))
+        n.Step("the trail records that the reserve changed, and not to what",
+            $"{reserve / 100:N0} SAR appears nowhere on {Topics.StaffActions} — D-23 holds here too");
+    else
+        n.Fail("the trail records that the reserve changed, and not to what",
+            leaked.Count > 0 ? $"{leaked.Count} entries carry the figure" : reserveEntry.ToString());
+
+    // The hall's signing key is the one read in the whole platform that is audited,
+    // because whoever holds it can sign a bid for anyone in the room (§29).
+    var hallTrail = await WaitForTrailAsync(auditor, hallId, "ReadClerkSigningKey");
+    var collection = hallTrail.GetProperty("items").EnumerateArray()
+        .First(i => i.GetProperty("action").GetString() == "ReadClerkSigningKey");
+
+    // Three plots on the online auction means three AddPlot entries, and the trail
+    // keeps all three: every act is a record, not a flag per verb.
+    if (entries.Count(i => i.GetProperty("action").GetString() == "AddPlot") == 3)
+        n.Step("every act is its own entry", "three plots added, three entries");
+    else
+        n.Fail("every act is its own entry",
+            $"{entries.Count(i => i.GetProperty("action").GetString() == "AddPlot")} AddPlot entries");
+
+    if (collection.GetProperty("actorSubject").GetGuid() == clerk)
+        n.Step("collecting the hall's signing key is recorded", $"clerk {clerk}");
+    else
+        n.Fail("collecting the hall's signing key is recorded", collection.ToString());
+
+    // And the chain. Every hash recomputed from the payload stored beside it, every
+    // link checked against its predecessor, every projected column checked against
+    // the payload it came from — which is what makes an altered entry a fact rather
+    // than a suspicion.
+    var verified = await auditor.GetAsync("/audit/verify");
+    if (verified.GetProperty("intact").GetBoolean())
+        n.Step("the chain verifies",
+            $"{verified.GetProperty("checkedEntries").GetInt64()} entries, head "
+            + $"{verified.GetProperty("head").GetString()![..16]}…");
+    else
+        n.Fail("the chain verifies", verified.ToString());
 }
 catch (SmokeException e)
 {
@@ -1297,6 +1416,34 @@ static async Task WaitForTermsAsync(Caller who, Guid auctionId, Guid bidderId)
     throw new SmokeException(
         $"the participant service never learned auction {auctionId}; is it consuming "
         + Topics.Upcoming + "?");
+}
+
+/// <summary>
+/// Waits until the audit service has written an action for an auction.
+///
+/// It is a Kafka consumer behind an outbox relay, so an entry arrives a moment
+/// after the thing it records rather than with it. Waited for rather than slept
+/// through — and filtered by the action, because the trail already holds every
+/// earlier step of this auction and "something is there" would pass before the step
+/// being checked had arrived.
+/// </summary>
+static async Task<JsonElement> WaitForTrailAsync(Caller auditor, Guid auctionId, string action)
+{
+    for (var i = 0; i < 60; i++)
+    {
+        var page = await auditor.GetAsync(
+            $"/audit?subject=auction/{auctionId}&take=100");
+
+        if (page.GetProperty("items").EnumerateArray()
+            .Any(item => item.GetProperty("action").GetString() == action))
+            return page;
+
+        await Task.Delay(500);
+    }
+
+    throw new SmokeException(
+        $"the audit service never recorded {action} for {auctionId}; is it consuming "
+        + Topics.StaffActions + "?");
 }
 
 static async Task<(Guid Bidder, long Amount)> WaitForCandidateAsync(Caller committee, Guid auctionId)

@@ -124,6 +124,11 @@ public static class JwtSetup
             auth.AddPolicy(Policies.AwardCommittee, p => p.RequireRole(Roles.AwardCommittee));
             auth.AddPolicy(Policies.Operator, p => p.RequireRole(Roles.Operator));
 
+            // No step-up, and no other role folded in. Reading the audit trail
+            // changes nothing, and an auditor who had to be an administrator to
+            // reach it would be reading their own record.
+            auth.AddPolicy(Policies.Auditor, p => p.RequireRole(Roles.Auditor));
+
             // Either role reaches the catcher; the catcher then decides which one
             // this auction's channel actually permits.
             auth.AddPolicy(Policies.SubmitsBids,

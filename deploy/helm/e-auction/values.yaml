@@ -465,6 +465,85 @@ notifications:
     - name: ASPNETCORE_URLS
       value: http://+:8080
 
+# The staff audit trail (D-44).
+#
+# A service of its own because the service that performs an action must not own the
+# only record of it, and a database of its own because the trail has to survive the
+# compromise of the services it records — it must not sit in a schema whose
+# credentials auction-admin or the participant service hold.
+#
+# Read only by the `auditor` realm role, which is deliberately held by nobody who
+# operates the platform. It has no endpoint that writes: entries arrive from Kafka
+# and nowhere else, which makes "the trail cannot be edited through the API" a
+# property of the code rather than of this file.
+audit:
+  enabled: true
+  image: e-auction/audit
+
+  # One instance, and here that is a correctness statement rather than a shrug.
+  #
+  # Two is safe: the offset is the primary key and every byte hashed comes from the
+  # record, so two replicas reading the same topic compute the same hashes and the
+  # loser of a race swallows a unique violation. But a second replica buys nothing —
+  # the work is a few records per auction — while doubling the number of processes
+  # that can be mid-append when something goes wrong. Raise it for availability of
+  # the read API, not for throughput.
+  replicas: 1
+  port: 8080
+
+  # Internal, and more firmly than the others. No portal reads the trail; an
+  # auditor reaches it through the API gateway, which is where the `auditor` role
+  # should also be checked a second time. Exposing this host publicly would put the
+  # record of every staff action behind one role claim.
+  #
+  # Note that config.cors.allowedOrigins is shared by every service here, so the
+  # portals' origins reach this one too. That is harmless — CORS governs what a
+  # browser may do with a response, and no page on either portal calls this
+  # service — but it is not the same thing as allowing nothing, which is what the
+  # compose stack does. Give this service its own origin list if a portal is ever
+  # built for it.
+  expose:
+    enabled: false
+    host: ""
+    path: /
+    annotations: {}
+    tls:
+      enabled: true
+      secretName: ""
+
+  # Never. Scaling out a hash-chained writer on load is how a trail acquires a gap.
+  autoscaling:
+    enabled: false
+
+  podDisruptionBudget:
+    enabled: false
+
+  spreadAcrossNodes: false
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+
+  # The one credential that matters here, and the one that must not be shared with
+  # the services this trail records:
+  #
+  #   secretEnv:
+  #     - name: ConnectionStrings__Audit
+  #       secretName: eauction-audit-db
+  #       secretKey: connection-string
+  secretEnv: []
+
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+
 # The files: كراسة الشروط, the cover image, bank guarantees and award letters.
 #
 # Holds no database. Everything it knows about a document rides on the object as S3

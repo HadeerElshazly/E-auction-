@@ -102,7 +102,10 @@ else
         new TopicSpecification
         {
             Name = t.Name,
-            NumPartitions = partitions,
+
+            // The topic's own number where the design fixes it, otherwise the
+            // environment's. See ControlTopic.Partitions.
+            NumPartitions = t.Partitions ?? partitions,
             ReplicationFactor = replication,
             Configs = Configs(t.Shape, minIsr)
         }).ToList();

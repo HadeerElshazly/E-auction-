@@ -37,6 +37,10 @@
       {
         "name": "operator",
         "description": "Floor operator entering bids for an on-site auction"
+      },
+      {
+        "name": "auditor",
+        "description": "مراجع — reads the staff audit trail, and nothing else. Deliberately held by nobody who operates the platform: an auditor who could also approve an auction would be reading their own record."
       }
     ]
   },
@@ -295,6 +299,24 @@
       ],
       "realmRoles": [
         "award-committee"
+      ]
+    },
+    {
+      "username": "auditor-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Internal",
+      "lastName": "Auditor",
+      "email": "auditor@example.sa",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "auditor"
       ]
     },
     {

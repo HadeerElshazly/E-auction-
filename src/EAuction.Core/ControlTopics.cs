@@ -26,7 +26,16 @@ public enum TopicShape
     EventLog
 }
 
-public sealed record ControlTopic(string Name, TopicShape Shape, string Why);
+/// <summary>
+/// One control topic, and everything the provisioning tool needs to create it.
+///
+/// <paramref name="Partitions"/> is null for almost all of them, meaning "whatever
+/// the tool was told": partition count is a throughput decision and belongs to the
+/// environment. It is set only where the number is part of the design rather than a
+/// tuning choice — <see cref="Topics.StaffActions"/> is hash-chained and a chain
+/// needs a total order, which more than one partition does not give.
+/// </summary>
+public sealed record ControlTopic(string Name, TopicShape Shape, string Why, int? Partitions = null);
 
 public static class ControlTopics
 {
@@ -63,6 +72,12 @@ public static class ControlTopics
             "What the payment service did with each bidder's money. The payment "
             + "service replays it on start to know what it has already charged, so "
             + "losing it means charging every bidder a second time."),
+
+        new(Topics.StaffActions, TopicShape.EventLog,
+            "Every consequential staff action, hash-chained by the audit service. "
+            + "One partition, because a chain needs a total order; compaction would "
+            + "erase the history that is the entire point.",
+            Partitions: 1),
 
         new(Topics.ParticipantPayments, TopicShape.EventLog,
             "Requests for the booklet fee and the deposit. The payment service consumes "

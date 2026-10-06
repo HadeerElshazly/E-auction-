@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using EAuction.Core;
 using EAuction.Documents;
+using EAuction.Outbox;
 using EAuction.Security;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -56,6 +58,42 @@ if (string.IsNullOrWhiteSpace(grantKeyHex))
     grantKeyHex = Convert.ToHexString(DocumentGrants.NewKey());
 }
 var grantKey = Convert.FromHexString(grantKeyHex);
+
+// --- the audit channel -----------------------------------------------------
+//
+// Straight onto the topic, with no outbox and no transaction, and that is the one
+// asymmetry in the audit trail worth being plain about.
+//
+// The other two producers write their audit row in the same transaction as the
+// change it describes, so neither can exist without the other (D-44). There is
+// nothing here to join: this service keeps no database, and the "change" being
+// recorded is that bytes left the building — which has already happened by the
+// time anything could be rolled back. So a reach-record here is best-effort: if
+// the broker is down the read still succeeds and the record is lost.
+//
+// That is the right way round. A document service that refused to hand a winner
+// their award letter because Kafka was unavailable would be a worse service and a
+// worse audit story, since the pressure would be to turn the auditing off.
+var auditBootstrap = builder.Configuration["Kafka:BootstrapServers"];
+
+if (string.IsNullOrWhiteSpace(auditBootstrap) && builder.Environment.IsProduction())
+    throw new InvalidOperationException(
+        "Kafka:BootstrapServers is required. Without it a staff member reading a "
+        + "citizen's bank guarantee leaves no record anywhere.");
+
+// Registered rather than captured in a local, which is how the other services do
+// it and matters here for one more reason: it is the seam a test substitutes to
+// assert that a staff read of someone else's bank guarantee actually produces a
+// record. A dependency only reachable through a closure is a dependency nothing
+// can check.
+builder.Services.AddSingleton<IEventStream>(
+    string.IsNullOrWhiteSpace(auditBootstrap)
+        ? new InMemoryEventStream()
+        : new KafkaEventStream(new KafkaEventStreamOptions
+        {
+            BootstrapServers = auditBootstrap,
+            ConsumerGroup = "documents"
+        }));
 
 // Guards against an upload that would fill the disk. A كراسة الشروط with site
 // plans in it is genuinely tens of megabytes, so this is generous; it is a
@@ -167,7 +205,8 @@ app.MapPost("/documents", async (
 // --- read ------------------------------------------------------------------
 
 app.MapGet("/documents/{id:guid}", async (
-    Guid id, string? grant, HttpContext http, IDocumentStore s, CancellationToken ct) =>
+    Guid id, string? grant, HttpContext http, IDocumentStore s,
+    IEventStream audit, ILoggerFactory loggers, CancellationToken ct) =>
 {
     var found = await s.GetAsync(id, ct);
     if (found is null) return Results.NotFound();
@@ -185,6 +224,8 @@ app.MapGet("/documents/{id:guid}", async (
     }
 
     var metadata = found.Metadata;
+
+    await AuditReadAsync(audit, loggers, metadata, http, "ReadDocument", ct);
 
     // The hash on the way out, so a caller can check the bytes they received
     // against what was stored without a second request.
@@ -208,14 +249,20 @@ app.MapGet("/documents/{id:guid}", async (
 }).AllowAnonymous();
 
 app.MapGet("/documents/{id:guid}/metadata", async (
-    Guid id, string? grant, HttpContext http, IDocumentStore s, CancellationToken ct) =>
+    Guid id, string? grant, HttpContext http, IDocumentStore s,
+    IEventStream audit, ILoggerFactory loggers, CancellationToken ct) =>
 {
     var metadata = await s.HeadAsync(id, ct);
     if (metadata is null) return Results.NotFound();
 
-    return MayRead(grantKey, metadata, grant, http)
-        ? Results.Ok(metadata)
-        : Results.NotFound();
+    if (!MayRead(grantKey, metadata, grant, http)) return Results.NotFound();
+
+    // Audited too. It carries the uploader's subject, the file name and the size,
+    // which is enough to confirm that a named citizen filed a bank guarantee —
+    // less than the bytes, and not nothing.
+    await AuditReadAsync(audit, loggers, metadata, http, "ReadDocumentMetadata", ct);
+
+    return Results.Ok(metadata);
 }).AllowAnonymous();
 
 app.Run();
@@ -254,6 +301,62 @@ static bool MayRead(
         // administrator's. An award letter is the winner's.
         _ => false,
     };
+}
+
+/// <summary>
+/// Records a staff read of something that is not theirs and not public.
+///
+/// Three exclusions, and each of them is the difference between a trail somebody
+/// reads and a trail nobody does. A Public document is a cover image on the
+/// catalogue, fetched by every visitor. An owner reading their own file is a
+/// citizen using the product. And an anonymous caller cannot be named, so there is
+/// nothing to record about them beyond an address the access log already has.
+///
+/// What is left is the case the trail exists for: a member of staff, or a bidder
+/// holding a grant, opening a document belonging to someone else — a bank
+/// guarantee, a signed award letter, a terms booklet.
+/// </summary>
+static async Task AuditReadAsync(
+    IEventStream stream, ILoggerFactory loggers, DocumentMetadata metadata,
+    HttpContext http, string action, CancellationToken ct)
+{
+    if (metadata.Access == DocumentAccess.Public) return;
+
+    var subject = http.User.SubjectId();
+    if (subject is null || subject == metadata.OwnerSubject) return;
+
+    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var entry = StaffActionRecorded.By(
+        who, roles, source, action, AuditSubject.Document(metadata.Id),
+        $"{metadata.Access} document owned by {metadata.OwnerSubject}, {metadata.FileName}.");
+
+    var logger = loggers.CreateLogger("EAuction.Documents.Audit");
+
+    // The log line first, and unconditionally. It is not a fallback for the topic
+    // being unavailable — it is the record that exists even when this service
+    // cannot reach a broker at all, which is the state a developer runs it in.
+    logger.LogInformation(
+        "Document audit: {Actor} {Action} {Document} ({Access}, owner {Owner})",
+        who, action, metadata.Id, metadata.Access, metadata.OwnerSubject);
+
+    try
+    {
+        await stream.PublishAsync(
+            Topics.StaffActions, entry.AggregateId,
+            System.Text.Json.JsonSerializer.Serialize(
+                entry, new System.Text.Json.JsonSerializerOptions(
+                    System.Text.Json.JsonSerializerDefaults.Web)),
+            nameof(StaffActionRecorded), ct);
+    }
+    catch (Exception e)
+    {
+        // Never fails the read. See the note where auditStream is built: refusing a
+        // winner their award letter because the audit topic is unreachable makes
+        // both the service and the audit story worse.
+        logger.LogError(
+            e, "Document audit: could not publish the read of {Document} to {Topic}.",
+            metadata.Id, Topics.StaffActions);
+    }
 }
 
 static async Task<string> HashingCopyAsync(Stream source, Stream destination, CancellationToken ct)

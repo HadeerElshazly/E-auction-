@@ -136,6 +136,22 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
+            {{/*
+            The audit database's credentials reach this Job and the audit service,
+            and deliberately nothing else: the trail has to survive the compromise
+            of the services it records (D-44).
+            */}}
+            {{- if .Values.audit.enabled }}
+            {{- range .Values.audit.secretEnv }}
+            {{- if eq .name "ConnectionStrings__Audit" }}
+            - name: ConnectionStrings__Audit
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.provision.resources | nindent 12 }}
           volumeMounts:

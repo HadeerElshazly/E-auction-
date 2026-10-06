@@ -127,7 +127,7 @@ SERVICES_ONLY=0
 for a in "$@"; do [ "$a" = "--services-only" ] && SERVICES_ONLY=1; done
 
 PSQL="postgresql://eauction:eauction@localhost/postgres"
-for db in eauction_admin eauction_participant eauction_notifications; do
+for db in eauction_admin eauction_participant eauction_notifications eauction_audit; do
   if [ "$KEEP_DATA" = 0 ]; then
     psql -qtAX "$PSQL" -c "DROP DATABASE IF EXISTS $db WITH (FORCE)" >/dev/null
   fi
@@ -161,7 +161,8 @@ say "Applying migrations…"
 dotnet "$REPO/tools/migrate/bin/Release/net8.0/EAuction.Migrate.dll" \
   --admin "$PG;Database=eauction_admin" \
   --participant "$PG;Database=eauction_participant" \
-  --notifications "$PG;Database=eauction_notifications" || die "migrations failed"
+  --notifications "$PG;Database=eauction_notifications" \
+  --audit "$PG;Database=eauction_audit" || die "migrations failed"
 
 # --- services --------------------------------------------------------------
 
@@ -254,10 +255,16 @@ start notifications EAuction.Notifications 5108 \
   ConnectionStrings__Notifications="$PG;Database=eauction_notifications" \
   Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
+# Who did what (D-44). No portal reads it, so it gets no browser origin: the
+# walk-through reaches it with an auditor's token over the API, which is the only
+# way in that exists today.
+start audit EAuction.Audit 5109 \
+  ConnectionStrings__Audit="$PG;Database=eauction_audit"
+
 # --- wait for health -------------------------------------------------------
 
 for probe in "auction-admin 5101" "participant 5102" "query-bff 5105" "documents 5107" \
-             "notifications 5108"; do
+             "notifications 5108" "audit 5109"; do
   set -- $probe
   for _ in $(seq 1 60); do
     curl -fsS --noproxy "*" -o /dev/null "http://127.0.0.1:$2/health/ready" 2>/dev/null && break
@@ -315,6 +322,7 @@ SMOKE_ADMIN_URL=http://127.0.0.1:5101 \
 SMOKE_PARTICIPANT_URL=http://127.0.0.1:5102 \
 SMOKE_CATCHER_URL=http://127.0.0.1:5103 \
 SMOKE_BFF_URL=http://127.0.0.1:5105 \
+SMOKE_AUDIT_URL=http://127.0.0.1:5109 \
 NO_PROXY='*' no_proxy='*' \
   dotnet "$REPO/tools/smoke/bin/Release/net8.0/EAuction.Smoke.dll"
 RESULT=$?

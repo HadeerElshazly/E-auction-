@@ -1,10 +1,11 @@
+using EAuction.Audit.Persistence;
 using EAuction.AuctionAdmin.Persistence;
 using EAuction.Notifications.Persistence;
 using EAuction.Participant.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 // ---------------------------------------------------------------------------
-// Applies the EF Core migrations for both stateful services.
+// Applies the EF Core migrations for every stateful service.
 //
 // Deliberately not done by the services at startup. Several replicas starting at
 // once would each try to migrate, and a schema change would run while the old
@@ -14,10 +15,12 @@ using Microsoft.EntityFrameworkCore;
 //   dotnet EAuction.Migrate.dll \
 //     --admin "Host=…;Database=eauction_admin;Username=…;Password=…" \
 //     --participant "Host=…;Database=eauction_participant;Username=…;Password=…" \
-//     --notifications "Host=…;Database=eauction_notifications;Username=…;Password=…"
+//     --notifications "Host=…;Database=eauction_notifications;Username=…;Password=…" \
+//     --audit "Host=…;Database=eauction_audit;Username=…;Password=…"
 //
-// Either connection string may also come from ConnectionStrings__Admin /
-// ConnectionStrings__Participant, which is how the chart passes them.
+// Any connection string may also come from ConnectionStrings__Admin /
+// ConnectionStrings__Participant / ConnectionStrings__Notifications /
+// ConnectionStrings__Audit, which is how the chart passes them.
 // ---------------------------------------------------------------------------
 
 var args_ = args;
@@ -33,13 +36,14 @@ var participant = Arg("participant")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Participant");
 var notifications = Arg("notifications")
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__Notifications");
+var audit = Arg("audit") ?? Environment.GetEnvironmentVariable("ConnectionStrings__Audit");
 
-if (admin is null && participant is null && notifications is null)
+if (admin is null && participant is null && notifications is null && audit is null)
 {
     Console.Error.WriteLine(
-        "Nothing to do. Pass --admin, --participant and/or --notifications, or set "
-        + "ConnectionStrings__Admin / ConnectionStrings__Participant / "
-        + "ConnectionStrings__Notifications.");
+        "Nothing to do. Pass --admin, --participant, --notifications and/or --audit, "
+        + "or set ConnectionStrings__Admin / ConnectionStrings__Participant / "
+        + "ConnectionStrings__Notifications / ConnectionStrings__Audit.");
     return 2;
 }
 
@@ -56,6 +60,10 @@ if (participant is not null)
 if (notifications is not null)
     failed |= !await Apply("notifications", new DbContextOptionsBuilder<NotificationsDbContext>()
         .UseNpgsql(notifications).Options, o => new NotificationsDbContext(o));
+
+if (audit is not null)
+    failed |= !await Apply("audit", new DbContextOptionsBuilder<AuditDbContext>()
+        .UseNpgsql(audit).Options, o => new AuditDbContext(o));
 
 return failed ? 1 : 0;
 

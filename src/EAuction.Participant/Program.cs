@@ -292,7 +292,11 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/
     Mutate(f, auctionId, bidderId, ct,
         (s, bidder, terms) => s.VerifyBankGuarantee(
             r.VerifiedByUserId, bidder, terms, DateTimeOffset.UtcNow),
-        http, staffAction: true))
+        http, staffAction: true, audit: "VerifyBankGuarantee",
+        // Accepting a guarantee is accepting a bank's paper in place of money, and
+        // it makes a citizen eligible to bid on state land. If one turns out to
+        // have been forged, this row is how anyone finds out who accepted it.
+        details: "A bank guarantee was accepted in place of the deposit."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/revoke", (
@@ -300,14 +304,19 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/revoke", (
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
         (s, bidder, terms) => s.Revoke(r.Reason, bidder, terms, DateTimeOffset.UtcNow),
-        http, staffAction: true))
+        http, staffAction: true, audit: "RevokeEligibility", details: r.Reason))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key", (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct, (s, bidder, terms) => s.RotateKey(bidder, terms), http,
-        staffAction: http.User.IsInRole(Roles.AuctionAdmin)))
+        staffAction: http.User.IsInRole(Roles.AuctionAdmin),
+        // Recorded only when staff did it. A bidder rotating their own key is a
+        // bidder using a feature; an administrator rotating someone else's
+        // invalidates the key that bidder is holding, which is a thing done to a
+        // person and worth a name against it.
+        audit: http.User.IsInRole(Roles.AuctionAdmin) ? "RotateBidderKey" : null))
     .RequireAuthorization();
 
 // The roster a clerk works from: who in the room is allowed to bid (§29).
@@ -433,11 +442,23 @@ app.Run();
 
 // ---------------------------------------------------------------------------
 
+/// <param name="audit">
+/// The name this appears under in the audit trail, for the steps a member of staff
+/// performs on someone else's subscription. Null for a bidder acting on their own:
+/// a citizen buying a booklet is not a staff action, and a trail that recorded one
+/// row per bidder per step would bury the handful of rows that matter.
+/// </param>
+/// <remarks>
+/// Like the auction service's equivalent, only successful changes are recorded —
+/// the audit row shares the transaction that a rejection rolls back, which is the
+/// design (D-44) and its cost.
+/// </remarks>
 static async Task<IResult> Mutate(
     IDbContextFactory<ParticipantDbContext> factory,
     Guid auctionId, Guid bidderId, CancellationToken ct,
     Action<Subscription, Bidder, AuctionTerms> change,
-    HttpContext? http = null, bool staffAction = false, bool accepted = false)
+    HttpContext? http = null, bool staffAction = false, bool accepted = false,
+    string? audit = null, string? details = null)
 {
     // A bidder may act only on their own subscription. Staff actions —
     // verifying a guarantee, revoking — are gated by role instead, because
@@ -460,6 +481,15 @@ static async Task<IResult> Mutate(
     try
     {
         change(subscription, bidder, terms);
+
+        if (audit is not null && http is not null)
+        {
+            var (who, roles, source) = StaffAudit.ActorOf(http);
+            db.RecordStaffAction(
+                who, roles, source, audit,
+                AuditSubject.Subscription(auctionId, bidderId), details);
+        }
+
         await db.SaveChangesAsync(ct);
 
         // 202 for the two steps that only ask the payment service for money: the

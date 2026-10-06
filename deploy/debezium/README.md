@@ -30,6 +30,17 @@ header:
 | `auction-sealed` | `auctions.sealed` | reserve price only, restricted ACL |
 | `auction-lifecycle` | `auctions.lifecycle` | rejection, award, disqualification, unsold |
 | `auction-deposits` | `auctions.deposits` | deposit release and forfeit |
+| `auction-clerk` | `auctions.participants` | which clerk signs for a hall auction (§29) |
+| `staff-action` | `staff.actions` | who did it — the audit trail (§34) |
+
+`staff-action` is the one aggregate type that is **not** an auction fact, and the
+one that also appears in the participant service's router: it is a fact about a
+person using the platform, and both services raise the identical shape. Its
+destination has one partition, because the audit service hash-chains the entries
+and a chain needs a total order. The EventRouter SMT keys on `aggregateid`, which
+for a staff action is the subject acted on, so per-aggregate order is preserved —
+but see §34's "Still not verified": this connector has never been registered
+against a Connect cluster, and the audit trail is where that gap matters most.
 
 `auctions.sealed` must be ACL'd to the bid processor alone. That split is what
 makes "the reserve never reaches the public read path" an infrastructure

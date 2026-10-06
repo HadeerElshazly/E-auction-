@@ -31,7 +31,14 @@ its latency budget.
 | `bidder` | a citizen brokered from Nafath | subscribe, pay the deposit, fetch a signing key, bid |
 | `auction-admin` | municipality staff | prepare an auction, publish it for approval |
 | `award-committee` | the award committee | confirm an award, disqualify a winner, offer the next candidate |
-| `operator` | platform operations | health and operational endpoints |
+| `operator` | platform operations, and the clerk on the floor | health and operational endpoints; a hall auction's signing key and hammer (§29) |
+| `auditor` | internal audit | the staff audit trail, and nothing else (§34) |
+
+`auditor` is the one role here that must not be combined with another. It grants
+no write anywhere, and the audit service has no endpoint that writes — but an
+auditor who also holds `auction-admin` or `award-committee` is reading the record
+of their own actions, which is most of the value of keeping it. Grant it to the
+people who review the trail and to nobody who operates the platform.
 
 They are realm roles because a bidder is a bidder across every client —
 web, mobile, and the onsite terminal. Keycloak puts them under
@@ -80,8 +87,14 @@ redeemed by someone else.
 ### Dev users
 
 `sara`, `khalid` (`bidder`, each with `national_id` and `name_ar`),
-`admin-user` (`auction-admin`), `committee-user` (`award-committee`).
+`admin-user` (`auction-admin`), `committee-user` (`award-committee`),
+`clerk-user` (`operator`), `auditor-user` (`auditor`).
 Password `dev-only-password`.
+
+`auditor-user` holds `auditor` and nothing else, on purpose: the separation §34
+asks for is only real if the seeded accounts respect it too, and an audit trail
+that the dev administrator could read would make the smoke test's refusal
+assertions pass for the wrong reason.
 
 ## Running it locally
 
@@ -231,7 +244,8 @@ Three behaviours are worth knowing before you debug this realm:
       grant exists only so the smoke test and the integration tests can get a
       token without driving a browser. Leaving it on in production means a
       stolen password is a token, with no Nafath in the path.
-- [ ] Delete every dev user (`sara`, `khalid`, `admin-user`, `committee-user`).
+- [ ] Delete every dev user (`sara`, `khalid`, `admin-user`, `committee-user`,
+      `clerk-user`, `auditor-user`).
       They carry a known password, and three of them carry a known TOTP secret —
       which, until Nafath is wired in, is the whole of the second factor guarding
       deposits and awards.
@@ -244,7 +258,7 @@ Three behaviours are worth knowing before you debug this realm:
       from inside the cluster).
 - [ ] Nafath identity provider configured, with its secret from a sealed secret
       or the cluster's secret store — never from this file.
-- [ ] Staff accounts (`auction-admin`, `award-committee`, `operator`) federated
+- [ ] Staff accounts (`auction-admin`, `award-committee`, `operator`, `auditor`) federated
       to the municipality's own directory. The award committee already needs a
       second factor to award, but it is the dev OTP credential; a real one has to
       come from the directory.

@@ -15,6 +15,10 @@ public sealed class ParticipantOutboxRouter : IOutboxRouter
     {
         "participant-eligibility" => Topics.Participants,
         "participant-payments" => Payments,
+
+        // Who verified a guarantee, who revoked an eligibility. Not a participant
+        // fact, which is why its type is shared — see StaffActionRecorded.
+        "staff-action" => Topics.StaffActions,
         _ => null
     };
 }

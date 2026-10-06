@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Nothing here is formatted for a reader: the trail is read by an auditor
+         through a portal that formats it, and the timestamps go out as ISO-8601.
+         Unlike the notification service this needs no ICU. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RootNamespace>EAuction.Audit</RootNamespace>
+    <AssemblyName>EAuction.Audit</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../EAuction.Core/EAuction.Core.csproj" />
+    <ProjectReference Include="../EAuction.Security/EAuction.Security.csproj" />
+    <!-- For StaffActionRecorded, the contract this service exists to read. The
+         producers depend on the same type for the same reason — see the note on
+         it in EAuction.Outbox/StaffAction.cs. -->
+    <ProjectReference Include="../EAuction.Outbox/EAuction.Outbox.csproj" />
+  </ItemGroup>
+</Project>

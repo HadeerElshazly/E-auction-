@@ -11,3 +11,11 @@ CREATE DATABASE eauction_participant OWNER eauction;
 -- bidder is registered for, when they were outbid and what they won — which is
 -- the whole of what D-22 keeps off the public topics, assembled in one place.
 CREATE DATABASE eauction_notifications OWNER eauction;
+
+-- The audit service keeps its own, and for a different reason from the other
+-- two: separation of duty rather than data protection. The trail has to survive
+-- the compromise of the services it records, so it must not sit in a schema
+-- whose credentials auction-admin or the participant service hold. Its table is
+-- also append-only by trigger (see the service's InitialSchema migration), which
+-- is a guarantee a shared schema's other writers would be able to lift.
+CREATE DATABASE eauction_audit OWNER eauction;

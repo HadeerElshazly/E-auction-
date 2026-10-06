@@ -47,6 +47,21 @@ public static class Topics
     public const string BidsRejected = "bids.rejected";
 
     /// <summary>
+    /// Event log, one partition. Every consequential thing a member of staff did:
+    /// who approved an auction, who changed its reserve price, who put a clerk on
+    /// the floor, who disqualified a winner, who opened a citizen's bank guarantee.
+    ///
+    /// One partition because the audit service hash-chains the entries and a chain
+    /// needs a total order. Volume is a few records per auction, so a single
+    /// partition is not a constraint worth paying anything to avoid.
+    ///
+    /// Written by the services that perform the actions, through their own
+    /// transactional outbox so the record and the change share a transaction (D-44).
+    /// Read only by the audit service.
+    /// </summary>
+    public const string StaffActions = "staff.actions";
+
+    /// <summary>
     /// Event log. What the payment service did with each bidder's money, keyed
     /// auction:bidder:purpose — a charge, a refusal, a refund, a forfeiture.
     ///

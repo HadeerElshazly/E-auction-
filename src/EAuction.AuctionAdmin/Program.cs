@@ -114,34 +114,60 @@ app.MapGet("/health/ready", async (IDbContextFactory<AdminDbContext> f, Cancella
 
 // --- إعداد المزاد : auction preparation ------------------------------------
 
-app.MapPost("/auctions", async (CreateAuctionRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+app.MapPost("/auctions", async (
+    CreateAuctionRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
     var auction = Auction.CreateDraft(r.CreatedByUserId, r.NameAr, r.NameEn);
     db.Auctions.Add(auction);
+
+    // Outside Mutate because the auction does not exist to be loaded yet, so the
+    // audit row is written by hand. The transaction is the same one, which is what
+    // matters.
+    var (who, roles, source) = StaffAudit.ActorOf(http);
+    db.RecordStaffAction(
+        who, roles, source, "CreateAuctionDraft", AuditSubject.Auction(auction.Id), r.NameAr);
+
     await db.SaveChangesAsync(ct);
     return Results.Created($"/auctions/{auction.Id}", AuctionResponse.From(auction));
 })
     .RequireAuthorization(Policies.AuctionAdmin);
 
-app.MapPut("/auctions/{id:guid}", (Guid id, UpdateAuctionRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.UpdateDetails(
+app.MapPut("/auctions/{id:guid}", (
+    Guid id, UpdateAuctionRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "UpdateAuctionDetails", a => a.UpdateDetails(
         r.NameAr, r.NameEn, r.Channel, r.BidderVisibility, r.StartsAt, r.EndsAt,
         r.OpeningPriceMinorUnits, r.ReservePriceMinorUnits, r.MinIncrementMinorUnits,
         r.DepositMinorUnits, r.BrokerageFeePercent, r.BookletPriceMinorUnits,
-        r.QuietPeriodSeconds, r.MaxExtensions, r.Phase)))
+        r.QuietPeriodSeconds, r.MaxExtensions, r.Phase),
+        // That the reserve moved, and not what it moved to or from.
+        //
+        // The one entry in the whole trail where the obvious summary is the wrong
+        // one. "Reserve changed from 1,200,000 to 1,400,000" would put السعر
+        // الاحتياطي — the single figure the outcome of an auction turns on, kept off
+        // every other topic by D-23 — onto a topic, in a row, in a different
+        // service's database, for ever. An auditor who needs the figure asks the
+        // auction service; what they need from here is that somebody changed it, and
+        // who.
+        details: r.ReservePriceMinorUnits is null
+            ? null
+            : "The reserve price was changed (the figure is deliberately not recorded here)."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 // --- قاعة المزاد: the clerk on the floor (§29) ------------------------------
 
 app.MapPut("/auctions/{id:guid}/clerk", (
-    Guid id, AssignClerkRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.AssignClerk(r.ClerkUserId)))
+    Guid id, AssignClerkRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "AssignClerk", a => a.AssignClerk(r.ClerkUserId),
+        details: $"Clerk {r.ClerkUserId}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapDelete("/auctions/{id:guid}/clerk", (
-    Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.UnassignClerk()))
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "UnassignClerk", a => a.UnassignClerk()))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 // The clerk's own signing key. Derived on demand like a bidder's, and handed to
@@ -159,6 +185,20 @@ app.MapGet("/auctions/{id:guid}/clerk-key", async (
     if (auction.ClerkUserId is null || auction.ClerkUserId != http.User.SubjectId())
         return Results.Forbid();
 
+    // Audited, although it is a GET and changes nothing.
+    //
+    // The only read in this service that is recorded, and it earns it: whoever
+    // holds this value can sign a bid for any eligible bidder in the auction, so
+    // "who collected the hall's signing key, and when" is exactly the question
+    // asked after a disputed hall auction. Writing on a GET is the smaller
+    // oddity — the audit row *is* a state change, and the alternative is the one
+    // secret this service hands out leaving no trace.
+    var (who, roles, source) = StaffAudit.ActorOf(http);
+    db.RecordStaffAction(
+        who, roles, source, "ReadClerkSigningKey", AuditSubject.Auction(id),
+        $"Key epoch {auction.ClerkKeyEpoch}.");
+    await db.SaveChangesAsync(ct);
+
     return Results.Ok(new SigningKeyResponse(
         Convert.ToHexString(
             BidderKeys.Derive(clerkMasterKey, id, auction.ClerkUserId.Value, auction.ClerkKeyEpoch)),
@@ -168,29 +208,44 @@ app.MapGet("/auctions/{id:guid}/clerk-key", async (
 app.MapPost("/auctions/{id:guid}/extend", (
     Guid id, HttpContext http, ExtendRequest r,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.ExtendByClerk(http.User.SubjectId() ?? Guid.Empty, r.Seconds)))
+    Mutate(f, id, ct, http, "ExtendAuction",
+        a => a.ExtendByClerk(http.User.SubjectId() ?? Guid.Empty, r.Seconds),
+        details: $"By {r.Seconds} seconds."))
     .RequireAuthorization(Policies.Operator);
 
 app.MapPost("/auctions/{id:guid}/close", (
     Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.CloseByClerk(http.User.SubjectId() ?? Guid.Empty)))
+    Mutate(f, id, ct, http, "CloseAuction",
+        a => a.CloseByClerk(http.User.SubjectId() ?? Guid.Empty)))
     .RequireAuthorization(Policies.Operator);
 
-app.MapPost("/auctions/{id:guid}/plots", (Guid id, AddPlotRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.AddPlot(new Plot(
-        id, r.DeedNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn))))
+app.MapPost("/auctions/{id:guid}/plots", (
+    Guid id, AddPlotRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "AddPlot", a => a.AddPlot(new Plot(
+        id, r.DeedNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn)),
+        details: $"Deed {r.DeedNumber}, {r.AreaSqm} m²."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
-app.MapDelete("/auctions/{id:guid}/plots/{plotId:guid}", (Guid id, Guid plotId, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.RemovePlot(plotId)))
+app.MapDelete("/auctions/{id:guid}/plots/{plotId:guid}", (
+    Guid id, Guid plotId, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "RemovePlot", a => a.RemovePlot(plotId),
+        details: $"Plot {plotId}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
-app.MapPost("/auctions/{id:guid}/booklet", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.AttachBooklet(r.DocumentId)))
+app.MapPost("/auctions/{id:guid}/booklet", (
+    Guid id, DocumentRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "AttachBooklet", a => a.AttachBooklet(r.DocumentId),
+        details: $"Document {r.DocumentId}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
-app.MapPost("/auctions/{id:guid}/cover-image", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.AttachCoverImage(r.DocumentId)))
+app.MapPost("/auctions/{id:guid}/cover-image", (
+    Guid id, DocumentRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "AttachCoverImage", a => a.AttachCoverImage(r.DocumentId),
+        details: $"Document {r.DocumentId}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapGet("/auctions/{id:guid}/validation", async (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
@@ -203,16 +258,21 @@ app.MapGet("/auctions/{id:guid}/validation", async (Guid id, IDbContextFactory<A
 })
     .RequireAuthorization(Policies.AuctionAdmin);
 
-app.MapPost("/auctions/{id:guid}/submit", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.SubmitForReview(DateTimeOffset.UtcNow)))
+app.MapPost("/auctions/{id:guid}/submit", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "SubmitAuctionForReview",
+        a => a.SubmitForReview(DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AuctionAdmin);
 
-app.MapPost("/auctions/{id:guid}/approve", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.Approve(DateTimeOffset.UtcNow)))
+app.MapPost("/auctions/{id:guid}/approve", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "ApproveAuction", a => a.Approve(DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AwardCommittee);
 
-app.MapPost("/auctions/{id:guid}/reject", (Guid id, RejectRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.Reject(r.Reason)))
+app.MapPost("/auctions/{id:guid}/reject", (
+    Guid id, RejectRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "RejectAuction", a => a.Reject(r.Reason), details: r.Reason))
     .RequireAuthorization(Policies.AwardCommittee);
 
 // --- lifecycle --------------------------------------------------------------
@@ -221,8 +281,10 @@ app.MapPost("/auctions/{id:guid}/reject", (Guid id, RejectRequest r, IDbContextF
 // over auctions.lifecycle; they are exposed here so the award workflow is
 // reachable and operable before that consumer exists.
 
-app.MapPost("/auctions/{id:guid}/lifecycle/{transition}", (Guid id, string transition, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a =>
+app.MapPost("/auctions/{id:guid}/lifecycle/{transition}", (
+    Guid id, string transition, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "ChangeAuctionLifecycle", a =>
     {
         switch (transition.ToLowerInvariant())
         {
@@ -233,33 +295,50 @@ app.MapPost("/auctions/{id:guid}/lifecycle/{transition}", (Guid id, string trans
             default: throw new AuctionValidationException(
                 new[] { $"Unknown lifecycle transition '{transition}'." });
         }
-    }))
+    }, details: $"To {transition}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 // --- الترسية : award workflow ----------------------------------------------
 
-app.MapPost("/auctions/{id:guid}/candidate", (Guid id, OfferCandidateRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.OfferCandidate(r.BidderId, r.AmountMinorUnits)))
+app.MapPost("/auctions/{id:guid}/candidate", (
+    Guid id, OfferCandidateRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "OfferAwardCandidate",
+        a => a.OfferCandidate(r.BidderId, r.AmountMinorUnits),
+        // The amount, unlike the reserve, is a bid: it reaches the public fan-out
+        // the moment it is made. Nothing is kept secret by leaving it out here, and
+        // an award entry that did not say for how much would be useless.
+        details: $"Bidder {r.BidderId} at {r.AmountMinorUnits} halalas."))
     .RequireAuthorization(Policies.AwardCommittee);
 
-app.MapPost("/auctions/{id:guid}/award", (Guid id, ConfirmAwardRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)))
+app.MapPost("/auctions/{id:guid}/award", (
+    Guid id, ConfirmAwardRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "ConfirmAward",
+        a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)))
     // The single most consequential act in the platform: it transfers a parcel of
     // state land to a named person. A committee member's role is not enough on its
     // own — the second factor is what ties the decision to the person, which is
     // what the minutes of an award have to be able to claim.
     .RequireAuthorization(Policies.AwardCommitteeStepUp);
 
-app.MapPost("/auctions/{id:guid}/award/letter", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.GenerateAwardLetter(r.DocumentId)))
+app.MapPost("/auctions/{id:guid}/award/letter", (
+    Guid id, DocumentRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "GenerateAwardLetter", a => a.GenerateAwardLetter(r.DocumentId),
+        details: $"Document {r.DocumentId}."))
     .RequireAuthorization(Policies.AwardCommittee);
 
-app.MapPost("/auctions/{id:guid}/award/signed-letter", (Guid id, DocumentRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.UploadSignedAwardLetter(r.DocumentId)))
+app.MapPost("/auctions/{id:guid}/award/signed-letter", (
+    Guid id, DocumentRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "UploadSignedAwardLetter",
+        a => a.UploadSignedAwardLetter(r.DocumentId), details: $"Document {r.DocumentId}."))
     .RequireAuthorization(Policies.AwardCommittee);
 
-app.MapPost("/auctions/{id:guid}/award/notify", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.NotifyWinner(DateTimeOffset.UtcNow)))
+app.MapPost("/auctions/{id:guid}/award/notify", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "NotifyWinner", a => a.NotifyWinner(DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AwardCommittee);
 
 // A grant for the winner to read their own award letter.
@@ -301,16 +380,24 @@ app.MapGet("/auctions/{id:guid}/award/letter-grant", async (
         DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
 }).RequireAuthorization(Policies.Bidder);
 
-app.MapPost("/auctions/{id:guid}/award/disqualify", (Guid id, DisqualifyRequest r, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow)))
+app.MapPost("/auctions/{id:guid}/award/disqualify", (
+    Guid id, DisqualifyRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "DisqualifyWinner",
+        a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow),
+        details: r.ForfeitDeposit
+            ? $"Deposit forfeited. {r.Reason}"
+            : $"Deposit returned. {r.Reason}"))
     .RequireAuthorization(Policies.AwardCommittee);
 
-app.MapPost("/auctions/{id:guid}/unsold", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.MarkUnsold()))
+app.MapPost("/auctions/{id:guid}/unsold", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "MarkAuctionUnsold", a => a.MarkUnsold()))
     .RequireAuthorization(Policies.AwardCommittee);
 
-app.MapPost("/auctions/{id:guid}/settle", (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, a => a.Settle(DateTimeOffset.UtcNow)))
+app.MapPost("/auctions/{id:guid}/settle", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "SettleAuction", a => a.Settle(DateTimeOffset.UtcNow)))
     .RequireAuthorization(Policies.AwardCommittee);
 
 // The list the portal opens on. Staff-only: it carries every auction including
@@ -379,11 +466,32 @@ static async Task<Auction?> Load(AdminDbContext db, Guid id, CancellationToken c
         .FirstOrDefaultAsync(a => a.Id == id, ct);
 
 /// <summary>
-/// Loads, applies the change, saves. SaveChanges drains any domain events the
-/// aggregate raised into the outbox in the same transaction.
+/// Loads, applies the change, records who did it, saves. SaveChanges drains any
+/// domain events the aggregate raised into the outbox in the same transaction.
 /// </summary>
+/// <param name="action">
+/// The name this appears under in the audit trail. Required rather than optional,
+/// because every state change this service makes is a consequential act by a
+/// member of staff and an unaudited one would be a hole whoever found it could
+/// use. A new endpoint cannot be added without choosing a name for it.
+/// </param>
+/// <param name="details">
+/// A short summary, composed at the call site because only the call site knows
+/// what may be said — see the note on <see cref="StaffActionRecorded.Details"/>
+/// and what the reserve price costs if it is got wrong.
+/// </param>
+/// <remarks>
+/// Only successful changes are recorded. A rejected attempt — approving an auction
+/// that is already live, say — leaves nothing in the trail, because the audit row
+/// shares the transaction that the rejection rolls back, and that sharing is the
+/// point (D-44). The cost is real: somebody probing what they are allowed to do is
+/// invisible here. The service log has the 409s, and the alternative — a second
+/// transaction for the attempt — buys a trail a portal's ordinary validation
+/// failures would fill.
+/// </remarks>
 static async Task<IResult> Mutate(
-    IDbContextFactory<AdminDbContext> factory, Guid id, CancellationToken ct, Action<Auction> change)
+    IDbContextFactory<AdminDbContext> factory, Guid id, CancellationToken ct,
+    HttpContext http, string action, Action<Auction> change, string? details = null)
 {
     await using var db = await factory.CreateDbContextAsync(ct);
     var auction = await Load(db, id, ct);
@@ -392,6 +500,10 @@ static async Task<IResult> Mutate(
     try
     {
         change(auction);
+
+        var (who, roles, source) = StaffAudit.ActorOf(http);
+        db.RecordStaffAction(who, roles, source, action, AuditSubject.Auction(id), details);
+
         await db.SaveChangesAsync(ct);
         return Results.Ok(AuctionResponse.From(auction));
     }
