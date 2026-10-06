@@ -47,12 +47,16 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
                   {a.plotCount} قطعة · {a.totalAreaSqm} م²
                 </span>
 
-                {/* The clock, over the cover, as the proposal has it. A live
-                    auction shows what is left of it; a scheduled one shows when it
-                    opens. A closed one shows nothing, because a countdown on a
-                    finished auction is a number nobody can act on. */}
-                {live && (
-                  <div className="countdown" aria-hidden="true">
+                {/* The clock, over the cover, as the proposal has it — but only
+                    where there is actually a clock to show.
+                    
+                    A hall auction has none: the auctioneer brings the hammer down,
+                    not a timer (§29), so its endsAt is already in the past while it
+                    is legitimately running. Rendering the countdown regardless put
+                    "انتهى" on a card that said جارٍ الآن beside it, which is not a
+                    cosmetic mismatch — it tells a citizen an open auction is over. */}
+                {live && new Date(a.endsAt).getTime() > Date.now() && (
+                  <div className="countdown wide" aria-hidden="true">
                     <div>
                       <b>{untilText(a.endsAt)}</b>
                       <span>حتى الإغلاق</span>
@@ -72,7 +76,7 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
                   <div className="muted small">
                     {live ? 'السعر الحالي' : 'سعر الافتتاح'}
                   </div>
-                  <div className="big-number num">
+                  <div className="price num">
                     {sar(
                       live
                         ? a.priceMinorUnits ?? a.openingPriceMinorUnits

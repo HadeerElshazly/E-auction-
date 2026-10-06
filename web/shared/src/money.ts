@@ -55,7 +55,7 @@ export function parseRiyals(text: string): number | null {
 /** "3 days 4 hours" / "00:42" as the end approaches. */
 export function untilText(target: string | Date, now: Date = new Date()): string {
   const ms = new Date(target).getTime() - now.getTime()
-  if (ms <= 0) return 'ended'
+  if (ms <= 0) return 'انتهى'
 
   const seconds = Math.floor(ms / 1000)
   const days = Math.floor(seconds / 86400)
@@ -63,7 +63,16 @@ export function untilText(target: string | Date, now: Date = new Date()): string
   const minutes = Math.floor((seconds % 3600) / 60)
   const secs = seconds % 60
 
-  if (days > 0) return `${days}d ${hours}h`
-  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`
+  // Arabic words, Latin digits. This is read by a citizen on an Arabic page, and
+  // it used to say "ended", "3d 4h", "2h 05m" — developer shorthand that reached
+  // the one screen with no staff on it. The digits stay Latin to match the dates
+  // and the countdown strip beside it; mixing numeral systems in one card is how a
+  // price gets misread.
+  //
+  // No dual or plural agreement: ٢ يوم rather than يومان. Correct Arabic would
+  // need three forms per unit and this is a glanceable counter, not prose — the
+  // clipped form is what a clock face would say.
+  if (days > 0) return `${days} يوم ${hours} ساعة`
+  if (hours > 0) return `${hours} ساعة ${String(minutes).padStart(2, '0')} دقيقة`
   return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
 }

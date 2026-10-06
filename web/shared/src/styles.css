@@ -419,6 +419,25 @@ tbody tr:hover { background: var(--surface-sunken); }
 .auction-card .body { padding: 30px 16px 16px; flex: 1; display: flex; flex-direction: column; gap: 10px; }
 .auction-card .title { font-weight: 650; font-size: 15px; margin: 0; }
 .auction-card .facts { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+
+/* The price on a catalogue card.
+ *
+ * Not `.big-number`, which is sized for a figure standing alone on a page. At 32px
+ * inside a 300px card an Arabic-Indic riyal amount runs the full width and becomes
+ * the only thing on the card, which is wrong twice over: the name of the land is
+ * what a bidder is looking for, and a number that wide reads as a layout accident.
+ */
+.auction-card .price {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  line-height: 1.25;
+}
+
+/* The clock sits in the countdown strip, which is sized for four short cells. A
+   single wide cell needs room for "3 يوم 4 ساعة" without wrapping it. */
+.auction-card .countdown.wide div { min-width: 0; padding-inline: 14px; }
+.auction-card .countdown.wide b { font-size: 14px; white-space: nowrap; }
 .auction-card .facts div { display: flex; gap: 7px; align-items: center; }
 
 /* --- field cards (the detail tabs) ----------------------------------------- */
