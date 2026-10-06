@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, config, parseRiyals, riyals, sar, type Api, type Session } from '@eauction/shared'
+import { api, config, parseRiyals, riyals, sar, when, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
 import { label } from './types'
 
@@ -88,11 +88,11 @@ function Summary({ auction }: { auction: Auction }) {
       <Fact k="نسبة السعي" v={`${auction.brokerageFeePercent}%`} />
       <Fact
         k="البداية"
-        v={auction.startsAt ? new Date(auction.startsAt).toLocaleString('ar-SA') : '—'}
+        v={when(auction.startsAt)}
       />
       <Fact
         k="النهاية"
-        v={auction.endsAt ? new Date(auction.endsAt).toLocaleString('ar-SA') : '—'}
+        v={when(auction.endsAt)}
       />
       <Fact
         k="فترة التمديد"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sar, type Api } from '@eauction/shared'
+import { sar, when, type Api } from '@eauction/shared'
 import type { BidCertificate } from './types'
 
 /**
@@ -71,7 +71,7 @@ export function Certificate({ client, auctionId, auctionNameAr, offset, onClose 
               <Row k="المبلغ" v={sar(certificate.amountMinorUnits, 'ar')} />
               <Row
                 k="وقت القبول"
-                v={new Date(certificate.serverTimestampMs).toLocaleString('ar-SA')}
+                v={when(certificate.serverTimestampMs)}
               />
               <Row k="الترتيب في السجل" v={String(certificate.offset)} ltr />
               <Row k="القناة" v={certificate.channel === 'Onsite' ? 'حضوري' : 'إلكتروني'} />
@@ -81,7 +81,7 @@ export function Certificate({ client, auctionId, auctionNameAr, offset, onClose 
                 <Row k="أُدخلت بواسطة" v={certificate.enteredByUserId} ltr />
               )}
               <Row k="رقم المزايدة لديك" v={certificate.clientBidId} ltr />
-              <Row k="تاريخ الإصدار" v={new Date(certificate.issuedAt).toLocaleString('ar-SA')} />
+              <Row k="تاريخ الإصدار" v={when(certificate.issuedAt)} />
             </div>
 
             <h3>بصمة التحقق</h3>

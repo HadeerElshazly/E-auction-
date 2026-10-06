@@ -198,37 +198,46 @@ export function App() {
         <button onClick={signOut}>خروج</button>
       </header>
 
-      <div className="app">
-        {(canReport || canAudit) && (
-          <div className="row" style={{ margin: '0 0 16px' }} data-testid="nav">
+      <div className="shell">
+        {/* The navigation rail from the proposal. Always present, even for an
+            account that holds only one of these — a single item still tells a
+            reader where they are, and a rail that appears and disappears with the
+            signed-in role makes the product look like two different products. */}
+        <nav className="rail" data-testid="nav">
+          <button
+            className={view === 'auctions' ? 'on' : ''}
+            data-testid="nav-auctions"
+            onClick={() => setView('auctions')}
+          >
+            <span className="icon" aria-hidden="true">⌂</span>
+            المزادات
+            <span className="chevron" aria-hidden="true">‹</span>
+          </button>
+          {canReport && (
             <button
-              className={view === 'auctions' ? 'primary' : ''}
-              data-testid="nav-auctions"
-              onClick={() => setView('auctions')}
+              className={view === 'reports' ? 'on' : ''}
+              data-testid="nav-reports"
+              onClick={() => setView('reports')}
             >
-              المزادات
+              <span className="icon" aria-hidden="true">◴</span>
+              التقارير
+              <span className="chevron" aria-hidden="true">‹</span>
             </button>
-            {canReport && (
-              <button
-                className={view === 'reports' ? 'primary' : ''}
-                data-testid="nav-reports"
-                onClick={() => setView('reports')}
-              >
-                التقارير
-              </button>
-            )}
-            {canAudit && (
-              <button
-                className={view === 'audit' ? 'primary' : ''}
-                data-testid="nav-audit"
-                onClick={() => setView('audit')}
-              >
-                سجل المراجعة
-              </button>
-            )}
-          </div>
-        )}
+          )}
+          {canAudit && (
+            <button
+              className={view === 'audit' ? 'on' : ''}
+              data-testid="nav-audit"
+              onClick={() => setView('audit')}
+            >
+              <span className="icon" aria-hidden="true">☰</span>
+              سجل المراجعة
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
+        </nav>
 
+        <main>
         {error && <div className="notice error">{error}</div>}
 
         {confirmed && (
@@ -304,6 +313,7 @@ export function App() {
             }
           />
         )}
+        </main>
       </div>
     </>
   )

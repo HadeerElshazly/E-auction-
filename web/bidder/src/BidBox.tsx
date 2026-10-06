@@ -3,6 +3,7 @@ import {
   ApiError,
   api,
   buildBidFrame,
+  clock,
   config,
   newClientBidId,
   newNonce,
@@ -239,7 +240,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
               {submitted.map((b) => (
                 <tr key={b.clientBidId}>
                   <td className="num">{sar(b.amount, 'ar')}</td>
-                  <td className="num small">{b.at.toLocaleTimeString('ar-SA')}</td>
+                  <td className="num small">{clock(b.at)}</td>
                   <td className="num small">{b.offset}</td>
                   <td className="small">{outcome(b, price, verdicts)}</td>
                   <td>

@@ -461,13 +461,18 @@ export async function openAuction(page: Page, auctionId: string): Promise<void> 
  * confirming and the only thing that works.
  */
 export async function openAuctionInPlace(page: Page, auctionId: string): Promise<void> {
-  const row = page.locator('tbody tr').filter({ hasNot: page.locator('_nonexistent') })
-  await expect(row.first()).toBeVisible({ timeout: 30_000 })
+  // المزادات is a grid of cards, and the card itself is the target — there is no
+  // separate open button, the same as the screens this portal is built from. Found
+  // by test id rather than by its Arabic label: the label is the auction's name,
+  // which changes every run, and matching on wording makes a rename look like a
+  // broken list.
+  const card = page.getByTestId('auction-card')
+  await expect(card.first()).toBeVisible({ timeout: 30_000 })
 
-  // The list shows no ids, so open rows until the editor shows the one wanted. The
+  // The list shows no ids, so open the first and assert which one it was. The
   // newest is first and that is this run's auction, but asserting the id means a
   // stale auction from an earlier run cannot quietly stand in for it.
-  await page.getByRole('button', { name: 'فتح' }).first().click()
+  await card.first().click()
   await expect(page.locator('code.muted.small').first()).toHaveText(auctionId, {
     timeout: 20_000,
   })

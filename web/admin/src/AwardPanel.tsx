@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { sar, type Api } from '@eauction/shared'
+import { day, sar, type Api } from '@eauction/shared'
 import type { Auction } from './types'
 
 interface Props {
@@ -112,7 +112,7 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
             <div>
               <div className="muted small">مهلة الالتزام</div>
               <div className="num">
-                {new Date(award.complianceDeadline).toLocaleDateString('ar-SA')}
+                {day(award.complianceDeadline)}
               </div>
             </div>
             <div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, sar, untilText, type Session } from '@eauction/shared'
+import { ApiError, api, config, sar, untilText, when, type Session } from '@eauction/shared'
 import type { AuctionDetail, Bidder, Subscription } from './types'
 import { useLivePrice } from './useLivePrice'
 import { SubscriptionSteps } from './SubscriptionSteps'
@@ -119,7 +119,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
             <div className="big-number num">
               {live
                 ? untilText(endsAt)
-                : new Date(auction.startsAt).toLocaleString('ar-SA')}
+                : when(auction.startsAt)}
             </div>
             {price && price.extensionsUsed > 0 && (
               <div className="muted small" style={{ marginTop: 4 }}>
