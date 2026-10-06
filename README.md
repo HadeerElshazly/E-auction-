@@ -139,7 +139,7 @@ Architecture document is in review.
   the audit trail with a button that recomputes the hash chain in front of you. The
   `auditor` role sees the trail and an administrator does not, by design (§36).
 
-**555 tests green** with a broker and an S3 endpoint running, 531 without — the
+**557 tests green** with a broker and an S3 endpoint running, 533 without — the
 Kafka and object-store integration tests skip rather than fail when their
 dependency is absent, so the suite runs anywhere.
 

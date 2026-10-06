@@ -493,6 +493,77 @@ public class ApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Every_plot_row_carries_its_own_id_and_no_two_share_one()
+    {
+        // The property the admin portal's table keys on, pinned here because the
+        // obvious alternative is wrong and looked right. The first version of that
+        // screen keyed on the deed number plus the auction's name — and deed numbers
+        // repeat across the auctions of a phase while two auctions can share a name,
+        // so React found the collision in a browser and refused to render the table
+        // properly.
+        var body = await Reader().GetFromJsonAsync<JsonElement>("/reports/plots?take=500");
+
+        var ids = body.GetProperty("items").EnumerateArray()
+            .Select(p => p.GetProperty("plotId").GetGuid())
+            .ToList();
+
+        Assert.NotEmpty(ids);
+        Assert.DoesNotContain(Guid.Empty, ids);
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+
+    }
+
+    [Fact]
+    public async Task Two_auctions_with_one_name_and_the_same_deeds_are_still_told_apart()
+    {
+        // The exact condition the browser hit, reproduced. Two phases of one plan
+        // are commonly prepared under the same name, and a deed number is unique
+        // within an auction and not across them — so the pair the portal first
+        // keyed its table on collides, and the plot ids are what still separate the
+        // rows.
+        //
+        // Built here rather than folded into the shared fixture, because three
+        // auctions with distinct names is what the other tests assert against.
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var deed = "4/س/9000";
+        var events = Events();
+
+        object[] Plots() =>
+        [
+            new { id = Guid.NewGuid(), deedNumber = deed, areaSqm = 500.00m,
+                  latitude = "21.5", longitude = "39.2", descriptionAr = "قطعة" },
+        ];
+
+        await Publish.ApprovedAsync(events, first, nameAr: "مخطط مشترك", plots: Plots());
+        await Publish.ApprovedAsync(events, second, nameAr: "مخطط مشترك", plots: Plots());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            await using var db = await _db.Factory.CreateDbContextAsync(cts.Token);
+            if (await db.Plots.CountAsync(p => p.DeedNumber == deed, cts.Token) == 2) break;
+            await Task.Delay(25, cts.Token);
+        }
+
+        var body = await Reader().GetFromJsonAsync<JsonElement>("/reports/plots?take=500");
+
+        var shared = body.GetProperty("items").EnumerateArray()
+            .Where(p => p.GetProperty("deedNumber").GetString() == deed)
+            .ToList();
+
+        Assert.Equal(2, shared.Count);
+
+        // The key the portal used to build: identical for both rows.
+        Assert.Single(shared
+            .Select(p => $"{p.GetProperty("auctionNameAr").GetString()}:{p.GetProperty("deedNumber").GetString()}")
+            .Distinct());
+
+        // The key it builds now: distinct.
+        Assert.Equal(2, shared.Select(p => p.GetProperty("plotId").GetGuid()).Distinct().Count());
+    }
+
+    [Fact]
     public async Task Deposit_exposure_is_what_is_still_held_right_now()
     {
         var body = await Reader().GetFromJsonAsync<JsonElement>("/reports/deposits");

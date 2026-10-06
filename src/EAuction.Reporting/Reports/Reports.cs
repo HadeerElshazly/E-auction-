@@ -92,6 +92,16 @@ public sealed record ParticipationRow(
 /// is the same number on every plot in the package.
 /// </summary>
 public sealed record PlotInventoryRow(
+    /// <summary>
+    /// The plot's own id.
+    ///
+    /// Here because a report row a client cannot identify is a row the client has
+    /// to invent a key for — and the obvious invention, the deed number plus the
+    /// auction's name, is not unique: deed numbers repeat across the auctions of a
+    /// phase and two auctions can share a name. The admin portal keyed its table
+    /// that way and React found the collision in a browser.
+    /// </summary>
+    Guid PlotId,
     string DeedNumber, decimal AreaSqm, string? Phase,
     Guid AuctionId, string AuctionNameAr, string Outcome,
     bool Sold, long? PackagePriceMinorUnits, decimal PackageAreaSqm,
@@ -286,6 +296,7 @@ public static class ReportQueries
             .ToListAsync(ct);
 
         return rows.Select(x => new PlotInventoryRow(
+            x.plot.PlotId,
             x.plot.DeedNumber, x.plot.AreaSqm, x.auction.Phase,
             x.auction.AuctionId, x.auction.NameAr, x.auction.Outcome.ToString(),
             x.auction.Outcome == AuctionOutcome.Settled,

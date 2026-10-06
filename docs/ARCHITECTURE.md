@@ -3903,7 +3903,7 @@ the test assumed otherwise.
 
 ### What the tests cover
 
-**53 tests** in `tests/EAuction.Reporting.Tests`.
+**55 tests** in `tests/EAuction.Reporting.Tests`.
 
 | Claim | Where |
 |---|---|
@@ -3916,6 +3916,7 @@ the test assumed otherwise.
 | A disqualification clears the price until the cascade lands | `ConsumerTests` |
 | An unsold auction has no price — and no reserve, by construction | `ConsumerTests` |
 | An auction rejected before publication still gets a row | `ConsumerTests` |
+| Every plot row carries its own id, and two auctions sharing a name and a deed number are still told apart | `ApiTests` |
 | …and stays inside a dated report instead of sorting to 0001-01-01 | `ApiTests` |
 | A masked auction names nobody; a named one names its bidders | `ConsumerTests` |
 | A revoked eligibility is recorded without erasing that it was granted | `ConsumerTests` |
@@ -4042,6 +4043,25 @@ The filter is built once and used for both the table and the `format=csv`
 download. A download that filtered differently from the table above it is the sort
 of defect nobody notices until a figure is questioned in a meeting, which is the
 worst possible moment to find it.
+
+### The defect only a browser could find
+
+The plot report's rows had no id of their own, so the portal's table keyed on the
+deed number plus the auction's name. That is wrong in a way that looks right: a
+deed number is unique *within* an auction and not across them, and two phases of
+one plan are commonly prepared under the same name. React found the collision on
+the first run against real data and refused to render the table properly.
+
+Nothing else would have caught it. The reporting service's own tests gave each
+auction in their fixture a distinct name, and a report row's identity is not
+something an API test thinks to assert — it is something a list in a UI needs.
+
+The fix is on the API rather than in the portal: `PlotInventoryRow` now carries
+`PlotId`, because a report row a client cannot identify is a row the client has to
+invent a key for, and the obvious invention was the broken one. A test now builds
+two auctions sharing a name and the same deed number and asserts that the old key
+collides and the new one does not — which is the condition, written down rather
+than remembered.
 
 ### What the browser tests cover, and what they deliberately do not
 

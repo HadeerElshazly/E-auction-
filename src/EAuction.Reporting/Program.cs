@@ -185,13 +185,13 @@ app.MapGet("/reports/plots", async (
 
     return Render(http, "plots", rows,
     [
-        "deed_number", "area_sqm", "phase", "auction_id", "auction_name_ar",
+        "plot_id", "deed_number", "area_sqm", "phase", "auction_id", "auction_name_ar",
         "outcome", "sold", "package_price", "package_area_sqm", "price_per_sqm",
         "latitude", "longitude",
     ],
     r =>
     [
-        r.DeedNumber, r.AreaSqm, r.Phase, r.AuctionId, r.AuctionNameAr,
+        r.PlotId, r.DeedNumber, r.AreaSqm, r.Phase, r.AuctionId, r.AuctionNameAr,
         r.Outcome, r.Sold, r.PackagePriceMinorUnits, r.PackageAreaSqm, r.PricePerSqmMinorUnits,
         r.Latitude, r.Longitude,
     ]);

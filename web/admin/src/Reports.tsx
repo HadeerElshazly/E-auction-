@@ -81,6 +81,7 @@ interface ParticipationRow {
 }
 
 interface PlotRow {
+  plotId: string
   deedNumber: string
   areaSqm: number
   phase: string | null
@@ -419,7 +420,7 @@ function Table({ tab, rows }: { tab: Tab; rows: unknown[] }) {
           </thead>
           <tbody>
             {(rows as PlotRow[]).map((r) => (
-              <tr key={`${r.auctionNameAr}:${r.deedNumber}`}>
+              <tr key={r.plotId}>
                 <td className="ltr mono">{r.deedNumber}</td>
                 <td className="num">{r.areaSqm}</td>
                 <td className="small muted">{r.phase ?? '—'}</td>
