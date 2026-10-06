@@ -169,23 +169,63 @@ export function Reports({ session }: { session: Session }) {
     [groupBy, phase, tab],
   )
 
-  const load = useCallback(async () => {
+  /**
+   * Bumped by تحديث, so a manual refresh re-runs the fetch below without the
+   * button needing its own copy of it.
+   */
+  const [refresh, setRefresh] = useState(0)
+
+  /**
+   * One fetch, in the effect that owns it, discarding its own result if something
+   * superseded it.
+   *
+   * Two separate races live here and they need the two different mechanisms, which
+   * is why neither alone was enough.
+   *
+   * `cancelled` is for responses that come back out of order. Press a tab, press
+   * another, and both fetches are in flight; whichever lands last used to win and
+   * could leave the screen showing the wrong report — or, with the tag below and
+   * no cancellation, leave it showing nothing at all, because the tag would never
+   * again match and nothing would re-fetch to repair it. Changing a filter raced
+   * the same way: a slower response for the previous grouping could overwrite the
+   * current one, and the table would show بالمخطط rows while the selector read
+   * بالشهر. Discarding a superseded response closes all of it.
+   *
+   * The tag is for the frame *before* any response arrives. `tab` changes the
+   * moment the button is pressed, so a render between the press and the response
+   * would pair the new tab's columns with the old tab's objects — every field
+   * `undefined`. Cancellation cannot help with that: the old rows are legitimately
+   * the last thing fetched. Holding the rows with the tab they belong to makes the
+   * pairing unrepresentable, and a render either has this tab's rows or says it is
+   * still loading.
+   */
+  useEffect(() => {
+    let cancelled = false
+
     setBusy(true)
     setError(null)
-    try {
-      const page = await client.get<Page<unknown>>(active.path + query())
-      setData({ tab: active.id, rows: page.items })
-    } catch (e) {
-      setError(describe(e))
-      setData({ tab: active.id, rows: [] })
-    } finally {
-      setBusy(false)
-    }
-  }, [active.id, active.path, client, query])
 
-  useEffect(() => {
-    void load()
-  }, [load])
+    client
+      .get<Page<unknown>>(active.path + query())
+      .then((page) => {
+        if (cancelled) return
+        setData({ tab: active.id, rows: page.items })
+        setBusy(false)
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        setError(describe(e))
+        // Tagged with this tab even though it holds nothing, so the screen leaves
+        // the loading state. What it must not do is then claim the report is
+        // empty — see the render below, which shows the failure instead.
+        setData({ tab: active.id, rows: [] })
+        setBusy(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [active.id, active.path, client, query, refresh])
 
   // The phase filter's options, so nobody has to type مخطط السعيد — المرحلة الأولى
   // by hand to narrow a report.
@@ -264,7 +304,7 @@ export function Reports({ session }: { session: Session }) {
         )}
 
         <span className="grow" />
-        <button onClick={() => void load()} disabled={busy}>
+        <button onClick={() => setRefresh((n) => n + 1)} disabled={busy}>
           تحديث
         </button>
         <button className="primary" data-testid="report-csv" onClick={() => void download()}>
@@ -275,7 +315,12 @@ export function Reports({ session }: { session: Session }) {
       {error && <div className="notice error">{error}</div>}
 
       {data.tab !== tab ? (
-        <p className="muted small">…</p>
+        <p className="muted small" data-testid="report-loading">…</p>
+      ) : error ? (
+        // Nothing, because the failure is already shown above. Saying "no data for
+        // this report yet" under a 403 would be telling a stakeholder the report is
+        // empty when in fact it never loaded.
+        null
       ) : data.rows.length === 0 ? (
         <p className="muted small" data-testid="report-empty">
           لا توجد بيانات لهذا التقرير بعد.

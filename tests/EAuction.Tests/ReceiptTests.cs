@@ -364,6 +364,31 @@ public class BidCertificateTests
     }
 
     [Fact]
+    public async Task A_cached_offset_is_still_metered_against_a_loop()
+    {
+        // The floor, which the first version of the cache did not have: moving the
+        // meter inside the cache-miss branch left a cached offset with no limit at
+        // all, and this service owes /bids a 50ms budget. A hit is cheaper than a
+        // miss but it is not free — it still recomputes an HMAC over the frame and
+        // serialises a certificate — so a caller in a loop could take that budget
+        // away without ever reaching Kafka.
+        //
+        // Sixty requests against twenty tokens refilling at twenty a second. The
+        // companion test above does ten and expects none of them refused: between
+        // them they pin the floor as high enough for a person reading their own
+        // certificates and low enough to stop a loop.
+        using var factory = Catcher();
+        var (receipt, auction, bidder, _) = await PlaceBidAsync(factory);
+        var client = factory.CreateClient().As(bidder, Roles.Bidder);
+
+        var answers = new List<HttpStatusCode>();
+        for (var attempt = 1; attempt <= 60; attempt++)
+            answers.Add((await client.GetAsync(Path(auction, receipt.Offset))).StatusCode);
+
+        Assert.Contains(HttpStatusCode.TooManyRequests, answers);
+    }
+
+    [Fact]
     public async Task Reading_one_offset_after_another_is_still_refused()
     {
         // The cache answers a repeat, not a sweep. Every distinct offset is a seek
@@ -381,7 +406,7 @@ public class BidCertificateTests
         state.GrantEligibilityWithSecret(auction.AuctionId, bidder, TestAuction.Secret);
 
         var offsets = new List<long>();
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 10; i++)
         {
             var placed = await client.PostAsync(
                 "/bids",
@@ -395,9 +420,16 @@ public class BidCertificateTests
         foreach (var offset in offsets)
             answers.Add((await client.GetAsync(Path(auction.AuctionId, offset))).StatusCode);
 
-        // Two tokens, four fresh offsets: the first two are served and a later one
-        // is turned away. Which one depends on how fast the bucket refilled, so the
-        // assertion is on there being a refusal rather than on its position.
+        // Two tokens and ten fresh offsets, so the margin is what makes this stable
+        // rather than the timing being lucky. The bucket refills at two a second;
+        // ten in-process requests take a few milliseconds, so about two are
+        // affordable and eight are not. For every answer to come back OK the machine
+        // would have to be some four seconds slower over this loop than a loaded CI
+        // box ever is — and if it somehow were, the failure would be reporting a
+        // real collapse rather than a flake.
+        //
+        // Which request is refused still depends on the refill, so the assertion is
+        // that a refusal happened and not where.
         Assert.Equal(HttpStatusCode.OK, answers[0]);
         Assert.Equal(HttpStatusCode.OK, answers[1]);
         Assert.Contains(HttpStatusCode.TooManyRequests, answers);
