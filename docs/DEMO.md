@@ -15,6 +15,20 @@ auction in front of them.
 tools/smoke/run-portals.sh --with-deps --keep-up
 ```
 
+Then plant some history, so التقارير and سجل المراجعة have something to show
+beyond whatever you create in the room:
+
+```bash
+dotnet run --project tools/seed -- --count 24
+# Compose instead of the local stack? Kafka is on 9192 there:
+#   dotnet run --project tools/seed -- --kafka localhost:9192 --count 24
+```
+
+About two dozen auctions across six months, in every outcome the platform can
+produce — sold, unsold, rejected, and both halves of a winner defaulting. Safe to
+run twice; see `tools/seed/README.md` for why, and for why it does not appear in
+المزادات.
+
 Wait for `Everything is up`. That brings up eleven services and both portals and
 leaves them running. Then **run it once more as a rehearsal** — the full
 walk-through, which takes about four minutes and tells you whether anything is

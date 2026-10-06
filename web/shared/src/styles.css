@@ -115,9 +115,19 @@ body {
 
 /* The active item is the one solid block of colour on the screen, which is what
    makes it findable without reading. */
-.rail button.on {
+/* The active item, and its hover.
+ *
+ * Both, because the generic `button:hover` below sets `color: var(--accent)` and
+ * carries the same specificity as this rule while coming later in the file — so
+ * hovering the active item painted teal text on the teal fill and the label
+ * disappeared. It is only visible when the pointer is actually resting on the item
+ * a person has just chosen, which is to say: most of the time they are looking
+ * at it. */
+.rail button.on,
+.rail button.on:hover:not(:disabled) {
   background: var(--accent);
   color: #fff;
+  border-color: transparent;
   box-shadow: 0 6px 18px rgba(6, 168, 183, .28);
 }
 .rail button.on .icon { opacity: 1; }
