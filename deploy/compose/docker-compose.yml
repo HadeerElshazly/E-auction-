@@ -1,13 +1,32 @@
 # Local development stack.
 #
-# NOT YET RUN: the development container used to author this has no Docker
-# daemon, so this file is unexercised. Treat the first `docker compose up` as
-# part of the work, not as a regression.
-#
 #   docker compose -f deploy/compose/docker-compose.yml up -d
 #
 # Configuration is env-var only (12-factor) so Compose and Helm share one
 # source of truth.
+#
+# HOST PORTS ARE NOT THE CONTAINER PORTS. Four are shifted so this stack can run
+# beside a local Kafka, Postgres or MinIO that already holds the usual ones:
+#
+#   Kafka      host 9192  ->  kafka:9092
+#   Postgres   host 5433  ->  postgres:5432
+#   MinIO      host 9010  ->  minio:9000        console host 9011 -> minio:9001
+#   Connect    host 8084  ->  kafka-connect:8083
+#
+# Worth knowing before you debug: `psql -p 5432` reaches your own Postgres and not
+# this one, and finds none of this stack's data. Keycloak (8080), the portals (3000,
+# 3001) and the services (5080, 5090, 5094-5099) are unshifted, because the browser
+# calls those by the addresses baked into the portal bundles below.
+#
+# EVERY SERVICE HERE RUNS AS PRODUCTION. ASPNETCORE_ENVIRONMENT is deliberately not
+# set, so each service's startup guards are armed and a missing key is a crash with
+# a message rather than a silent fallback. That is why the keys below are spelled
+# out: without them the services do not degrade, they do not start.
+#
+# THE KEYS BELOW ARE FIXED DEV VALUES AND NOTHING ELSE. They are in git, so they are
+# public. Deployment takes them from the cluster's secret store (see deploy/helm);
+# the one thing that must never happen is this file being copied to an environment
+# that holds real citizens' bids.
 
 name: e-auction
 
@@ -66,8 +85,12 @@ services:
       retries: 10
 
   minio:
-    # minio/minio is no longer published on Docker Hub; quay.io is the remaining source.
-    image: quay.io/minio/minio:latest
+    # minio/minio is no longer published on Docker Hub; quay.io is the remaining
+    # source. Pinned, like every other image here: `latest` makes the stack's
+    # behaviour a function of the day it was pulled, and MinIO has since dropped the
+    # web console from the community image — so an unpinned tag eventually takes away
+    # the console on 9011 and the `mc` binary the healthcheck below runs.
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
     container_name: eauction-minio
     command: server /data --console-address ":9001"
     ports:
