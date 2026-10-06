@@ -477,6 +477,62 @@ tbody tr:hover { background: var(--surface-sunken); }
 .auction-card .countdown.wide b { font-size: 14px; white-space: nowrap; }
 .auction-card .facts div { display: flex; gap: 7px; align-items: center; }
 
+/* --- the live monitor ------------------------------------------------------
+ *
+ * Sized to be read from across a room rather than from a desk: this is the screen
+ * that goes on the wall while a plan is being sold. Hence the price at 34px and the
+ * clock in a monospaced face, so the digits do not shift sideways as they count
+ * down and draw the eye to a number that is not changing. */
+
+.monitor-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+
+.monitor-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+/* The last two minutes, which is when an auction is actually decided and when a
+   watcher needs to be looking at this one rather than the other five. */
+.monitor-card.closing {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-weak), var(--shadow);
+}
+
+.monitor-card .name { font-weight: 650; font-size: 15px; margin: 0 0 10px; }
+
+.monitor-card .price {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  line-height: 1.15;
+  color: var(--accent);
+}
+
+.monitor-card .clock {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.monitor-card .clock.urgent { color: var(--danger); }
+.monitor-card .days { margin-inline-end: 6px; }
+
+/* The clock is monospaced so its digits do not shift sideways as they count down.
+   A word in that slot has to leave the monospace face: it has no Arabic shaping,
+   and انتهى renders with its letters disconnected. */
+.monitor-card .clock.word { font-family: inherit; font-size: 15px; }
+
+.monitor-card .facts { display: grid; gap: 7px; font-size: 14px; }
+.monitor-card .facts > div { display: flex; gap: 10px; }
+.monitor-card .facts > div > span:first-child { min-width: 118px; }
+
 /* --- field cards (the detail tabs) ----------------------------------------- */
 
 .field-card {

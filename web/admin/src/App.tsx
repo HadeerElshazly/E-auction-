@@ -17,6 +17,7 @@ import { AwardPanel } from './AwardPanel'
 import { ClerkTerminal } from './ClerkTerminal'
 import { Reports } from './Reports'
 import { AuditTrail } from './AuditTrail'
+import { Monitor } from './Monitor'
 
 /**
  * Which screen is open.
@@ -26,7 +27,7 @@ import { AuditTrail } from './AuditTrail'
  * a dependency plus the redirect-URI registration every Keycloak client here
  * already pins to one path.
  */
-type View = 'auctions' | 'reports' | 'audit'
+type View = 'auctions' | 'monitor' | 'reports' | 'audit'
 
 
 export function App() {
@@ -55,6 +56,12 @@ export function App() {
   // rather than a missing permission.
   const canReport = has(session, Roles.reporting) || isAdmin || isCommittee
   const canAudit = has(session, Roles.auditor)
+
+  // المتابعة المباشرة is operational: who is running auctions right now. The three
+  // roles that run them see it. Not `reporting`, whose screens are all after the
+  // fact, and emphatically not `auditor`, which reads the trail and nothing else
+  // by design (§34).
+  const canWatch = isAdmin || isCommittee || isClerk
 
   const [view, setView] = useState<View>('auctions')
 
@@ -213,6 +220,17 @@ export function App() {
             المزادات
             <span className="chevron" aria-hidden="true">‹</span>
           </button>
+          {canWatch && (
+            <button
+              className={view === 'monitor' ? 'on' : ''}
+              data-testid="nav-monitor"
+              onClick={() => setView('monitor')}
+            >
+              <span className="icon" aria-hidden="true">◉</span>
+              المتابعة المباشرة
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
           {canReport && (
             <button
               className={view === 'reports' ? 'on' : ''}
@@ -246,7 +264,9 @@ export function App() {
           </div>
         )}
 
-        {view === 'reports' ? (
+        {view === 'monitor' ? (
+          <Monitor session={session} />
+        ) : view === 'reports' ? (
           <Reports session={session} />
         ) : view === 'audit' ? (
           <AuditTrail session={session} />

@@ -137,3 +137,39 @@ test('a reader with only the reporting role is not shown the auction surface', a
     await finance.close()
   }
 })
+
+test('المتابعة المباشرة is open to the committee and closed to finance', async ({
+  browser,
+}) => {
+  // The live board is operational: who is bidding on what, right now. The roles
+  // that run auctions get it; finance does not, because every screen they have is
+  // after the fact, and the auditor does not either — that account reads the trail
+  // and nothing else, by design (§34).
+  //
+  // What this asserts about the board itself is deliberately thin: it renders, and
+  // it says one of the two true things — here are the open auctions, or there are
+  // none. Asserting a price would make this test depend on an auction being live at
+  // the moment it runs, which is the sort of coupling that turns a suite flaky for
+  // reasons that have nothing to do with the screen.
+  const committee = await actor(browser, ADMIN_URL, 'committee-user')
+  const finance = await actor(browser, ADMIN_URL, 'reporting-user')
+
+  try {
+    await committee.page.getByTestId('nav-monitor').click()
+
+    await expect(
+      committee.page
+        .getByTestId('monitor-card')
+        .first()
+        .or(committee.page.getByText('لا يوجد مزاد مفتوح الآن')),
+    ).toBeVisible({ timeout: 20_000 })
+
+    await expect(finance.page.getByTestId('nav-monitor')).toHaveCount(0)
+
+    expect(committee.problems.all()).toEqual([])
+    expect(finance.problems.all()).toEqual([])
+  } finally {
+    await committee.close()
+    await finance.close()
+  }
+})
