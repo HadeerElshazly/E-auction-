@@ -16,6 +16,8 @@ COPY src/EAuction.Security/EAuction.Security.csproj src/EAuction.Security/
 COPY src/EAuction.AuctionAdmin/EAuction.AuctionAdmin.csproj src/EAuction.AuctionAdmin/
 COPY src/EAuction.Participant/EAuction.Participant.csproj src/EAuction.Participant/
 COPY src/EAuction.Notifications/EAuction.Notifications.csproj src/EAuction.Notifications/
+COPY src/EAuction.Audit/EAuction.Audit.csproj src/EAuction.Audit/
+COPY src/EAuction.Reporting/EAuction.Reporting.csproj src/EAuction.Reporting/
 COPY tools/migrate/EAuction.Migrate.csproj tools/migrate/
 COPY tools/topics/EAuction.Topics.csproj tools/topics/
 RUN dotnet restore tools/migrate/EAuction.Migrate.csproj \
@@ -26,7 +28,8 @@ COPY tools/topics/ tools/topics/
 RUN dotnet publish tools/migrate/EAuction.Migrate.csproj -c Release -o /app --no-restore \
  && dotnet publish tools/topics/EAuction.Topics.csproj  -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/runtime:8.0
+# aspnet, not runtime: Migrate references the service projects, which are web apps.
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app .
 

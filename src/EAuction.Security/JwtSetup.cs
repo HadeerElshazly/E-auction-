@@ -13,6 +13,13 @@ public sealed record JwtOptions
     /// <summary>Keycloak realm URL, e.g. https://id.example.sa/realms/eauction.</summary>
     public string? Authority { get; init; }
 
+    /// <summary>
+    /// The <c>iss</c> tokens carry, when it differs from <see cref="Authority"/>. In
+    /// Compose the services reach Keycloak as keycloak:8080 but the browser logs in at
+    /// localhost:8080, and Keycloak stamps the host it was called on. Defaults to Authority.
+    /// </summary>
+    public string? Issuer { get; init; }
+
     public string Audience { get; init; } = "eauction";
     public bool RequireHttpsMetadata { get; init; } = true;
 }
@@ -33,6 +40,7 @@ public static class JwtSetup
         var options = new JwtOptions
         {
             Authority = configuration["Jwt:Authority"],
+            Issuer = configuration["Jwt:Issuer"],
             Audience = configuration["Jwt:Audience"] ?? "eauction",
             RequireHttpsMetadata = configuration.GetValue("Jwt:RequireHttpsMetadata", true)
         };
@@ -59,7 +67,7 @@ public static class JwtSetup
                     ValidateAudience = true,
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
-                    ValidIssuer = options.Authority,
+                    ValidIssuer = options.Issuer ?? options.Authority,
                     ValidAudience = options.Audience,
                     NameClaimType = "sub",
                     RoleClaimType = ClaimTypes.Role,
