@@ -141,7 +141,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
       await anon.goto(BIDDER_URL)
       await expect(anon.getByRole('button', { name: 'الدخول بنفاذ' }).first()).toBeVisible()
 
-      const card = anon.locator('.card', { hasText: nameAr })
+      const card = anon.locator('.auction-card', { hasText: nameAr })
       await expect(card).toBeVisible({ timeout: 90_000 })
       await expect(card).toContainText('3 قطعة')
       await card.getByRole('button', { name: 'التفاصيل' }).click()

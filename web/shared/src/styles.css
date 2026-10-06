@@ -362,6 +362,12 @@ tbody tr:hover { background: var(--surface-sunken); }
 }
 .auction-card:hover { box-shadow: var(--shadow-lift); transform: translateY(-2px); border-color: var(--border); color: inherit; }
 
+/* A card that is not itself the control. The bidder's catalogue puts a التفاصيل
+   button in the body, so the card must not offer a pointer and lift on hover and
+   then do nothing when clicked. */
+.auction-card.static { cursor: default; }
+.auction-card.static:hover { transform: none; box-shadow: var(--shadow); }
+
 .auction-card .cover {
   position: relative;
   height: 150px;

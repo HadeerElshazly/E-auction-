@@ -36,41 +36,71 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
         </div>
       )}
 
-      <div className="grid">
+      <div className="auction-grid">
         {auctions.map((a) => {
           const s = statusAr[a.status] ?? { ar: a.status, tone: 'done' }
           const live = a.status === 'Live'
           return (
-            <div className="card" key={a.id} style={{ margin: 0 }}>
-              <div className="row" style={{ marginBottom: 10 }}>
-                <span className={`pill ${s.tone}`}>{s.ar}</span>
-                <span className="grow" />
+            <div className="auction-card static" key={a.id}>
+              <div className="cover">
+                <span className="channel">
+                  {a.plotCount} قطعة · {a.totalAreaSqm} م²
+                </span>
+
+                {/* The clock, over the cover, as the proposal has it. A live
+                    auction shows what is left of it; a scheduled one shows when it
+                    opens. A closed one shows nothing, because a countdown on a
+                    finished auction is a number nobody can act on. */}
                 {live && (
-                  <span className="muted small num" title="الوقت المتبقي">
-                    {untilText(a.endsAt)}
-                  </span>
+                  <div className="countdown" aria-hidden="true">
+                    <div>
+                      <b>{untilText(a.endsAt)}</b>
+                      <span>حتى الإغلاق</span>
+                    </div>
+                  </div>
                 )}
               </div>
 
-              <h2 style={{ marginBottom: 6 }}>{a.nameAr}</h2>
-              <div className="muted small" style={{ marginBottom: 12 }}>
-                {a.plotCount} قطعة · {a.totalAreaSqm} م²
-              </div>
+              <div className="body">
+                <p className="title">{a.nameAr}</p>
 
-              <div className="muted small">{live ? 'السعر الحالي' : 'سعر الافتتاح'}</div>
-              <div className="big-number num" style={{ marginBottom: 12 }}>
-                {sar(live ? a.priceMinorUnits ?? a.openingPriceMinorUnits : a.openingPriceMinorUnits, 'ar')}
-              </div>
+                <div>
+                  <span className={`pill ${s.tone}`}>{s.ar}</span>
+                </div>
 
-              <div className="muted small" style={{ marginBottom: 12 }}>
-                التأمين <span className="num">{sar(a.depositMinorUnits, 'ar')}</span>
-                {' · '}
-                الكراسة <span className="num">{sar(a.bookletPriceMinorUnits, 'ar')}</span>
-              </div>
+                <div>
+                  <div className="muted small">
+                    {live ? 'السعر الحالي' : 'سعر الافتتاح'}
+                  </div>
+                  <div className="big-number num">
+                    {sar(
+                      live
+                        ? a.priceMinorUnits ?? a.openingPriceMinorUnits
+                        : a.openingPriceMinorUnits,
+                      'ar',
+                    )}
+                  </div>
+                </div>
 
-              <button className="primary" onClick={() => onOpen(a.id)}>
-                التفاصيل
-              </button>
+                <div className="facts">
+                  <div>
+                    <span>التأمين</span>
+                    <span className="num">{sar(a.depositMinorUnits, 'ar')}</span>
+                  </div>
+                  <div>
+                    <span>الكراسة</span>
+                    <span className="num">{sar(a.bookletPriceMinorUnits, 'ar')}</span>
+                  </div>
+                </div>
+
+                <button
+                  className="primary"
+                  style={{ marginTop: 'auto' }}
+                  onClick={() => onOpen(a.id)}
+                >
+                  التفاصيل
+                </button>
+              </div>
             </div>
           )
         })}

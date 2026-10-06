@@ -4,15 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>صندوق التجارب — e-auction</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230f5c3f'/%3E%3Ctext x='8' y='12' font-size='10' text-anchor='middle' fill='white'%3E%E2%9C%93%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2306a8b7'/%3E%3Ctext x='8' y='12' font-size='10' text-anchor='middle' fill='white'%3E%E2%9C%93%3C/text%3E%3C/svg%3E">
 <style>
 /* Standalone on purpose: this page must render with the portals unbuilt and their
    bundles absent, because it is what you open when the rest is not working yet.
    The palette is the portals' so the two do not look like different systems. */
 :root {
-  --bg:#f6f7f9; --surface:#fff; --border:#d8dce3; --text:#15181d; --muted:#5c6472;
-  --accent:#0f5c3f; --accent-weak:#e7f1ec; --danger:#a3242b; --danger-weak:#fbeceb;
-  --warn:#8a5a00; --warn-weak:#fdf3e0; --radius:8px;
+  --bg:#f4f6f8; --surface:#fff; --border:#e8ebee; --border-strong:#d6dbe0;
+  --text:#22282b; --muted:#8b9299;
+  --accent:#06a8b7; --accent-dark:#058b98; --accent-weak:#e6f7f9; --accent-line:#b9e7ec;
+  --ok:#127a46; --ok-weak:#e4f0ea;
+  --danger:#c0392b; --danger-weak:#fbecea;
+  --warn:#b26a00; --warn-weak:#fdf2e2;
+  --radius:14px; --radius-sm:10px;
+  --shadow: 0 1px 2px rgba(16,32,38,.04), 0 8px 24px rgba(16,32,38,.06);
   --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,monospace;
 }
 *{box-sizing:border-box}
@@ -26,7 +31,7 @@ header.bar{display:flex;align-items:center;gap:14px;padding:14px 20px;margin-bot
 header.bar h1{font-size:17px;margin:0;font-weight:650}
 .grow{flex:1}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:18px;margin-bottom:16px}
+  padding:22px;margin-bottom:16px;box-shadow:var(--shadow)}
 .card h2{font-size:15px;margin:0 0 6px;font-weight:650}
 .card p.lede{margin:0 0 16px;color:var(--muted);font-size:13px}
 .notice{border-radius:var(--radius);padding:12px 14px;margin-bottom:16px;font-size:14px}
@@ -42,18 +47,21 @@ tbody tr:last-child td{border-bottom:0}
    room and off a second screen, and selectable in one click to paste. */
 .code{font-family:var(--mono);font-size:30px;letter-spacing:.14em;font-weight:600;
   direction:ltr;unicode-bidi:isolate;background:var(--accent-weak);color:var(--accent);
-  border-radius:6px;padding:4px 12px;display:inline-block;cursor:pointer;
-  border:1px solid #c9e0d5;user-select:all}
+  border-radius:var(--radius-sm);padding:4px 12px;display:inline-block;cursor:pointer;
+  border:1px solid var(--accent-line);user-select:all}
 .bar-track{height:4px;background:var(--border);border-radius:2px;margin-top:8px;overflow:hidden}
 .bar-fill{height:100%;background:var(--accent);transition:width .95s linear}
 .bar-fill.low{background:var(--danger)}
-button{font:inherit;padding:8px 14px;border-radius:6px;cursor:pointer;
-  border:1px solid var(--border);background:var(--surface);color:var(--text)}
+button{font:inherit;padding:10px 18px;border-radius:var(--radius-sm);cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--surface);color:var(--text);
+  font-weight:500}
+button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;
+  box-shadow:0 6px 16px rgba(6,168,183,.25)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .pill{font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid var(--border)}
-.pill.ok{background:var(--accent-weak);color:var(--accent);border-color:#c9e0d5}
+.pill.ok{background:var(--ok-weak);color:var(--ok);border-color:#cfe3d8}
 .pill.no{background:var(--danger-weak);color:var(--danger);border-color:#efc9c7}
 .pill.replay{background:var(--warn-weak);color:var(--warn);border-color:#e8d4a8}
 select{font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--border);
@@ -62,9 +70,13 @@ ol{margin:0;padding-inline-start:20px;color:var(--muted);font-size:13px}
 ol li{margin-bottom:4px}
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#111418;--surface:#181c21;--border:#2b313a;--text:#e8eaed;--muted:#9aa3b0;
-    --accent:#4bb98a;--accent-weak:#16271f;--danger:#e8736f;--danger-weak:#2a1a1a;
-    --warn:#d9a94a;--warn-weak:#271f12;
+    --bg:#11161a;--surface:#182025;--border:#28333a;--border-strong:#35424a;
+    --text:#e7edf1;--muted:#8c99a3;
+    --accent:#2fc0cf;--accent-dark:#4ad0dd;--accent-weak:#102d33;--accent-line:#1d4850;
+    --ok:#4cc08a;--ok-weak:#11291f;
+    --danger:#e8736f;--danger-weak:#2b1a19;
+    --warn:#d9a44a;--warn-weak:#271f12;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
   }
 }
 </style>

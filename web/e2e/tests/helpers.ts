@@ -486,7 +486,12 @@ export async function openPublicAuction(page: Page, nameAr: string): Promise<voi
 
 /** The same, without the reload — see openAuctionInPlace for why that matters. */
 export async function openPublicAuctionInPlace(page: Page, nameAr: string): Promise<void> {
-  const card = page.locator('.card', { hasText: nameAr })
+  // `.auction-card`, not `.card`: the catalogue is a grid of auction cards now. A
+  // generic `.card` would also match the notice above the grid and whatever else
+  // frames the page — `hasText` narrows it, but matching the wrong kind of box and
+  // being saved by its contents is how a locator starts passing for the wrong
+  // reason.
+  const card = page.locator('.auction-card', { hasText: nameAr })
   await expect(card).toBeVisible({ timeout: 90_000 })
   await card.getByRole('button', { name: 'التفاصيل' }).click()
 }
