@@ -264,6 +264,9 @@ input:disabled, select:disabled, textarea:disabled { background: var(--surface-s
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: start; padding: 12px 12px; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-size: 12px; font-weight: 650; }
+/* A .num cell is left-to-right, which turns `start` into left: on an Arabic page
+   the value drifted to the far side of its column, away from its heading. */
+[dir="rtl"] td.num, [dir="rtl"] th.num { text-align: right; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--surface-sunken); }
 
@@ -334,6 +337,103 @@ tbody tr:hover { background: var(--surface-sunken); }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .big-number { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
+
+.strong { font-weight: 650; }
+
+/* --- the auction page (bidder) ---------------------------------------------
+ *
+ * Read top to bottom the way a bidder decides: what is this and what state is it
+ * in, when does it run, what does it cost to take part. */
+
+.back-link {
+  border: 0;
+  background: none;
+  padding: 6px 0;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.back-link:hover:not(:disabled) { color: var(--accent); }
+
+.auction-hero { padding: 26px; }
+.auction-hero h1 { font-size: 24px; font-weight: 700; margin: 0; line-height: 1.35; }
+.auction-hero .hero-sub { color: var(--muted); font-size: 14px; margin-top: 2px; }
+
+/* Short facts in a line, separated by dots rather than boxed — they are context
+   for the title, not things to act on. */
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 0;
+  margin: 14px 0 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.hero-meta > span:not(:last-child)::after {
+  content: "·";
+  margin-inline: 10px;
+  color: var(--border-strong);
+}
+
+/* When it runs: start → end, and the one figure that changes — the countdown. */
+.timeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 20px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.timeline-point,
+.timeline-countdown { display: grid; gap: 2px; }
+.timeline-label { color: var(--muted); font-size: 13px; }
+.timeline-value { font-size: 16px; font-weight: 650; }
+.timeline-note { color: var(--warn); font-size: 12px; }
+.timeline-arrow { color: var(--border-strong); font-size: 18px; }
+.timeline-countdown {
+  margin-inline-start: auto;
+  padding-inline-start: 20px;
+  border-inline-start: 1px solid var(--border);
+}
+.timeline-countdown .timeline-value { color: var(--accent-dark); font-size: 18px; }
+
+/* The four figures a bidder weighs, at one size so none of them reads as a
+   footnote. The price tile is tinted once the auction is live, because then it is
+   the figure that moves. */
+.stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.stat {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.stat.highlight { background: var(--accent-weak); border-color: var(--accent-line); }
+.stat-label { color: var(--muted); font-size: 13px; font-weight: 500; }
+.stat-value { font-size: 21px; font-weight: 700; line-height: 1.35; }
+.stat.highlight .stat-value { color: var(--accent-dark); }
+.stat-sub { color: var(--muted); font-size: 13px; }
+
+.section-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px; }
+.section-head h2 { margin: 0; }
+.card .lede { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+
+.table-wrap { overflow-x: auto; margin-inline: -4px; }
+
+@media (max-width: 640px) {
+  .auction-hero { padding: 18px; }
+  .auction-hero h1 { font-size: 20px; }
+  .timeline-arrow { display: none; }
+  .timeline-countdown { margin-inline-start: 0; padding-inline-start: 0; border-inline-start: 0; }
+}
 
 .steps { list-style: none; padding: 0; margin: 0; }
 .steps li { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; }

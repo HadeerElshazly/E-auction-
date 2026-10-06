@@ -4,6 +4,14 @@ import type { AuctionDetail, Bidder, Subscription } from './types'
 import { useLivePrice } from './useLivePrice'
 import { SubscriptionSteps } from './SubscriptionSteps'
 import { BidBox } from './BidBox'
+import { statusAr } from './Catalogue'
+
+const areaFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
+
+/** 1234.5 -> "1,234.5", Latin digits like the dates and the countdown. */
+function area(sqm: number): string {
+  return areaFormat.format(sqm)
+}
 
 interface Props {
   auction: AuctionDetail
@@ -57,26 +65,40 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
     return () => window.clearInterval(t)
   }, [])
 
-  const live = price?.status === 'Live'
+  const lifecycle = price?.status ?? auction.status
+  const live = lifecycle === 'Live'
+  const status = statusAr[lifecycle] ?? { ar: lifecycle, tone: 'done' }
   const endsAt = price?.effectiveEndsAt ?? auction.effectiveEndsAt ?? auction.endsAt
   const eligible = subscription?.status === 'Eligible'
+  const totalArea = auction.plots.reduce((sum, p) => sum + p.areaSqm, 0)
+
+  // What the clock should say, by lifecycle. A hall auction has no clock while it
+  // runs — the auctioneer closes it, not a timer (§29) — so it says so instead of
+  // counting down to an end time that does not bind.
+  const countdown =
+    lifecycle === 'Scheduled'
+      ? { label: 'يبدأ بعد', value: untilText(auction.startsAt) }
+      : live && auction.channel === 'Onsite'
+        ? { label: 'الإغلاق', value: 'بقرار مدير المزاد' }
+        : live
+          ? { label: 'يُغلق بعد', value: untilText(endsAt) }
+          : { label: 'الحالة', value: status.ar }
 
   return (
     <>
-      <div className="row" style={{ marginBottom: 14 }}>
-        <button onClick={onBack}>← كل المزادات</button>
-      </div>
+      <button className="back-link" onClick={onBack}>
+        → كل المزادات
+      </button>
 
       {error && <div className="notice error">{error}</div>}
 
-      <div className="card">
-        <div className="row" style={{ marginBottom: 4 }}>
-          <h2 style={{ margin: 0 }}>{auction.nameAr}</h2>
-          <span className="grow" />
+      <div className="card auction-hero">
+        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+          <span className={`pill ${status.tone}`}>{status.ar}</span>
           {/* Said out loud, because the two differ in how stale the price can be
               and a bidder in a war deserves to know which they are on. */}
           {live && transport === 'stream' && (
-            <span className="pill live" title="يُحدَّث السعر فور تغيّره">
+            <span className="pill teal" title="يُحدَّث السعر فور تغيّره">
               مباشر
             </span>
           )}
@@ -86,21 +108,55 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
             </span>
           )}
         </div>
-        <div className="muted small ltr" style={{ marginBottom: 16 }}>
-          {auction.nameEn}
+
+        <h1>{auction.nameAr}</h1>
+        {auction.nameEn && <div className="hero-sub ltr">{auction.nameEn}</div>}
+
+        <div className="hero-meta">
+          <span>{auction.plots.length} قطعة</span>
+          <span>
+            <span className="num">{area(totalArea)}</span> م²
+          </span>
+          <span>{auction.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'}</span>
+          <span>
+            {auction.bidderVisibility === 'Named' ? 'أسماء المزايدين ظاهرة' : 'هوية المزايدين مخفية'}
+          </span>
         </div>
 
-        <div className="grid">
-          <div>
-            <div className="muted small">{live ? 'السعر الحالي' : 'سعر الافتتاح'}</div>
-            <div className="big-number num">
+        <div className="timeline">
+          <div className="timeline-point">
+            <span className="timeline-label">يبدأ</span>
+            <span className="timeline-value">{when(auction.startsAt)}</span>
+          </div>
+          <span className="timeline-arrow" aria-hidden="true">
+            ←
+          </span>
+          <div className="timeline-point">
+            <span className="timeline-label">ينتهي</span>
+            <span className="timeline-value">{when(endsAt)}</span>
+            {price && price.extensionsUsed > 0 && (
+              <span className="timeline-note">
+                مُدّد {price.extensionsUsed} من {price.maxExtensions}
+              </span>
+            )}
+          </div>
+          <div className="timeline-countdown">
+            <span className="timeline-label">{countdown.label}</span>
+            <span className="timeline-value">{countdown.value}</span>
+          </div>
+        </div>
+
+        <div className="stat-grid">
+          <div className={`stat${live ? ' highlight' : ''}`}>
+            <div className="stat-label">{live ? 'السعر الحالي' : 'سعر الافتتاح'}</div>
+            <div className="stat-value num">
               {sar(
                 live ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits : auction.openingPriceMinorUnits,
                 'ar',
               )}
             </div>
             {price?.leaderLabel && (
-              <div className="small" style={{ marginTop: 4 }}>
+              <div className="stat-sub">
                 {price.leaderIsYou ? (
                   <strong style={{ color: 'var(--accent)' }}>أنت الأعلى حالياً</strong>
                 ) : (
@@ -108,44 +164,32 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
                   // auction and a name on a named one (D-22), and the server decides
                   // which — a portal that assembled it from parts would be a second
                   // place for that decision to be wrong.
-                  <span className="muted">المزايد الأعلى: {price.leaderLabel}</span>
+                  <>المزايد الأعلى: {price.leaderLabel}</>
                 )}
               </div>
             )}
           </div>
 
-          <div>
-            <div className="muted small">{live ? 'الوقت المتبقي' : 'يبدأ'}</div>
-            <div className="big-number num">
-              {live
-                ? untilText(endsAt)
-                : when(auction.startsAt)}
-            </div>
-            {price && price.extensionsUsed > 0 && (
-              <div className="muted small" style={{ marginTop: 4 }}>
-                مُدّد {price.extensionsUsed} من {price.maxExtensions}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <div className="muted small">أقل مزايدة مقبولة</div>
-            <div className="num" style={{ fontSize: 18, fontWeight: 650 }}>
+          <div className="stat">
+            <div className="stat-label">أقل مزايدة مقبولة</div>
+            <div className="stat-value num">
               {sar(price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits, 'ar')}
             </div>
-            <div className="muted small">
-              بزيادة <span className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</span>
+            <div className="stat-sub">
+              أقل زيادة <span className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</span>
             </div>
           </div>
 
-          <div>
-            <div className="muted small">التأمين</div>
-            <div className="num" style={{ fontSize: 18, fontWeight: 650 }}>
-              {sar(auction.depositMinorUnits, 'ar')}
-            </div>
-            <div className="muted small">
-              الكراسة <span className="num">{sar(auction.bookletPriceMinorUnits, 'ar')}</span>
-            </div>
+          <div className="stat">
+            <div className="stat-label">مبلغ التأمين</div>
+            <div className="stat-value num">{sar(auction.depositMinorUnits, 'ar')}</div>
+            <div className="stat-sub">يُسدَّد قبل المزايدة</div>
+          </div>
+
+          <div className="stat">
+            <div className="stat-label">قيمة كراسة الشروط</div>
+            <div className="stat-value num">{sar(auction.bookletPriceMinorUnits, 'ar')}</div>
+            <div className="stat-sub">شرط للتسجيل في المزاد</div>
           </div>
         </div>
       </div>
@@ -195,42 +239,56 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
       )}
 
       <div className="card">
-        <h2>قطع الأرض ({auction.plots.length})</h2>
-        <p className="muted small" style={{ marginTop: -8 }}>
-          تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.
-        </p>
-        <table>
-          <thead>
-            <tr>
-              <th>رقم الصك</th>
-              <th>المساحة (م²)</th>
-              <th>الموقع</th>
-              <th>الوصف</th>
-            </tr>
-          </thead>
-          <tbody>
-            {auction.plots.map((p) => (
-              <tr key={p.id}>
-                <td className="num">{p.deedNumber}</td>
-                <td className="num">{p.areaSqm}</td>
-                <td className="num small">
-                  {p.latitude && p.longitude ? (
-                    <a
-                      href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      {p.latitude}, {p.longitude}
-                    </a>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td className="small">{p.descriptionAr ?? '—'}</td>
+        <div className="section-head">
+          <h2>قطع الأرض</h2>
+          <span className="pill teal plain">
+            {auction.plots.length} قطعة · <span className="num">{area(totalArea)}</span> م²
+          </span>
+        </div>
+        <p className="lede">تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.</p>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>رقم الصك</th>
+                <th>المساحة</th>
+                <th>الموقع</th>
+                <th>الوصف</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {auction.plots.map((p) => (
+                <tr key={p.id}>
+                  {/* .num on a span, not the cell: on the cell it makes the cell
+                      left-to-right, which pushes the value to the far side of its
+                      column, away from the heading above it. */}
+                  <td>
+                    <span className="num strong">{p.deedNumber}</span>
+                  </td>
+                  <td>
+                    <span className="num">{area(p.areaSqm)}</span> م²
+                  </td>
+                  <td>
+                    {p.latitude && p.longitude ? (
+                      <a
+                        href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        title={`${p.latitude}, ${p.longitude}`}
+                      >
+                        عرض على الخريطة ↗
+                      </a>
+                    ) : (
+                      <span className="muted">غير محدد</span>
+                    )}
+                  </td>
+                  <td>{p.descriptionAr ?? <span className="muted">لا يوجد وصف</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   )

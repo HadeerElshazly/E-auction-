@@ -12,6 +12,7 @@ import {
   sar,
   type Api,
   type Session,
+  when,
 } from '@eauction/shared'
 import { reasons } from './reasons'
 import type { AuctionDetail, BidReceipt, BidVerdict, LivePrice } from './types'
@@ -96,7 +97,10 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
 
   const amount = parseRiyals(text)
   const tooLow = amount !== null && amount < minimum
-  const closed = price !== null && price.status !== 'Live'
+  // Only a lifecycle that has ended is closed. "Scheduled" is not Live either, and
+  // treating it as closed told an eligible bidder their upcoming auction was over.
+  const closed = price !== null && ['Closed', 'PendingAward', 'Unsold'].includes(price.status)
+  const notStarted = price !== null && price.status === 'Scheduled'
 
   // B-04: the engine rejects a leader raising their own bid — it is almost always a
   // double-click and it costs the bidder money for nothing. The portal knows it is
@@ -158,6 +162,11 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
 
       {closed ? (
         <div className="notice info">أُغلق المزاد — لا تُقبل مزايدات جديدة.</div>
+      ) : notStarted ? (
+        <div className="notice info">
+          لم يبدأ المزاد بعد — تُفتح المزايدة في{' '}
+          <span dir="rtl">{when(auction.startsAt)}</span>.
+        </div>
       ) : (
         <>
           {problem && <div className="notice error">{problem}</div>}

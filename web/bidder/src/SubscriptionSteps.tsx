@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, config, sar, useStepUp, type Api, type Session } from '@eauction/shared'
+import { ApiError, api, config, sar, useStepUp, type Api, type Session } from '@eauction/shared'
 import { authConfig } from './authConfig'
 import type { AuctionDetail, Bidder, Subscription } from './types'
 
@@ -414,27 +414,30 @@ function Booklet({
   onError: (message: string | null) => void
 }) {
   const [busy, setBusy] = useState(false)
+  const documents = api({ baseUrl: config.documentsApi, session })
 
   const open = async () => {
     setBusy(true)
     onError(null)
+    let granted = false
     try {
       const { documentId, grant } = await participant.get<{
         documentId: string
         grant: string
       }>(`/auctions/${auction.id}/subscriptions/${session.subject}/booklet-grant`)
+      granted = true
 
-      // A new tab rather than a fetch into a blob: the document service answers
-      // with Content-Disposition: attachment, so the browser saves the file and
-      // the tab closes itself. A blob URL would work too and would cost holding
-      // a 40MB booklet in the page's memory for no reason.
-      window.open(
-        `${config.documentsApi}/documents/${documentId}?grant=${encodeURIComponent(grant)}`,
-        '_blank',
-        'noopener,noreferrer',
+      // Fetched with the token, not opened in a new tab. The grant is bound to this
+      // bidder, so the document service checks it against the caller's subject —
+      // and a tab opened with window.open carries no Authorization header, so it
+      // arrived anonymous and got a 404 every time. Holding the booklet in memory
+      // as a blob for a moment is the price of the grant meaning what it says.
+      await documents.download(
+        `/documents/${documentId}?grant=${encodeURIComponent(grant)}`,
+        `كراسة-الشروط-${auction.id}.pdf`,
       )
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e))
+      onError(granted ? 'تعذّر تنزيل كراسة الشروط. حاول مرة أخرى بعد قليل.' : bookletProblem(e))
     } finally {
       setBusy(false)
     }
@@ -447,6 +450,22 @@ function Booklet({
       </button>
     </div>
   )
+}
+
+/**
+ * What a bidder is told when the booklet will not open. Not the raw "GET … failed
+ * (404)": that is a URL and a status code on the one screen with no staff on it.
+ *
+ * For the grant request only: it answers 404 when the auction has no booklet
+ * attached and 409 when this bidder has not paid for it. A failure after the grant
+ * — the download itself — is reported by the caller as worth retrying.
+ */
+function bookletProblem(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.reason === 'BookletNotPurchased') return 'لم يكتمل شراء كراسة الشروط بعد.'
+    if (e.status === 404) return 'لم تُرفق كراسة الشروط بهذا المزاد بعد. تواصل مع إدارة المزاد.'
+  }
+  return 'تعذّر تنزيل كراسة الشروط. حاول مرة أخرى بعد قليل.'
 }
 
 function Step({ done, text }: { done: boolean; text: string }) {

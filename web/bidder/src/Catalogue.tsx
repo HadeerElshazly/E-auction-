@@ -7,7 +7,7 @@ interface Props {
   onOpen: (id: string) => void
 }
 
-const statusAr: Record<string, { ar: string; tone: string }> = {
+export const statusAr: Record<string, { ar: string; tone: string }> = {
   Scheduled: { ar: 'قادم', tone: 'wait' },
   Live: { ar: 'جارٍ الآن', tone: 'live' },
   Closed: { ar: 'أُغلق', tone: 'done' },

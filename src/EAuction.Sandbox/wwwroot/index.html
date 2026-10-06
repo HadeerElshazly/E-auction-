@@ -64,6 +64,18 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff;
 .pill.ok{background:var(--ok-weak);color:var(--ok);border-color:#cfe3d8}
 .pill.no{background:var(--danger-weak);color:var(--danger);border-color:#efc9c7}
 .pill.replay{background:var(--warn-weak);color:var(--warn);border-color:#e8d4a8}
+/* Two explicit choices rather than one toggle: a toggle labelled with the action it
+   would take reads as the current state half the time, and in front of an audience
+   that is a wrong guess about whether the next payment goes through. */
+.choice{display:inline-flex;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  overflow:hidden}
+.choice button{border:0;border-radius:0;background:var(--surface);color:var(--muted)}
+.choice button + button{border-inline-start:1px solid var(--border-strong)}
+.choice button:disabled{cursor:progress}
+#accept.on{background:var(--ok);color:#fff}
+#decline.on{background:var(--danger);color:#fff}
+.choice button.on:hover:not(:disabled){color:#fff}
+select:disabled{opacity:.5}
 select{font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--border);
   background:var(--surface);color:var(--text)}
 ol{margin:0;padding-inline-start:20px;color:var(--muted);font-size:13px}
@@ -130,18 +142,22 @@ ol li{margin-bottom:4px}
     <h2>بوابة الدفع</h2>
     <p class="lede">
       ما طُلب من البوابة فعلًا: قيمة الكراسة، والتأمين، والسعي عند الترسية، والمستردّات.
-      البوابة تقبل كل شيء افتراضيًا — والمفتاح أدناه يجعلها ترفض، وهو الطريق الوحيد
-      لاستعراض حالة «لم يدفع» ثم الاستبعاد.
+      اختر كيف تردّ البوابة على عمليات الدفع القادمة: <strong>قبول</strong> (الافتراضي) أو
+      <strong>رفض</strong> بسبب تختاره — وهو الطريق الوحيد لاستعراض حالة «لم يدفع» ثم
+      الاستبعاد. الاختيار يسري على كل عملية دفع جديدة حتى تغيّره.
     </p>
 
     <div class="row" style="margin-bottom:14px">
-      <span id="decline-state" class="pill">…</span>
-      <select id="reason">
+      <span class="small muted">ردّ البوابة:</span>
+      <div class="choice" role="radiogroup" aria-label="ردّ البوابة على الدفع">
+        <button id="accept" type="button" role="radio">✓ قبول الدفع</button>
+        <button id="decline" type="button" role="radio">✕ رفض الدفع</button>
+      </div>
+      <select id="reason" aria-label="سبب الرفض">
         <option value="InsufficientFunds">رصيد غير كافٍ — InsufficientFunds</option>
         <option value="CardDeclined">رفض البنك — CardDeclined</option>
         <option value="Expired">انتهت صلاحية البطاقة — Expired</option>
       </select>
-      <button id="toggle" class="danger">…</button>
       <span class="grow"></span>
       <span id="count" class="muted small"></span>
     </div>
@@ -222,13 +238,16 @@ async function nafath() {
 let declining = false
 
 function paintToggle() {
-  const state = document.getElementById('decline-state')
-  const button = document.getElementById('toggle')
+  const accept = document.getElementById('accept')
+  const decline = document.getElementById('decline')
 
-  state.textContent = declining ? 'البوابة ترفض الدفع' : 'البوابة تقبل الدفع'
-  state.className = 'pill ' + (declining ? 'no' : 'ok')
-  button.textContent = declining ? 'أعِد القبول' : 'اجعلها ترفض'
-  button.className = declining ? 'primary' : 'danger'
+  accept.classList.toggle('on', !declining)
+  decline.classList.toggle('on', declining)
+  accept.setAttribute('aria-checked', String(!declining))
+  decline.setAttribute('aria-checked', String(declining))
+
+  // The reason only means something while declining; changing it then re-applies.
+  document.getElementById('reason').disabled = !declining
 }
 
 async function payments() {
@@ -290,27 +309,34 @@ async function payments() {
   }
 }
 
-document.getElementById('toggle').addEventListener('click', async () => {
-  const button = document.getElementById('toggle')
-  button.disabled = true
+async function setDecline(decline) {
+  const buttons = [document.getElementById('accept'), document.getElementById('decline')]
+  buttons.forEach((b) => { b.disabled = true })
   try {
     const r = await fetch('api/payments/decline', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        decline: !declining,
+        decline,
         reason: document.getElementById('reason').value,
       }),
     })
     const data = await r.json()
     if (!r.ok) { problem('pay-error', data.problem ?? `HTTP ${r.status}`); return }
+    problem('pay-error', null)
     declining = data.declineCharges
     paintToggle()
   } catch (e) {
     problem('pay-error', `تعذّر تغيير حالة البوابة: ${e.message}`)
   } finally {
-    button.disabled = false
+    buttons.forEach((b) => { b.disabled = false })
   }
+}
+
+document.getElementById('accept').addEventListener('click', () => setDecline(false))
+document.getElementById('decline').addEventListener('click', () => setDecline(true))
+document.getElementById('reason').addEventListener('change', () => {
+  if (declining) setDecline(true)
 })
 
 paintToggle()

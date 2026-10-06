@@ -225,10 +225,10 @@ chain still shows it afterwards.
 Worth ninety seconds if anyone asks what happens when a payment fails, because it
 is the only part of the money story that cannot be shown by it working.
 
-In the sandbox's payment panel press **اجعلها ترفض**, pick a reason, then have the
+In the sandbox's payment panel pick a reason and press **رفض الدفع**, then have the
 second bidder try to pay their deposit. The portal tells them the payment was
 refused and offers to try again; they never become eligible; and the committee's
-screen shows them as not qualified. Press **أعِد القبول** afterwards, or the rest of
+screen shows them as not qualified. Press **قبول الدفع** afterwards, or the rest of
 the demonstration will fail in the same way and you will be debugging in front of an
 audience.
 
