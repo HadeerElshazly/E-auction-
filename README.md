@@ -9,6 +9,20 @@ for Jeddah Municipality.
 - [Architecture](docs/ARCHITECTURE.md) — domain model, service map, event
   contracts, auction lifecycle, security, deployment, open items.
 
+## Showing it to somebody
+
+```bash
+tools/smoke/run-portals.sh --with-deps --keep-up
+```
+
+Brings up every service and both portals and leaves them running — bidder on
+:3000, administration on :3001, every account's password `dev-only-password`.
+
+[**docs/DEMO.md**](docs/DEMO.md) is a thirty-minute script for a stakeholder
+demo: one auction from preparation through bidding, award, a disqualification and
+the cascade, to التقارير and the audit trail — with the answers to give when
+somebody asks what is real and what is simulated.
+
 ## Repository layout
 
 ```
@@ -121,6 +135,9 @@ Architecture document is in review.
   inventory, deposit exposure and disqualifications, as a read model rebuilt from
   the topics, with a CSV export Excel reads correctly in Arabic. It never sees the
   reserve price, and §35 says what that costs.
+- **Both of those on a screen** — التقارير and سجل المراجعة in the admin portal,
+  the audit trail with a button that recomputes the hash chain in front of you. The
+  `auditor` role sees the trail and an administrator does not, by design (§36).
 
 **555 tests green** with a broker and an S3 endpoint running, 531 without — the
 Kafka and object-store integration tests skip rather than fail when their

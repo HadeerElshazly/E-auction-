@@ -3652,13 +3652,10 @@ plots leave three entries, and the chain verifies over all 26 of them.
 - **Retention is undecided.** A government land-sale record is probably kept for
   years or decades, which is a policy question rather than a technical one, and
   `missingTail` is only meaningful as far back as the topic reaches.
-- **No portal.** An auditor reaches the trail with a token and `curl`. The compose
-  stack gives the service no browser origin at all; the chart shares one
-  `config.cors.allowedOrigins` across every service, so there it does inherit the
-  portals' origins. That is harmless — CORS governs what a browser may do with a
-  response, and no page on either portal calls this service — but it is not the
-  same thing as allowing nothing, and it is worth separating if a portal is ever
-  built for the trail.
+- ~~**No portal.**~~ *Superseded by §36.* The admin portal now renders سجل المراجعة
+  for the `auditor` role, with the verify button on it — because a tamper-evidence
+  claim nobody can check on a screen is a claim nobody believes. The compose stack
+  allows the admin portal's origin on this service and only that one.
 - **The append-only trigger is not tested under a non-owner role.** It fires for
   every row regardless of who is connected, but the stronger arrangement — a
   Postgres role with `INSERT` and `SELECT` and no `UPDATE`/`DELETE`, so the service
@@ -3946,10 +3943,10 @@ seeded, so whatever the walk-through actually did is what the reports say.
 
 ### Still not verified
 
-- **No portal.** التقارير are reachable with a token and `curl`, and the CSV is the
-  deliverable. A screen in the admin portal is the obvious next step, and P-2 —
-  "report definitions" — is still an open product question, so building one now
-  would be guessing at layouts.
+- ~~**No portal.**~~ *Superseded by §36.* The admin portal now renders all six
+  reports with a CSV download on each. P-2 — "report definitions" — is still an
+  open product question, so the layouts are a first answer rather than a specified
+  one; they are built to be argued with.
 - **Never run with Debezium** instead of the polling relay, as with every other
   consumer here (§16).
 - **The revenue report groups in memory.** It loads the settlements of every auction
@@ -3963,3 +3960,117 @@ seeded, so whatever the walk-through actually did is what the reports say.
 - **P-1 is answerable now and not answered.** `GET /reports/phases` returns the
   plot count per phase, which is what settles whether the plan holds 327 or 372.
   Nobody has loaded the real plan data to ask it.
+
+---
+
+## 36. The two screens a stakeholder asks for
+
+> A script for walking somebody through the whole of it is in
+> [DEMO.md](DEMO.md), including the answers to give when they ask which parts are
+> real.
+
+§34 and §35 each built a service and left it reachable only with a token and
+`curl`. That is enough to prove the logic and not enough for anybody to see it, and
+"nobody can see it" is indistinguishable from "it does not exist" in a room where a
+decision is being made.
+
+Both are now screens in the admin portal, behind a tab strip that appears only when
+the signed-in account has more than one screen to choose between.
+
+### The roles decide the tabs, and one of them is absent on purpose
+
+```
+canReport = reporting | auction-admin | award-committee
+canAudit  = auditor
+```
+
+An administrator signing in sees **المزادات** and **التقارير** and no audit tab.
+That is §34 working rather than a permission someone forgot: an auditor who could
+also approve an auction would be reading the record of their own actions. A
+Playwright test asserts the absence, because an absence nobody checks is the kind
+of thing a later "just add the tab" quietly removes.
+
+The reverse holds too. `auditor-user` sees **سجل المراجعة** and nothing else — not
+التقارير, which keeps §35's promise that the audit role grants nothing outside the
+trail — and `reporting-user` is shown a one-line note on the auctions screen rather
+than a list that fails to load. A read-only account that looks broken is a
+read-only account somebody asks to be upgraded.
+
+This also widened the portal's own gate. It previously admitted
+`auction-admin`, `award-committee` or `operator`, so both new roles would have been
+locked out of the portal entirely.
+
+### The verify button is the point of the audit screen
+
+Everything else on it is a table of rows in a database, which is to say something a
+sufficiently determined administrator could have written. **تحقّق من السلسلة**
+recomputes every hash from the payload stored beside it and reports the first link
+that does not follow.
+
+Its verdict reports three things separately rather than as one green tick, and the
+separation is the same one `GET /audit/verify` makes: whether the chain holds,
+whether an entry is missing from the middle, and whether the service is simply a
+few seconds behind the topic. A single tick would conflate "nothing was tampered
+with" with "nothing is missing", and the second is the one a hash chain cannot see
+on its own.
+
+Action names are translated for the reader — `ApproveAuction` becomes
+اعتماد المزاد — while the *subject* stays raw, `auction/<id>`. The audit service
+does not know what an auction is and should not (§34); it stores the string and
+whoever is reading knows one when they see it.
+
+### A download has to be fetched, not linked
+
+`<a download>` and `window.open` cannot carry an `Authorization` header, so a CSV
+behind a role policy cannot be a link. `api().download` fetches it with the bearer
+token, turns the response into a blob and clicks a synthetic anchor, taking the
+filename from `Content-Disposition` when the service sets one — which التقارير do,
+dated, because the second thing anybody asks of a downloaded report is which day it
+was run on.
+
+The object URL is revoked on a timer rather than immediately: revoking it in the
+same turn as the click races the download the click starts, and the file arrives
+empty often enough to look intermittent.
+
+The alternative — a signed one-time download URL — is a second authentication
+mechanism on an endpoint that already has one, and that is the kind of thing that
+ends up being the way in.
+
+### One query string for the table and the file
+
+The filter is built once and used for both the table and the `format=csv`
+download. A download that filtered differently from the table above it is the sort
+of defect nobody notices until a figure is questioned in a meeting, which is the
+worst possible moment to find it.
+
+### What the browser tests cover, and what they deliberately do not
+
+`reports.spec.ts` drives all six report tabs, all three revenue groupings, the CSV
+download, and the audit screen's verify button, asserting the verdict comes back
+intact. It also asserts the two absences above.
+
+It asserts **no particular figure.** The reports are a read model of whatever the
+rest of the suite did, so pinning a number here would make this spec fail whenever
+another one changed — and the arithmetic is already tested in
+`EAuction.Reporting.Tests` against fixtures that hold still. What this spec is for
+is the class of failure only a browser finds: a CORS preflight the service never
+allowed, a `connect-src` that forbids the origin, a role that opens the API and not
+the tab, a download that cannot carry a token.
+
+Adding the two endpoints to `web/shared/src/endpoints.ts` is what makes the
+Content-Security-Policy permit them, because `connect-src` is derived from that
+same table (D-43) — so the policy could not drift from the portal's actual calls
+even if someone wanted it to.
+
+### Still not verified
+
+- **No screen for a phase's map.** The plot report carries latitude and longitude
+  and nothing plots them. A map is the single most persuasive thing a land-sale
+  programme could show, and it is also a tile-server dependency and a procurement
+  question.
+- **The report layouts are a first answer.** P-2 is still open, so the columns are
+  what the data supports rather than what anybody asked for. They are built to be
+  argued with.
+- **No CSV for سجل المراجعة.** Deliberate, for now: an export of the audit trail is
+  an export of who-did-what that leaves the system that protects it, and who may
+  take that copy is a question for the municipality rather than a default.

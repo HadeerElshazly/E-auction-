@@ -401,9 +401,9 @@ services:
       Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
       ConnectionStrings__Audit: "Host=postgres;Database=eauction_audit;Username=eauction;Password=eauction"
-      # No portal reads the trail yet, so no browser origin is allowed. An auditor
-      # reaches it through the API; adding a portal means adding its origin here.
-      Cors__AllowedOrigins: ""
+      # The admin portal renders سجل المراجعة, so its origin is allowed — and only
+      # its origin. The bidder portal on :3000 has no business here.
+      Cors__AllowedOrigins: "http://localhost:3001"
     depends_on:
       provision-migrate:
         condition: service_completed_successfully
@@ -464,6 +464,8 @@ services:
         VITE_QUERY_API: http://localhost:5094
         VITE_DOCUMENTS_API: http://localhost:5096
         VITE_NOTIFICATIONS_API: http://localhost:5097
+        VITE_AUDIT_API: http://localhost:5098
+        VITE_REPORTING_API: http://localhost:5099
     container_name: eauction-bidder-portal
     ports:
       - "3000:8080"
@@ -484,6 +486,8 @@ services:
         VITE_QUERY_API: http://localhost:5094
         VITE_DOCUMENTS_API: http://localhost:5096
         VITE_NOTIFICATIONS_API: http://localhost:5097
+        VITE_AUDIT_API: http://localhost:5098
+        VITE_REPORTING_API: http://localhost:5099
     container_name: eauction-admin-portal
     ports:
       - "3001:8080"

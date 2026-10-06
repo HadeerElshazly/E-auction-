@@ -260,8 +260,11 @@ start notifications EAuction.Notifications 5108 \
 # Who did what (D-44). No portal reads it, so it gets no browser origin: the
 # walk-through reaches it with an auditor's token over the API, which is the only
 # way in that exists today.
+# The admin portal reads سجل المراجعة from a browser now (§34's screen), so this
+# needs the portal origins like every other browser-facing service.
 start audit EAuction.Audit 5109 \
-  ConnectionStrings__Audit="$PG;Database=eauction_audit"
+  ConnectionStrings__Audit="$PG;Database=eauction_audit" \
+  Cors__AllowedOrigins="$PORTAL_ORIGINS"
 
 # التقارير (§35). A read model off four topics, so it needs no seeding — whatever
 # the walk-through above did is what the reports will say.

@@ -71,6 +71,8 @@ export VITE_CATCHER_API="${VITE_CATCHER_API:-http://localhost:5103}"
 export VITE_QUERY_API="${VITE_QUERY_API:-http://localhost:5105}"
 export VITE_DOCUMENTS_API="${VITE_DOCUMENTS_API:-http://localhost:5107}"
 export VITE_NOTIFICATIONS_API="${VITE_NOTIFICATIONS_API:-http://localhost:5108}"
+export VITE_AUDIT_API="${VITE_AUDIT_API:-http://localhost:5109}"
+export VITE_REPORTING_API="${VITE_REPORTING_API:-http://localhost:5110}"
 
 if [ "$BUILT" = 1 ]; then
   say "Building the portals…"
@@ -112,7 +114,11 @@ echo "  admin   http://localhost:3001$([ "$BUILT" = 1 ] && echo '  (built)')"
 # --- the walk-through ------------------------------------------------------
 
 if [ "$KEEP_UP" = 1 ]; then
-  say "Everything is up. Sign in as sara / admin-user / committee-user, password dev-only-password."
+  say "Everything is up. Password for every account: dev-only-password"
+  echo "  bidder  :3000  sara, khalid"
+  echo "  admin   :3001  admin-user (prepare)  committee-user (approve + award)"
+  echo "                 clerk-user (قاعة المزاد)  reporting-user (التقارير)"
+  echo "                 auditor-user (سجل المراجعة — and nothing else, by design)"
   say "Ctrl-C to stop."
   wait
   exit 0

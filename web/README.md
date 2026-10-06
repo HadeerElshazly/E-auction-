@@ -3,7 +3,8 @@
 ```
 web/
 ├── shared/   OIDC with PKCE, the API client, money, the bid frame codec
-├── admin/    :3001  auction preparation, committee approval, the award workflow
+├── admin/    :3001  auction preparation, committee approval, the award workflow,
+│                   التقارير, and سجل المراجعة for the auditor role
 ├── bidder/   :3000  the public catalogue, qualification, bidding
 └── e2e/      a browser walk-through of both, against the real stack
 ```

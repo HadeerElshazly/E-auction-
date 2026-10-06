@@ -28,6 +28,8 @@ const PRODUCTION_ENV = {
   VITE_QUERY_API: 'https://api.jeddah.gov.sa/public',
   VITE_DOCUMENTS_API: 'https://api.jeddah.gov.sa/documents',
   VITE_NOTIFICATIONS_API: 'https://api.jeddah.gov.sa/notifications',
+  VITE_AUDIT_API: 'https://api.jeddah.gov.sa/audit',
+  VITE_REPORTING_API: 'https://api.jeddah.gov.sa/reports',
 }
 
 function directive(policy: string, name: string): string {

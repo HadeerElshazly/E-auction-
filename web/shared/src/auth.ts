@@ -339,6 +339,8 @@ export const Roles = {
   auctionAdmin: 'auction-admin',
   awardCommittee: 'award-committee',
   operator: 'operator',
+  reporting: 'reporting',
+  auditor: 'auditor',
 } as const
 
 export function has(session: Session | null, role: string): boolean {

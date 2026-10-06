@@ -15,6 +15,18 @@ import { AuctionList } from './AuctionList'
 import { AuctionEditor } from './AuctionEditor'
 import { AwardPanel } from './AwardPanel'
 import { ClerkTerminal } from './ClerkTerminal'
+import { Reports } from './Reports'
+import { AuditTrail } from './AuditTrail'
+
+/**
+ * Which screen is open.
+ *
+ * Deliberately not a router. The portal is three screens for staff behind a login,
+ * and adding react-router to get a URL per screen would buy a back button and cost
+ * a dependency plus the redirect-URI registration every Keycloak client here
+ * already pins to one path.
+ */
+type View = 'auctions' | 'reports' | 'audit'
 
 
 export function App() {
@@ -34,6 +46,17 @@ export function App() {
   const isAdmin = has(session, Roles.auctionAdmin)
   const isCommittee = has(session, Roles.awardCommittee)
   const isClerk = has(session, Roles.operator)
+
+  // التقارير are management information about work the first two already do, so
+  // their roles open them as well as the dedicated one (§35). سجل المراجعة is the
+  // opposite: `auditor` and nothing else, because an auditor who could also approve
+  // an auction would be reading the record of their own actions (§34). An
+  // administrator signing in will not see that tab, and that is the design working
+  // rather than a missing permission.
+  const canReport = has(session, Roles.reporting) || isAdmin || isCommittee
+  const canAudit = has(session, Roles.auditor)
+
+  const [view, setView] = useState<View>('auctions')
 
   const refreshList = useCallback(async () => {
     if (!session) return
@@ -129,14 +152,15 @@ export function App() {
     )
   }
 
-  if (!isAdmin && !isCommittee && !isClerk) {
+  if (!isAdmin && !isCommittee && !isClerk && !canReport && !canAudit) {
     return (
       <div className="centre">
         <div className="notice error">
           لا تملك صلاحية الدخول إلى هذه البوابة.
           <div className="small" style={{ marginTop: 8 }}>
-            هذا الحساب لا يحمل دور <code>auction-admin</code> ولا{' '}
-            <code>award-committee</code> ولا <code>operator</code>.
+            هذا الحساب لا يحمل أيًّا من الأدوار: <code>auction-admin</code>،{' '}
+            <code>award-committee</code>، <code>operator</code>،{' '}
+            <code>reporting</code>، <code>auditor</code>.
           </div>
         </div>
         <button onClick={signOut}>تسجيل الخروج</button>
@@ -157,6 +181,8 @@ export function App() {
           {isCommittee && 'لجنة الترسية'}
           {(isAdmin || isCommittee) && isClerk && ' + '}
           {isClerk && 'قاعة المزاد'}
+          {has(session, Roles.reporting) && ' التقارير'}
+          {canAudit && ' المراجعة'}
         </span>
 
         {isClerk && (
@@ -173,6 +199,36 @@ export function App() {
       </header>
 
       <div className="app">
+        {(canReport || canAudit) && (
+          <div className="row" style={{ margin: '0 0 16px' }} data-testid="nav">
+            <button
+              className={view === 'auctions' ? 'primary' : ''}
+              data-testid="nav-auctions"
+              onClick={() => setView('auctions')}
+            >
+              المزادات
+            </button>
+            {canReport && (
+              <button
+                className={view === 'reports' ? 'primary' : ''}
+                data-testid="nav-reports"
+                onClick={() => setView('reports')}
+              >
+                التقارير
+              </button>
+            )}
+            {canAudit && (
+              <button
+                className={view === 'audit' ? 'primary' : ''}
+                data-testid="nav-audit"
+                onClick={() => setView('audit')}
+              >
+                سجل المراجعة
+              </button>
+            )}
+          </div>
+        )}
+
         {error && <div className="notice error">{error}</div>}
 
         {confirmed && (
@@ -181,7 +237,21 @@ export function App() {
           </div>
         )}
 
-        {selected ? (
+        {view === 'reports' ? (
+          <Reports session={session} />
+        ) : view === 'audit' ? (
+          <AuditTrail session={session} />
+        ) : !isAdmin && !isCommittee && !isClerk ? (
+          // A reader with only `reporting` or `auditor` has no business on the
+          // auction screens, and the services would refuse them anyway. Saying so
+          // beats a list that fails to load.
+          <div className="card">
+            <h2>المزادات</h2>
+            <p className="muted small">
+              هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من الأعلى.
+            </p>
+          </div>
+        ) : selected ? (
           <>
             <div className="row" style={{ marginBottom: 14 }}>
               <button onClick={() => setSelected(null)}>← كل المزادات</button>

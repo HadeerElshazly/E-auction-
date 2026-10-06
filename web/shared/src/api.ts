@@ -200,7 +200,76 @@ export function api(options: ApiOptions) {
       }
       return parsed as T
     },
+
+    /**
+     * Downloads a file the service protects with a bearer token.
+     *
+     * An `<a download>` or a `window.open` cannot carry an Authorization header, so
+     * a CSV behind a role policy has to be fetched and handed to the browser as a
+     * blob. The alternative — a signed one-time download URL — is a second auth
+     * mechanism on an endpoint that already has one.
+     *
+     * The filename comes from Content-Disposition when the service sets one, which
+     * التقارير do: the second thing anybody asks of a downloaded report is which
+     * day it was run on.
+     */
+    download: async (path: string, fallbackName: string): Promise<void> => {
+      const headers: Record<string, string> = {}
+      if (options.session) headers.Authorization = `Bearer ${options.session.accessToken}`
+
+      const response = await fetch(options.baseUrl.replace(/\/$/, '') + path, { headers })
+
+      if (!response.ok) {
+        const text = await response.text()
+        const parsed = text ? safeJson(text) : null
+        const reason = typeof parsed?.reason === 'string' ? parsed.reason : null
+        throw new ApiError(
+          response.status,
+          reason,
+          Array.isArray(parsed?.problems) ? (parsed.problems as string[]) : [],
+          reason ?? `Download failed (${response.status})`,
+          stepUpFrom(response.status, parsed),
+        )
+      }
+
+      const url = URL.createObjectURL(await response.blob())
+      try {
+        const link = document.createElement('a')
+        link.href = url
+        link.download = fileNameFrom(response.headers.get('content-disposition')) ?? fallbackName
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+      } finally {
+        // Released on the next tick rather than immediately: revoking it in the
+        // same turn as the click races the navigation the click starts, and the
+        // download arrives empty often enough to look intermittent.
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      }
+    },
   }
+}
+
+/**
+ * The filename out of a Content-Disposition header.
+ *
+ * `filename*` first, because that is the one that survives a non-ASCII name — and
+ * these reports are named in English but the rule costs one line and the next
+ * report might not be.
+ */
+function fileNameFrom(header: string | null): string | null {
+  if (!header) return null
+
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      // A malformed header is not worth failing a download over.
+    }
+  }
+
+  return /filename="?([^";]+)"?/i.exec(header)?.[1] ?? null
 }
 
 export type Api = ReturnType<typeof api>
