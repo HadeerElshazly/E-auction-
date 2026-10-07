@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  AppHeader,
   ApiError,
   api,
   config,
@@ -69,6 +70,25 @@ export function App() {
   const canWatch = isAdmin || isCommittee || isClerk
 
   // Back where the decision was being made, after the second-factor round trip.
+  // The side menu, open or folded to its icons. A per-browser preference, so it is
+  // remembered where the browser allows and simply open where it does not.
+  const [menuOpen, setMenuOpen] = useState(() => {
+    try {
+      return localStorage.getItem('admin.menu') !== 'collapsed'
+    } catch {
+      return true
+    }
+  })
+  const toggleMenu = () =>
+    setMenuOpen((open) => {
+      try {
+        localStorage.setItem('admin.menu', open ? 'collapsed' : 'open')
+      } catch {
+        // Not remembered; still toggles.
+      }
+      return !open
+    })
+
   const [view, setView] = useState<View>(() => (confirmed === 'followup-decision' ? 'followup' : 'auctions'))
 
   // A reader lands on their own screen, not on an auction list they cannot use:
@@ -191,102 +211,97 @@ export function App() {
 
   return (
     <>
-      <header className="bar">
-        <h1>إدارة المزادات</h1>
-        <span className="grow" />
-        <span className="who">
-          {session.name}
-          {' · '}
-          {isAdmin && 'إدارة'}
-          {isAdmin && isCommittee && ' + '}
-          {isCommittee && 'لجنة الترسية'}
-          {(isAdmin || isCommittee) && isClerk && ' + '}
-          {isClerk && 'قاعة المزاد'}
-          {has(session, Roles.reporting) && ' التقارير'}
-          {canAudit && ' المراجعة'}
-          {canInquire && ' الاستفسارات'}
-        </span>
-
-        {isClerk && (
-          // A clerk's own id, where they can read it out before they have been
-          // assigned to anything. An administrator has to be given it to put them
-          // on the floor, and nothing in this system can list municipal staff — so
-          // a clerk who could only see it from inside an auction they are already
-          // running could never be assigned to their first one.
-          <span className="muted small ltr-id">
-            معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
-          </span>
-        )}
-        <button onClick={signOut}>خروج</button>
-      </header>
+      <AppHeader
+        title="إدارة المزادات"
+        session={session}
+        onSignOut={signOut}
+        onToggleMenu={toggleMenu}
+        menuOpen={menuOpen}
+        extra={
+          isClerk && (
+            // A clerk's own id, where they can read it out before they have been
+            // assigned to anything: an administrator needs it to put them on the
+            // floor, and nothing here can list municipal staff (§29).
+            <span className="muted small ltr-id">
+              معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
+            </span>
+          )
+        }
+      />
 
       <div className="shell">
         {/* The navigation rail from the proposal. Always present, even for an
             account that holds only one of these — a single item still tells a
             reader where they are, and a rail that appears and disappears with the
             signed-in role makes the product look like two different products. */}
-        <nav className="rail" data-testid="nav">
+        <nav className={`rail${menuOpen ? '' : ' collapsed'}`} data-testid="nav">
           <button
+              title={menuOpen ? undefined : 'المزادات'}
             className={view === 'auctions' ? 'on' : ''}
             data-testid="nav-auctions"
             onClick={() => setView('auctions')}
           >
             <span className="icon" aria-hidden="true">⌂</span>
-            المزادات
+            <span className="label">المزادات</span>
             <span className="chevron" aria-hidden="true">‹</span>
           </button>
           {canWatch && (
             <button
+              title={menuOpen ? undefined : 'المتابعة المباشرة'}
               className={view === 'monitor' ? 'on' : ''}
               data-testid="nav-monitor"
               onClick={() => setView('monitor')}
             >
               <span className="icon" aria-hidden="true">◉</span>
-              المتابعة المباشرة
+            <span className="label">المتابعة المباشرة</span>
               <span className="chevron" aria-hidden="true">‹</span>
             </button>
           )}
           {canReport && (
             <button
+              title={menuOpen ? undefined : 'متابعة الترسية'}
               className={view === 'followup' ? 'on' : ''}
               data-testid="nav-followup"
               onClick={() => setView('followup')}
             >
               <span className="icon" aria-hidden="true">✓</span>
-              متابعة الترسية
+            <span className="label">متابعة الترسية</span>
               <span className="chevron" aria-hidden="true">‹</span>
             </button>
           )}
           {(canInquire || isAdmin || isCommittee) && (
             <button
+              title={menuOpen ? undefined : 'الاستفسارات'}
               className={view === 'inquiries' ? 'on' : ''}
               data-testid="nav-inquiries"
               onClick={() => setView('inquiries')}
             >
               <span className="icon" aria-hidden="true">?</span>
-              الاستفسارات
+            <span className="label">الاستفسارات</span>
               <span className="chevron" aria-hidden="true">‹</span>
             </button>
           )}
           {canReport && (
             <button
+              title={menuOpen ? undefined : 'التقارير'}
               className={view === 'reports' ? 'on' : ''}
               data-testid="nav-reports"
               onClick={() => setView('reports')}
             >
               <span className="icon" aria-hidden="true">◴</span>
-              التقارير
+            <span className="label">التقارير</span>
               <span className="chevron" aria-hidden="true">‹</span>
             </button>
           )}
           {canAudit && (
             <button
+              title={menuOpen ? undefined : 'سجل المراجعة'}
               className={view === 'audit' ? 'on' : ''}
               data-testid="nav-audit"
               onClick={() => setView('audit')}
             >
               <span className="icon" aria-hidden="true">☰</span>
-              سجل المراجعة
+            <span className="label">سجل المراجعة</span>
               <span className="chevron" aria-hidden="true">‹</span>
             </button>
           )}

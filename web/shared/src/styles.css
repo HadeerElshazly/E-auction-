@@ -1085,3 +1085,22 @@ tr.row-lead td { background: var(--accent-soft, rgba(13, 148, 136, 0.08)); font-
 }
 .countdown-panel-unit b { font-size: 1.4rem; line-height: 1.2; }
 .countdown-panel-unit span { font-size: 0.75rem; color: var(--muted, #64748b); }
+
+/* The shared top bar's user badge: initials, name, roles. */
+.user-badge { display: flex; align-items: center; gap: 10px; }
+.user-badge .avatar {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-weak); color: var(--accent); font-weight: 700; font-size: 13px;
+}
+.user-badge .user-lines { display: grid; line-height: 1.25; }
+.user-badge .user-name { font-weight: 600; font-size: 13px; }
+.user-badge .user-role { color: var(--muted); font-size: 12px; }
+@media (max-width: 640px) { .user-badge .user-lines { display: none; } }
+
+/* The side menu folded to its icons. Labels stay in the markup for screen readers. */
+.shell:has(.rail.collapsed) { grid-template-columns: 64px 1fr; }
+.rail.collapsed button { justify-content: center; padding: 12px 0; }
+.rail.collapsed .label, .rail.collapsed .chevron {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.rail.collapsed .icon { width: auto; font-size: 18px; }

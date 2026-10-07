@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  AppHeader, ApplicationsIcon, GavelIcon, ProfileIcon,
   ApiError,
   api,
   config,
@@ -13,7 +14,6 @@ import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
 import { Notifications } from './Notifications'
-import { ApplicationsIcon, GavelIcon, ProfileIcon, SignOutIcon } from './Icons'
 import { LiveBids } from './LiveBids'
 import { Profile } from './Profile'
 import { MyApplications } from './MyApplications'
@@ -116,74 +116,66 @@ export function App() {
 
   return (
     <>
-      <header className="bar">
-        <h1>مزادات الأراضي</h1>
-        <span className="grow" />
-        {session ? (
+      <AppHeader
+        title="مزادات الأراضي"
+        session={session}
+        onSignIn={signIn}
+        signInLabel="الدخول بنفاذ"
+        onSignOut={signOut}
+        actions={
           <>
-            {isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
-            {isBidder && (
-              <button
-                className={`icon-btn${showLive ? ' on' : ''}`}
-                aria-label="مزاداتي الجارية"
-                title="مزاداتي الجارية"
-                aria-pressed={showLive}
-                onClick={() => {
-                  setOpenAuction(null)
-                  setShowProfile(false)
-                  setShowApplications(false)
-                  setShowLive(true)
-                }}
-              >
-                <GavelIcon />
-              </button>
-            )}
-            {isBidder && (
-              <button
-                className={`icon-btn${showApplications ? ' on' : ''}`}
-                aria-label="طلباتي"
-                title="طلباتي"
-                aria-pressed={showApplications}
-                onClick={() => {
-                  setOpenAuction(null)
-                  setShowProfile(false)
-                  setShowLive(false)
-                  setShowApplications(true)
-                }}
-              >
-                <ApplicationsIcon />
-              </button>
-            )}
-            {isBidder && (
-              <button
-                className={`icon-btn${showProfile ? ' on' : ''}`}
-                aria-label="ملفي"
-                title="ملفي"
-                aria-pressed={showProfile}
-                onClick={() => {
-                  setOpenAuction(null)
-                  setShowApplications(false)
-                  setShowLive(false)
-                  setShowProfile(true)
-                }}
-              >
-                <ProfileIcon />
-              </button>
-            )}
-            <span className="who">
-              {session.nameAr ?? session.name}
-              {session.nationalId && <span className="ltr"> · {session.nationalId}</span>}
-            </span>
-            <button className="icon-btn" onClick={signOut} aria-label="خروج" title="خروج">
-              <SignOutIcon />
-            </button>
+              {session && isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
+              {isBidder && (
+                <button
+                  className={`icon-btn${showLive ? ' on' : ''}`}
+                  aria-label="مزاداتي الجارية"
+                  title="مزاداتي الجارية"
+                  aria-pressed={showLive}
+                  onClick={() => {
+                    setOpenAuction(null)
+                    setShowProfile(false)
+                    setShowApplications(false)
+                    setShowLive(true)
+                  }}
+                >
+                  <GavelIcon />
+                </button>
+              )}
+              {isBidder && (
+                <button
+                  className={`icon-btn${showApplications ? ' on' : ''}`}
+                  aria-label="طلباتي"
+                  title="طلباتي"
+                  aria-pressed={showApplications}
+                  onClick={() => {
+                    setOpenAuction(null)
+                    setShowProfile(false)
+                    setShowLive(false)
+                    setShowApplications(true)
+                  }}
+                >
+                  <ApplicationsIcon />
+                </button>
+              )}
+              {isBidder && (
+                <button
+                  className={`icon-btn${showProfile ? ' on' : ''}`}
+                  aria-label="ملفي"
+                  title="ملفي"
+                  aria-pressed={showProfile}
+                  onClick={() => {
+                    setOpenAuction(null)
+                    setShowApplications(false)
+                    setShowLive(false)
+                    setShowProfile(true)
+                  }}
+                >
+                  <ProfileIcon />
+                </button>
+              )}
           </>
-        ) : (
-          <button className="primary" onClick={signIn}>
-            الدخول بنفاذ
-          </button>
-        )}
-      </header>
+        }
+      />
 
       <div className="app">
         {authError && <div className="notice error">{authError}</div>}

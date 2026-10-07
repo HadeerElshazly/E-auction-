@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, config, type Session } from '@eauction/shared'
-import { BellIcon } from './Icons'
+import { BellIcon,api, config, type Session } from '@eauction/shared'
 
 interface Notice {
   id: string

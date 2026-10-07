@@ -64,3 +64,11 @@ export function GavelIcon() {
     </svg>
   )
 }
+
+export function MenuIcon() {
+  return (
+    <svg {...props}>
+      <path d="M4 6h16M4 12h16M4 18h16" />
+    </svg>
+  )
+}
