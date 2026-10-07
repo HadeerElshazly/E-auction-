@@ -238,21 +238,12 @@ public sealed class CatalogueConsumer(
             return;
         }
 
-        var status = record.EventType switch
-        {
-            "AuctionStarted" => "Live",
-            "AuctionClosed" => "Closed",
-            "CandidateOffered" => "PendingAward",
-            "LadderExhausted" => "Unsold",
-            _ => null
-        };
-        if (status is null) return;
-
         var p = JsonSerializer.Deserialize<LifecyclePayload>(record.Payload, Json);
-        if (p is null) return;
+        if (p is null || p.AuctionId == Guid.Empty) return;
 
-        var updated = state.SetStatus(p.AuctionId, status, p.EffectiveEndsAt);
+        var updated = state.ApplyLifecycle(p.AuctionId, record.EventType, p.EffectiveEndsAt);
         if (updated is null) return;
+        var status = updated.Status;
 
         // Watchers need the close as much as they need a price: it is what turns the
         // bid box off, and a portal that only learned about it by polling would keep
@@ -261,7 +252,7 @@ public sealed class CatalogueConsumer(
 
         // An auction past its award is nobody's live view any more, and its verdict
         // buffers are memory held for bidders who will not come back for them.
-        if (status is "Unsold") fanOut.Forget(p.AuctionId);
+        if (LifecycleStatus.IsFinal(status)) fanOut.Forget(p.AuctionId);
     }
 
     // Local payload shapes rather than a shared contracts package: this service reads

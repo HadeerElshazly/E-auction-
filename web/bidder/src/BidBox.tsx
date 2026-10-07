@@ -9,6 +9,7 @@ import {
   newNonce,
   parseRiyals,
   riyals,
+  finishedStages,
   sar,
   type Api,
   type Session,
@@ -136,9 +137,26 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
 
   const amount = parseRiyals(text)
   const tooLow = amount !== null && amount < minimum
+  const increment = auction.minIncrementMinorUnits
+  const current = price?.priceMinorUnits ?? null
+
+  // One tap per raise, each showing the exact amount it sends. Built on the price
+  // as it stands, so a press always bids above it: the first is the smallest raise
+  // the rules allow, the others jump further for a bidder who wants to stop a war.
+  const quick = [1, 2, 5].map((steps) => ({
+    steps,
+    amount: minimum + (steps - 1) * increment,
+  }))
+
+  // Said against the current price, not as a "minimum next bid" figure to compare
+  // with: a bidder thinks "the price plus at least the increment", so that is what
+  // the refusal says.
+  const tooLowText = current === null
+    ? `يجب ألا يقل المبلغ عن سعر الافتتاح ${sar(auction.openingPriceMinorUnits, 'ar')}.`
+    : `يجب أن يزيد المبلغ على السعر الحالي بـ ${sar(increment, 'ar')} على الأقل.`
   // Only a lifecycle that has ended is closed. "Scheduled" is not Live either, and
   // treating it as closed told an eligible bidder their upcoming auction was over.
-  const closed = price !== null && ['Closed', 'PendingAward', 'Unsold'].includes(price.status)
+  const closed = price !== null && finishedStages.includes(price.status)
   const notStarted = price !== null && price.status === 'Scheduled'
 
   // B-04: the engine rejects a leader raising their own bid — it is almost always a
@@ -148,8 +166,8 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
   // is what happened before: the bid sat on screen marked "recorded" for ever.
   const alreadyLeading = price?.leaderIsYou === true
 
-  const submit = async () => {
-    if (amount === null) {
+  const submit = async (value: number | null = amount) => {
+    if (value === null) {
       setProblem('أدخل مبلغاً صحيحاً.')
       return
     }
@@ -167,7 +185,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
         // The bidder id in the frame must be this caller's own subject: the catcher
         // compares the two and refuses a mismatch with 403.
         bidderId: session.subject,
-        amountMinorUnits: amount,
+        amountMinorUnits: value,
         clientBidId,
         clientTimestampMs: Date.now(),
         nonce: newNonce(),
@@ -179,7 +197,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
       // 202, not 200: recorded, not yet judged. The processor's verdict arrives
       // separately, which is why this says "recorded" and not "you are winning".
       setSubmitted((prior) => [
-        { clientBidId, amount, offset: receipt.offset, at: new Date() },
+        { clientBidId, amount: value, offset: receipt.offset, at: new Date() },
         ...prior.slice(0, KEEP - 1),
       ])
       setText('')
@@ -210,12 +228,34 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
         <>
           {problem && <div className="notice error">{problem}</div>}
 
+          <div className="quick-raise" role="group" aria-label="زيادة سريعة">
+            {quick.map((q) => (
+              <button
+                key={q.steps}
+                className="quick-raise-btn"
+                disabled={busy || alreadyLeading}
+                aria-label={`مزايدة بـ ${riyals(q.amount)}`}
+                onClick={() => void submit(q.amount)}
+              >
+                <span className="quick-raise-step">
+                  {current !== null ? (
+                    <span className="num">+{riyals(q.amount - current)}</span>
+                  ) : q.amount === minimum ? (
+                    'سعر الافتتاح'
+                  ) : (
+                    <>
+                      <span className="num">+{riyals(q.amount - minimum)}</span> على الافتتاح
+                    </>
+                  )}
+                </span>
+                <span className="quick-raise-amount num">{sar(q.amount, 'ar')}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="row" style={{ alignItems: 'flex-end' }}>
             <label style={{ flex: '1 1 240px', marginBottom: 0 }}>
-              <span>
-                المبلغ (ر.س) — أقل مزايدة{' '}
-                <span className="num">{sar(minimum, 'ar')}</span>
-              </span>
+              <span>مبلغ آخر (ر.س)</span>
               <input
                 className="ltr num"
                 inputMode="decimal"
@@ -242,7 +282,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
 
           {tooLow && (
             <div className="small" style={{ color: 'var(--danger)', marginTop: 8 }}>
-              أقل من أقل مزايدة مقبولة.
+              {tooLowText}
             </div>
           )}
 

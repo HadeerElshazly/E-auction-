@@ -3,9 +3,11 @@ import {
   ApiError,
   api,
   config,
+  day,
   parseRiyals,
   riyals,
   sar,
+  stageLabel,
   when,
   type Session,
 } from '@eauction/shared'
@@ -343,7 +345,7 @@ function FollowUpRows({
         </td>
         <td className="small">
           {settled ? (
-            <span className="pill live">مُسدَّد</span>
+            <span className="pill done">{stageLabel('Settled').ar}</span>
           ) : a.overdue ? (
             <span className="pill bad">متعثر — للمراجعة</span>
           ) : (
@@ -393,6 +395,7 @@ function FollowUpRows({
                         <span>تاريخ السداد</span>
                         <input type="date" className="ltr" value={paidOn}
                           onChange={(e) => setPaidOn(e.target.value)} />
+                        {paidOn && <span className="muted small">{day(paidOn)}</span>}
                       </label>
                       <label>
                         <span>رقم الإيصال / المرجع</span>

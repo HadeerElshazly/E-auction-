@@ -80,47 +80,131 @@ export function AuctionEditor({
   )
 }
 
+/**
+ * The auction at a glance, once it can no longer be edited: when it runs, what it
+ * costs to take part, and how it is set up — in that order, because that is the
+ * order the committee and the clerk ask about it in.
+ */
 function Summary({ auction }: { auction: Auction }) {
+  const figures = usePublicPrice(auction)
+  const ended = figures?.effectiveEndsAt ?? auction.endsAt
+  const extension = auction.quietPeriodSeconds
+    ? `${auction.quietPeriodSeconds} ثانية، حتى ${auction.maxExtensions} مرات`
+    : 'بلا تمديد'
+
   return (
-    <div className="grid">
-      <Fact k="القناة" v={auction.channel === 'Online' ? 'إلكتروني' : 'حضوري'} />
-      <Fact
-        k="ظهور المزايدين"
-        v={auction.bidderVisibility === 'Named' ? 'بالاسم' : 'مُخفى'}
-      />
-      <Fact k="سعر الافتتاح" v={sar(auction.openingPriceMinorUnits, 'ar')} />
-      <Fact k="الحد الأدنى للمزايدة" v={sar(auction.minIncrementMinorUnits, 'ar')} />
-      <Fact k="التأمين" v={sar(auction.depositMinorUnits, 'ar')} />
-      <Fact k="سعر الكراسة" v={sar(auction.bookletPriceMinorUnits, 'ar')} />
-      <Fact k="نسبة السعي" v={`${auction.brokerageFeePercent}%`} />
-      <Fact
-        k="البداية"
-        v={when(auction.startsAt)}
-      />
-      <Fact
-        k="النهاية"
-        v={when(auction.endsAt)}
-      />
-      <Fact
-        k="فترة التمديد"
-        v={
-          auction.quietPeriodSeconds
-            ? `${auction.quietPeriodSeconds} ث × ${auction.maxExtensions}`
-            : 'معطّلة'
-        }
-      />
-      <Fact k="المساحة الإجمالية" v={`${auction.totalAreaSqm} م²`} />
+    <div className="summary">
+      <h3>التوقيت</h3>
+      {/* Dates without `.num`: they carry Arabic month names and هـ, and an
+          isolated left-to-right run scrambles them around the digits. */}
+      <div className="timeline">
+        <div className="timeline-point">
+          <span className="timeline-label">يبدأ</span>
+          <span className="timeline-value">{when(auction.startsAt)}</span>
+        </div>
+        <span className="timeline-arrow" aria-hidden="true">←</span>
+        <div className="timeline-point">
+          <span className="timeline-label">ينتهي</span>
+          <span className="timeline-value">{when(ended)}</span>
+          {figures && figures.extensionsUsed > 0 && (
+            <span className="timeline-note">
+              مُدّد {figures.extensionsUsed} من {figures.maxExtensions}
+            </span>
+          )}
+        </div>
+        <div className="timeline-countdown">
+          <span className="timeline-label">التمديد عند المزايدة المتأخرة</span>
+          <span className="timeline-value">{extension}</span>
+        </div>
+      </div>
+
+      <h3>الأسعار والرسوم</h3>
+      <div className="stat-grid">
+        {figures?.priceMinorUnits != null && (
+          // From the same source the bidders' screens read, so the price here is
+          // the price they see — not a figure this service keeps a copy of.
+          <div className="stat highlight">
+            <div className="stat-label">
+              {figures.status === 'Live' ? 'السعر الحالي' : 'أعلى سعر عند الإغلاق'}
+            </div>
+            <div className="stat-value num">{sar(figures.priceMinorUnits, 'ar')}</div>
+            {figures.leaderLabel && <div className="stat-sub">المزايد الأعلى: {figures.leaderLabel}</div>}
+          </div>
+        )}
+        <Stat label="سعر الافتتاح" value={sar(auction.openingPriceMinorUnits, 'ar')} />
+        <Stat label="الحد الأدنى للزيادة" value={sar(auction.minIncrementMinorUnits, 'ar')} />
+        <Stat label="التأمين" value={sar(auction.depositMinorUnits, 'ar')} />
+        <Stat
+          label="سعر الكراسة"
+          value={auction.bookletPriceMinorUnits === 0 ? 'مجاناً' : sar(auction.bookletPriceMinorUnits, 'ar')}
+        />
+        <Stat label="نسبة السعي" value={`${auction.brokerageFeePercent}%`} sub="من سعر الترسية" />
+      </div>
       {/* The reserve price is deliberately absent: it never leaves the processor
           (D-23), so this portal cannot show it and does not try. */}
+
+      <h3>الإعدادات</h3>
+      <div className="hero-meta" style={{ margin: 0 }}>
+        <span>{auction.channel === 'Online' ? 'مزاد إلكتروني' : 'مزاد حضوري'}</span>
+        <span>{auction.bidderVisibility === 'Named' ? 'أسماء المزايدين ظاهرة' : 'هوية المزايدين مخفية'}</span>
+        <span>
+          {auction.plotCount} قطعة · <span className="num">{auction.totalAreaSqm}</span> م²
+        </span>
+        {auction.phase && <span>{auction.phase}</span>}
+      </div>
     </div>
   )
 }
 
-function Fact({ k, v }: { k: string; v: string }) {
+interface PublicPrice {
+  status: string
+  priceMinorUnits: number | null
+  leaderLabel: string | null
+  effectiveEndsAt: string
+  extensionsUsed: number
+  maxExtensions: number
+}
+
+/**
+ * The bidding figures as the public catalogue holds them — the one source both
+ * portals read — for an auction that has opened. Polled while it is live; read
+ * once after that, when they no longer move.
+ */
+function usePublicPrice(auction: Auction): PublicPrice | null {
+  const [figures, setFigures] = useState<PublicPrice | null>(null)
+  const opened = !['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Cancelled']
+    .includes(auction.status)
+  const live = auction.status === 'Live'
+
+  useEffect(() => {
+    if (!opened) {
+      setFigures(null)
+      return
+    }
+    const client = api({ baseUrl: config.queryApi, session: null })
+    let stop = false
+    const read = () =>
+      client
+        .get<PublicPrice>(`/auctions/${auction.id}/price`)
+        .then((p) => !stop && setFigures(p))
+        .catch(() => undefined)
+    void read()
+    const t = live ? window.setInterval(() => void read(), 3000) : undefined
+    return () => {
+      stop = true
+      if (t) window.clearInterval(t)
+    }
+  }, [auction.id, opened, live])
+
+  return figures
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div>
-      <div className="muted small">{k}</div>
-      <div className="num">{v}</div>
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value num">{value}</div>
+      {sub && <div className="stat-sub">{sub}</div>}
     </div>
   )
 }
@@ -320,6 +404,9 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
             value={form.startsAt}
             onChange={(e) => setForm({ ...form, startsAt: e.target.value })}
           />
+          {/* The browser's picker is Gregorian and cannot be made Hijri; the
+              reading underneath is what bidders will see. */}
+          {form.startsAt && <span className="muted small">{when(form.startsAt)}</span>}
         </label>
         <label>
           <span>نهاية المزاد</span>
@@ -329,6 +416,7 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
             value={form.endsAt}
             onChange={(e) => setForm({ ...form, endsAt: e.target.value })}
           />
+          {form.endsAt && <span className="muted small">{when(form.endsAt)}</span>}
         </label>
 
         {amounts.map(([key, text]) => (
@@ -785,6 +873,7 @@ function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) 
   const [problems, setProblems] = useState<string[] | null>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [cancelReason, setCancelReason] = useState('')
+  const open = editable.has(auction.status)
 
   const check = () =>
     onAct(async () => {
@@ -796,9 +885,10 @@ function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) 
 
   return (
     <>
-      <h3>سير العمل</h3>
+      {/* Nothing to act on — an awarded or live auction — means no section. */}
+      {(open && canEdit) || auction.status === 'PendingReview' ? <h3>سير العمل</h3> : null}
 
-      {problems !== null && (
+      {problems !== null && open && (
         <div className={`notice ${problems.length === 0 ? 'ok' : 'error'}`}>
           {problems.length === 0 ? (
             'البيانات مكتملة — يمكن إرسال المزاد للاعتماد.'
@@ -807,9 +897,7 @@ function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) 
               يلزم استكمال ما يلي:
               <ul>
                 {problems.map((p) => (
-                  <li key={p} className="ltr">
-                    {p}
-                  </li>
+                  <li key={p}>{p}</li>
                 ))}
               </ul>
             </>
@@ -818,7 +906,10 @@ function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) 
       )}
 
       <div className="row">
-        {canEdit && (
+        {/* Only while it can still be edited. The check is "is this ready to be
+            submitted", and on an approved or finished auction its rules — a start
+            in the future — fail by definition and read as a fault that is not one. */}
+        {canEdit && open && (
           <button disabled={busy} onClick={check}>
             فحص البيانات
           </button>

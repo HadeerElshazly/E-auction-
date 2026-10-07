@@ -33,8 +33,40 @@ public sealed class CatalogueState
             ExtensionsUsed = existing.ExtensionsUsed
         });
 
+        // Lifecycle that replayed before its definition, applied now and in order.
+        if (_deferred.TryRemove(entry.AuctionId, out var events))
+            lock (events)
+                foreach (var eventType in events)
+                    ApplyLifecycle(entry.AuctionId, eventType);
+
         // A cancellation that replayed before its definition.
         if (_cancelled.ContainsKey(entry.AuctionId)) ApplyCancellation(entry.AuctionId);
+    }
+
+    /// <summary>
+    /// Lifecycle events for auctions whose definition has not replayed yet. The two
+    /// topics are followed concurrently, so after a restart a stage can arrive before
+    /// the auction it belongs to; dropping it left the catalogue showing an awarded
+    /// auction as upcoming until the next event happened to come along.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, List<string>> _deferred = new();
+
+    /// <summary>
+    /// Moves an auction's stage by one lifecycle event, through the one rule both
+    /// portals share (<see cref="LifecycleStatus"/>). Returns the entry when it
+    /// changed, null when the event did not move it or was deferred.
+    /// </summary>
+    public AuctionEntry? ApplyLifecycle(Guid auctionId, string eventType, DateTimeOffset? effectiveEndsAt = null)
+    {
+        if (!_auctions.TryGetValue(auctionId, out var entry))
+        {
+            var list = _deferred.GetOrAdd(auctionId, _ => new List<string>());
+            lock (list) list.Add(eventType);
+            return null;
+        }
+
+        var status = LifecycleStatus.After(entry.Status, eventType);
+        return status is null ? null : SetStatus(auctionId, status, effectiveEndsAt);
     }
 
     public const string Cancelled = "Cancelled";

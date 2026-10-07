@@ -12,7 +12,7 @@
  */
 export const reasons: Record<string, string> = {
   BelowOpeningPrice: 'المبلغ أقل من سعر الافتتاح.',
-  BelowMinimumIncrement: 'المبلغ أقل من أقل مزايدة مقبولة — ارتفع السعر قبل إرسال مزايدتك.',
+  BelowMinimumIncrement: 'ارتفع السعر قبل وصول مزايدتك — زايد مرة أخرى على السعر الجديد.',
   OutsideWindow: 'المزاد غير مفتوح للمزايدة الآن.',
   // Reachable by anyone who presses the button as the gavel falls, which is the
   // worst possible moment to be shown an English identifier.

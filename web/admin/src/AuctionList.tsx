@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { sar, when } from '@eauction/shared'
+import { api, config, sar, untilText, when } from '@eauction/shared'
 import type { AuctionListItem } from './types'
 import { label } from './types'
 
@@ -21,6 +21,7 @@ interface Props {
  * clock the most prominent thing on it.
  */
 export function AuctionList({ auctions, canCreate, busy, onOpen, onCreate }: Props) {
+  const live = useLiveFigures()
   const [nameAr, setNameAr] = useState('')
   const [nameEn, setNameEn] = useState('')
   const [creating, setCreating] = useState(false)
@@ -117,7 +118,7 @@ export function AuctionList({ auctions, canCreate, busy, onOpen, onCreate }: Pro
       ) : (
         <div className="auction-grid">
           {auctions.map((a) => (
-            <AuctionCard key={a.id} auction={a} onOpen={onOpen} />
+            <AuctionCard key={a.id} auction={a} live={live[a.id]} onOpen={onOpen} />
           ))}
         </div>
       )}
@@ -125,16 +126,57 @@ export function AuctionList({ auctions, canCreate, busy, onOpen, onCreate }: Pro
   )
 }
 
+/**
+ * An open auction's moving figures — price and actual close — read from the same
+ * public source the bidders' screens and the live monitor read, so staff never see
+ * the planned end time while bidders see an extended one.
+ */
+interface LiveFigures {
+  priceMinorUnits: number | null
+  effectiveEndsAt: string
+}
+
+function useLiveFigures(): Record<string, LiveFigures> {
+  const [rows, setRows] = useState<Record<string, LiveFigures>>({})
+  useEffect(() => {
+    const client = api({ baseUrl: config.queryApi, session: null })
+    let stop = false
+    const tick = async () => {
+      try {
+        const page = await client.get<{ items: Array<LiveFigures & { auctionId: string }> }>('/auctions/live')
+        if (!stop) setRows(Object.fromEntries(page.items.map((r) => [r.auctionId, r])))
+      } catch {
+        // The card falls back to the planned figures; the next tick tries again.
+      }
+    }
+    void tick()
+    const t = window.setInterval(() => void tick(), 5000)
+    return () => {
+      stop = true
+      window.clearInterval(t)
+    }
+  }, [])
+  return rows
+}
+
 function AuctionCard({
   auction,
+  live: figures,
   onOpen,
 }: {
   auction: AuctionListItem
+  live?: LiveFigures
   onOpen: (id: string) => void
 }) {
   const l = label(auction.status)
+  const live = auction.status === 'Live'
+  const bidding = live && figures?.priceMinorUnits != null
+  const onsite = auction.channel === 'Onsite'
 
   return (
+    // The citizen's card, with the staff's additions: the status workflow, drafts,
+    // the start date and the English name. The same cover, words and figures, so
+    // what staff look at is what the public sees.
     <div
       className="auction-card"
       role="button"
@@ -150,33 +192,50 @@ function AuctionCard({
       }}
     >
       <div className="cover">
+        {auction.coverImageDocumentId && (
+          <img
+            src={`${config.documentsApi.replace(/\/$/, '')}/documents/${auction.coverImageDocumentId}`}
+            alt=""
+            loading="lazy"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
         <span className="channel">
-          {auction.channel === 'Onsite' ? '📍 في الموقع' : '🌐 عبر الإنترنت'}
+          {auction.plotCount} قطعة · <span className="num">{auction.totalAreaSqm}</span> م²
         </span>
-        <Countdown startsAt={auction.startsAt} />
+        <span className="channel at-end">{onsite ? '📍 حضوري' : '🌐 إلكتروني'}</span>
+        <Clock auction={auction} endsAt={figures?.effectiveEndsAt ?? auction.endsAt} />
       </div>
 
       <div className="body">
         <p className="title">{auction.nameAr}</p>
+        <div>
+          <span className={`pill ${l.tone}`}>{l.ar}</span>
+        </div>
+
+        <div>
+          <div className="muted small">{bidding ? 'السعر الحالي' : 'سعر الافتتاح'}</div>
+          <div className="price num">
+            {sar(bidding ? figures!.priceMinorUnits : auction.openingPriceMinorUnits, 'ar')}
+          </div>
+        </div>
 
         <div className="facts">
           <div>
-            <span className={`pill ${l.tone}`}>{l.ar}</span>
+            <span>التأمين</span>
+            <span className="num">{sar(auction.depositMinorUnits, 'ar')}</span>
           </div>
           <div>
-            <span>القطع</span>
-            <span className="num">{auction.plotCount}</span>
-            <span>·</span>
-            <span>سعر الافتتاح</span>
-            <span className="num">{sar(auction.openingPriceMinorUnits, 'ar')}</span>
-          </div>
-          <div>
-            <span>تاريخ بدء المزاد</span>
+            <span>الكراسة</span>
             <span className="num">
-              {auction.startsAt
-                ? when(auction.startsAt)
-                : 'لم يُجدول بعد'}
+              {auction.bookletPriceMinorUnits === 0 ? 'مجاناً' : sar(auction.bookletPriceMinorUnits, 'ar')}
             </span>
+          </div>
+          <div>
+            <span>{live ? 'بدأ' : 'يبدأ'}</span>
+            <span>{auction.startsAt ? when(auction.startsAt) : 'لم يُجدول بعد'}</span>
           </div>
           <div className="ltr small">{auction.nameEn}</div>
         </div>
@@ -186,42 +245,49 @@ function AuctionCard({
 }
 
 /**
- * The strip over the cover image: days, hours, minutes, seconds to the start.
+ * The strip over the cover: the one time that matters for the auction's state, as
+ * on the citizen's card — to the start while it is upcoming, to the close while it
+ * runs. Nothing once it is over: a countdown on a cancelled or awarded auction read
+ * as if it were still to happen.
  *
- * Ticks on its own rather than from a prop, because the list around it refreshes
- * on a five-second poll and a countdown that only moved when the list did would
- * visibly stutter. Stops at zero instead of counting up — once an auction is open
- * the number that matters is on its own screen, not here.
+ * Ticks on its own rather than from a prop, because the list around it refreshes on
+ * a five-second poll and a countdown that only moved with the list would stutter.
  */
-function Countdown({ startsAt }: { startsAt: string | null }) {
-  const [now, setNow] = useState(() => Date.now())
+function Clock({ auction, endsAt }: { auction: AuctionListItem; endsAt: string | null }) {
+  const [, setNow] = useState(() => Date.now())
+
+  const upcoming = ['Approved', 'Scheduled'].includes(auction.status)
+  const live = auction.status === 'Live'
+  const ticking = (upcoming && auction.startsAt) || (live && endsAt)
 
   useEffect(() => {
-    if (!startsAt) return
+    if (!ticking) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [startsAt])
+  }, [ticking])
 
-  if (!startsAt) return null
+  if (live && auction.channel === 'Onsite') {
+    // A hall auction is closed by the hammer, not a clock (§29).
+    return (
+      <div className="countdown wide" aria-hidden="true">
+        <div>
+          <b>جارٍ في القاعة</b>
+          <span>يُغلق بقرار مدير المزاد</span>
+        </div>
+      </div>
+    )
+  }
 
-  const left = Math.max(0, new Date(startsAt).getTime() - now)
-  const seconds = Math.floor(left / 1000)
-
-  const cells: Array<[number, string]> = [
-    [Math.floor(seconds / 86_400), 'يوم'],
-    [Math.floor(seconds / 3_600) % 24, 'ساعة'],
-    [Math.floor(seconds / 60) % 60, 'دقيقة'],
-    [seconds % 60, 'ثانية'],
-  ]
+  if (!ticking) return null
+  const target = upcoming ? auction.startsAt! : endsAt!
+  if (new Date(target).getTime() <= Date.now()) return null
 
   return (
-    <div className="countdown" aria-hidden="true">
-      {cells.map(([value, unit]) => (
-        <div key={unit}>
-          <b>{value}</b>
-          <span>{unit}</span>
-        </div>
-      ))}
+    <div className="countdown wide" aria-hidden="true">
+      <div>
+        <b>{untilText(target)}</b>
+        <span>{upcoming ? 'حتى البدء' : 'حتى الإغلاق'}</span>
+      </div>
     </div>
   )
 }

@@ -136,6 +136,8 @@ public class OutboxTests(PostgresFixture pg)
             nameof(AuctionReserveSet),
             nameof(AwardConfirmed),
             nameof(WinnerDisqualified),
+            // The committee's referral is a public stage change of its own.
+            nameof(NextBidderReferred),
             nameof(AwardConfirmed)
         }.OrderBy(x => x), types.OrderBy(x => x));
 

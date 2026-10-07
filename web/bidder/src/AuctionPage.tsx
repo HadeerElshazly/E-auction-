@@ -3,7 +3,6 @@ import { ApiError, api, config, sar, untilText, when, type Session } from '@eauc
 import type { AuctionDetail, Bidder, Subscription } from './types'
 import { useLivePrice } from './useLivePrice'
 import { SubscriptionSteps } from './SubscriptionSteps'
-import { BidBox } from './BidBox'
 import { documentUrl, statusAr } from './Catalogue'
 
 const areaFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
@@ -20,10 +19,13 @@ interface Props {
   onBack: () => void
   onSignIn: () => void
   onRefresh: () => void
+  onEnterRoom: () => void
 }
 
-export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefresh }: Props) {
-  const { price, verdicts, transport } = useLivePrice(auction.id, session)
+export function AuctionPage({
+  auction, session, canBid, onBack, onSignIn, onEnterRoom,
+}: Props) {
+  const { price, transport } = useLivePrice(auction.id, session)
   const participant = useMemo(
     () => api({ baseUrl: config.participantApi, session }),
     [session],
@@ -192,13 +194,12 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           </div>
 
           <div className="stat">
-            <div className="stat-label">أقل مزايدة مقبولة</div>
-            <div className="stat-value num">
-              {sar(price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits, 'ar')}
-            </div>
-            <div className="stat-sub">
-              أقل زيادة <span className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</span>
-            </div>
+            {/* The increment, not a "minimum next bid" figure: a bidder reasons from
+                the price they see plus the step, and the bidding screen's buttons
+                do that sum for them. */}
+            <div className="stat-label">الحد الأدنى للزيادة</div>
+            <div className="stat-value num">{sar(auction.minIncrementMinorUnits, 'ar')}</div>
+            <div className="stat-sub">تُضاف إلى السعر الحالي في كل مزايدة</div>
           </div>
 
           <div className="stat">
@@ -283,14 +284,21 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
       )}
 
       {session && canBid && eligible && !cancelled && !onsite && (
-        <BidBox
-          auction={auction}
-          session={session}
-          price={price}
-          verdicts={verdicts}
-          participant={participant}
-          onBid={onRefresh}
-        />
+        // The bidding itself has its own screen (شاشة المزايدة): price, standing,
+        // clock and the raise, with nothing to scroll past. Here only the way in.
+        <div className="card room-entry">
+          <div>
+            <h2 style={{ margin: 0 }}>أنت مؤهّل للمزايدة</h2>
+            <p className="muted small" style={{ margin: '4px 0 0' }}>
+              {live
+                ? 'المزاد مفتوح الآن — ادخل شاشة المزايدة لمتابعة السعر والمزايدة بضغطة واحدة.'
+                : 'افتح شاشة المزايدة قبل البدء بقليل؛ تُفتح المزايدة فيها تلقائياً عند بدء المزاد.'}
+            </p>
+          </div>
+          <button className="primary big" onClick={onEnterRoom}>
+            شاشة المزايدة
+          </button>
+        </div>
       )}
 
       {session && canBid && eligible && !cancelled && onsite && (

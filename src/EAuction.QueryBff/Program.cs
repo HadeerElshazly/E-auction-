@@ -86,7 +86,8 @@ app.MapGet("/auctions", (string? state, CatalogueState catalogue) =>
             null or "" or "all" => true,
             "upcoming" => a.Status == "Scheduled" && a.StartsAt > now,
             "live" => a.Status == "Live",
-            "closed" => a.Status is "Closed" or "PendingAward" or "Unsold" or "Cancelled",
+            "closed" => a.Status is "Closed" or "PendingAward" or "Unsold" or "Cancelled"
+                or "Awarded" or "WinnerDisqualified" or "Settled",
             _ => true
         })
         .OrderBy(a => a.StartsAt)

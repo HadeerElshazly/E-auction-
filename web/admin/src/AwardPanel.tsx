@@ -181,7 +181,7 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
             </div>
             <div>
               <div className="muted small">مهلة الالتزام</div>
-              <div className="num">
+              <div>
                 {day(award.complianceDeadline)}
               </div>
             </div>

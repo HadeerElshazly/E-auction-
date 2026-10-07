@@ -187,6 +187,26 @@ header.bar .who { color: var(--muted); font-size: 13px; }
   font-size: 14px;
 }
 .icon-btn:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-line); }
+.icon-btn { position: relative; }
+/* The page this button opens is the one showing. */
+.icon-btn.on { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-line); }
+/* An unread count on the bell, in the corner it would be read from first. */
+.icon-badge {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--surface);
+}
 
 /* --- surfaces -------------------------------------------------------------- */
 
@@ -480,6 +500,81 @@ tbody tr:hover { background: var(--surface-sunken); }
 }
 .doc-list li:last-child { border-bottom: 0; }
 .doc-list a { font-weight: 500; }
+
+/* --- شاشة المزايدة ----------------------------------------------------------
+ *
+ * The bidder's screen while the price moves: the figure and the clock large enough
+ * to read from across a desk, and the raises as big targets — a bid war is fought
+ * in seconds and a small button is a missed bid. */
+
+.room-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-color: var(--accent-line);
+  background: var(--accent-weak);
+}
+
+.room { max-width: 920px; margin: 0 auto; }
+.room-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.room-title { font-size: 22px; font-weight: 700; margin: 0 0 14px; }
+
+.room-board {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.room-price, .room-clock {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 22px 24px;
+  background: var(--surface);
+}
+.room-label { color: var(--muted); font-size: 14px; }
+.room-figure { font-size: 34px; font-weight: 700; line-height: 1.2; }
+.room-price .room-figure { color: var(--accent-dark); }
+.room-sub { color: var(--muted); font-size: 13px; min-height: 1em; }
+.room-standing { font-size: 15px; font-weight: 600; color: var(--muted); }
+.room-standing.lead { color: var(--ok); }
+.room-standing.behind { color: var(--warn); }
+/* The last two minutes: the clock turns red, because this is when it is decided. */
+.room-board.closing .room-clock { background: var(--danger-weak); }
+.room-board.closing .room-clock .room-figure { color: var(--danger); }
+
+.quick-raise {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.quick-raise-btn {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 16px 10px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-weak);
+  color: var(--accent-dark);
+  border-radius: var(--radius-sm);
+}
+.quick-raise-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+.quick-raise-step { font-size: 13px; font-weight: 600; opacity: .85; }
+.quick-raise-amount { font-size: 18px; font-weight: 700; }
+
+@media (max-width: 640px) {
+  .room-board { grid-template-columns: 1fr; }
+  .room-figure { font-size: 28px; }
+  .quick-raise { grid-template-columns: 1fr; }
+}
 
 /* Search and status filter above the catalogue. */
 .catalogue-tools {

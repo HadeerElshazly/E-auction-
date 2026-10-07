@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, type Session } from '@eauction/shared'
+import { ApiError, api, config, timestamp as when, type Session } from '@eauction/shared'
 
 /**
  * سجل المراجعة — the staff audit trail (§34).
@@ -316,16 +316,6 @@ function short(value: string | null): string {
   return prefix + (id.length > 12 ? id.slice(0, 8) + '…' : id)
 }
 
-function when(value: string | null): string {
-  if (!value) return '—'
-  return new Date(value).toLocaleString('en-GB', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 function describe(e: unknown): string {
   if (e instanceof ApiError) {

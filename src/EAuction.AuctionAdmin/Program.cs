@@ -540,7 +540,8 @@ app.MapGet("/auctions", async (
             a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
             a.BidderVisibility.ToString(),
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.DepositMinorUnits,
-            a.Plots.Count, a.CreatedAt))
+            a.Plots.Count, a.CreatedAt,
+            a.BookletPriceMinorUnits, a.CoverImageDocumentId, a.Plots.Sum(p => p.AreaSqm)))
         .ToListAsync(ct);
 
     return Results.Ok(new { total, skip = offset, take = page, items = rows });
@@ -677,7 +678,9 @@ public sealed record AuctionListItem(
     Guid Id, string Status, string NameAr, string NameEn, string Channel, string BidderVisibility,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long DepositMinorUnits,
-    int PlotCount, DateTimeOffset CreatedAt);
+    int PlotCount, DateTimeOffset CreatedAt,
+    // What the bidder's catalogue card shows, so staff see the same card citizens do.
+    long BookletPriceMinorUnits, Guid? CoverImageDocumentId, decimal TotalAreaSqm);
 
 public sealed record AuctionResponse(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,

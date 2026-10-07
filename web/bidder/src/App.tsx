@@ -13,8 +13,10 @@ import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
 import { Notifications } from './Notifications'
+import { ApplicationsIcon, ProfileIcon, SignOutIcon } from './Icons'
 import { Profile } from './Profile'
 import { MyApplications } from './MyApplications'
+import { BiddingRoom } from './BiddingRoom'
 
 
 export function App() {
@@ -28,6 +30,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null)
   const [showProfile, setShowProfile] = useState(false)
   const [showApplications, setShowApplications] = useState(false)
+  /** The auction whose bidding screen is open, if any. */
+  const [inRoom, setInRoom] = useState(false)
 
   // Whether this page load followed a second-factor confirmation.
   //
@@ -53,6 +57,7 @@ export function App() {
         setOpenAuction(await publicClient.get<AuctionDetail>(`/auctions/${id}`))
         setShowProfile(false)
         setShowApplications(false)
+        setInRoom(false)
         setError(null)
       } catch (e) {
         setError(describe(e))
@@ -116,31 +121,41 @@ export function App() {
             {isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
             {isBidder && (
               <button
+                className={`icon-btn${showApplications ? ' on' : ''}`}
+                aria-label="طلباتي"
+                title="طلباتي"
+                aria-pressed={showApplications}
                 onClick={() => {
                   setOpenAuction(null)
                   setShowProfile(false)
                   setShowApplications(true)
                 }}
               >
-                طلباتي
+                <ApplicationsIcon />
               </button>
             )}
             {isBidder && (
               <button
+                className={`icon-btn${showProfile ? ' on' : ''}`}
+                aria-label="ملفي"
+                title="ملفي"
+                aria-pressed={showProfile}
                 onClick={() => {
                   setOpenAuction(null)
                   setShowApplications(false)
                   setShowProfile(true)
                 }}
               >
-                ملفي
+                <ProfileIcon />
               </button>
             )}
             <span className="who">
               {session.nameAr ?? session.name}
               {session.nationalId && <span className="ltr"> · {session.nationalId}</span>}
             </span>
-            <button onClick={signOut}>خروج</button>
+            <button className="icon-btn" onClick={signOut} aria-label="خروج" title="خروج">
+              <SignOutIcon />
+            </button>
           </>
         ) : (
           <button className="primary" onClick={signIn}>
@@ -171,11 +186,27 @@ export function App() {
             session={session}
             auctions={auctions}
             onOpen={(id) => void open(id)}
+            onOpenRoom={(id) => void open(id).then(() => setInRoom(true))}
             onBack={() => setShowApplications(false)}
           />
         ) : showProfile && session ? (
           <Profile session={session} onBack={() => setShowProfile(false)} />
         ) : openAuction ? (
+          inRoom && session ? (
+            <BiddingRoom
+              auction={openAuction}
+              session={session}
+              onBack={() => setInRoom(false)}
+              // A quiet refresh: re-reading the auction must not leave the room, or
+              // every bid would drop the bidder out of the screen they bid from.
+              onRefresh={() =>
+                void publicClient
+                  .get<AuctionDetail>(`/auctions/${openAuction.id}`)
+                  .then(setOpenAuction)
+                  .catch(() => undefined)
+              }
+            />
+          ) : (
           <AuctionPage
             auction={openAuction}
             session={session}
@@ -186,7 +217,9 @@ export function App() {
             }}
             onSignIn={signIn}
             onRefresh={() => open(openAuction.id)}
+            onEnterRoom={() => setInRoom(true)}
           />
+          )
         ) : (
           <Catalogue auctions={auctions} onOpen={open} signedIn={session !== null} />
         )}

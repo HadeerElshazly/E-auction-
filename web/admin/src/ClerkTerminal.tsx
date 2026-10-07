@@ -242,7 +242,7 @@ const refusals: Record<string, string> = {
   BadSignature: 'انتهت صلاحية مفتاحك. أعد تحميل الصفحة.',
   OutsideWindow: 'لم يبدأ المزاد بعد.',
   BelowOpeningPrice: 'المبلغ أقل من سعر الافتتاح.',
-  BelowMinimumIncrement: 'المبلغ أقل من أقل مزايدة مقبولة.',
+  BelowMinimumIncrement: 'المبلغ لا يزيد على السعر الحالي بالحد الأدنى للزيادة.',
   RateLimited: 'مزايدات كثيرة بسرعة. أعد المحاولة بعد لحظة.',
   UnknownAuction: 'المزاد غير معروف لخدمة المزايدة بعد.',
   MalformedFrame: 'تعذّر بناء المزايدة. أعد تحميل الصفحة.',

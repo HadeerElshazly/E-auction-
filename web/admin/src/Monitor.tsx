@@ -45,8 +45,11 @@ export function Monitor({ session }: { session: Session }) {
       const page = await client.get<{ items: Row[] }>('/auctions/live')
       setRows(page.items)
       setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+    } catch {
+      // Said in Arabic, and the last good rows kept on screen: a watcher in the
+      // middle of an auction is better served by a slightly stale board than by an
+      // empty one with an English HTTP message on it.
+      setError('تعذّر الاتصال بخدمة المزادات — تُعرض آخر قراءة، وتُعاد المحاولة تلقائياً.')
     }
   }, [session])
 
@@ -84,7 +87,7 @@ export function Monitor({ session }: { session: Session }) {
         </div>
       </div>
 
-      {error && <div className="notice error">تعذّر تحديث الشاشة: {error}</div>}
+      {error && <div className="notice error">{error}</div>}
 
       {rows !== null && rows.length === 0 && (
         <div className="card">
@@ -107,9 +110,15 @@ function AuctionTile({ row }: { row: Row }) {
   const left = Math.max(0, new Date(row.effectiveEndsAt).getTime() - Date.now())
   const seconds = Math.floor(left / 1000)
 
+  // A hall auction has no clock: the auctioneer brings the hammer down (§29), so
+  // its end time is already behind while it is legitimately running. Counted down,
+  // the tile said انتهى in red over an auction still taking bids in the room — the
+  // same mistake the catalogue card and the auction page were corrected for.
+  const onsite = row.channel === 'Onsite'
+
   // Under two minutes is when an auction is actually decided, and when somebody
   // watching needs to be looking at this one rather than the other five.
-  const closing = seconds <= 120
+  const closing = !onsite && seconds <= 120
 
   // No bid yet is not a price of zero: the auction is open at its opening price and
   // nobody has moved. Saying "—" would hide the number a watcher wants.
@@ -122,7 +131,11 @@ function AuctionTile({ row }: { row: Row }) {
           {row.channel === 'Onsite' ? '📍 في الموقع' : '🌐 عبر الإنترنت'}
         </span>
         <span className="grow" />
-        <Countdown seconds={seconds} urgent={closing} />
+        {onsite ? (
+          <span className="clock word">جارٍ في القاعة</span>
+        ) : (
+          <Countdown seconds={seconds} urgent={closing} />
+        )}
       </div>
 
       <p className="name">{row.nameAr}</p>
@@ -138,10 +151,6 @@ function AuctionTile({ row }: { row: Row }) {
         <div>
           <span className="muted">المزايد الأعلى</span>
           <span>{row.leaderLabel ?? '—'}</span>
-        </div>
-        <div>
-          <span className="muted">أقل مزايدة تالية</span>
-          <span className="num">{sar(row.minimumNextBidMinorUnits, 'ar')}</span>
         </div>
         {row.extensionsUsed > 0 && (
           <div>

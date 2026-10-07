@@ -158,6 +158,22 @@ public sealed record AuctionCancelled : DomainEvent
     public override string AggregateId => AuctionId.ToString();
 }
 
+/// <summary>
+/// The committee, after reviewing a disqualified winner, put the next bidder up for
+/// award. On the lifecycle topic because it changes the auction's public state —
+/// every read model has to move to "awaiting award" on this, not on the processor's
+/// suggestion, or the portals disagree about what stage the auction is in.
+/// </summary>
+public sealed record NextBidderReferred : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid BidderId { get; init; }
+    public required long AmountMinorUnits { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
 public sealed record AuctionRejected : DomainEvent
 {
     public required Guid AuctionId { get; init; }

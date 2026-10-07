@@ -8,6 +8,8 @@ interface Props {
   /** The catalogue already loaded, for the auctions' names and states. */
   auctions: AuctionSummary[]
   onOpen: (auctionId: string) => void
+  /** Straight into the bidding screen, for a qualified bidder on an open auction. */
+  onOpenRoom: (auctionId: string) => void
   onBack: () => void
 }
 
@@ -32,7 +34,7 @@ const depositAr: Partial<Record<Subscription['depositSettlement'], string>> = {
  * to in one place: where the application stands, why if it was refused, and what
  * happened to the deposit — without opening each auction to find out.
  */
-export function MyApplications({ session, auctions, onOpen, onBack }: Props) {
+export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }: Props) {
   const participant = useMemo(() => api({ baseUrl: config.participantApi, session }), [session])
   const [items, setItems] = useState<Subscription[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -103,11 +105,19 @@ export function MyApplications({ session, auctions, onOpen, onBack }: Props) {
                         {depositAr[s.depositSettlement] ?? <span className="muted">—</span>}
                       </td>
                       <td>
-                        {a && (
+                        {a && s.status === 'Eligible' && a.channel !== 'Onsite'
+                          && (a.status === 'Live' || a.status === 'Scheduled') ? (
+                          <button
+                            className={a.status === 'Live' ? 'primary' : ''}
+                            onClick={() => onOpenRoom(s.auctionId)}
+                          >
+                            شاشة المزايدة
+                          </button>
+                        ) : a ? (
                           <button className="ghost" onClick={() => onOpen(s.auctionId)}>
                             فتح المزاد
                           </button>
-                        )}
+                        ) : null}
                       </td>
                     </tr>
                   )

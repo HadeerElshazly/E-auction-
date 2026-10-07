@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, riyals, type Session } from '@eauction/shared'
+import { ApiError, api, config, day, riyals, stageLabel, type Session } from '@eauction/shared'
 
 /**
  * التقارير, as a stakeholder reads them.
@@ -586,27 +586,16 @@ function Table({ tab, rows }: { tab: Tab; rows: unknown[] }) {
 
 /** The outcome as a label somebody can read, in the colour it deserves. */
 function Outcome({ outcome }: { outcome: string }) {
-  const labels: Record<string, [string, string]> = {
-    Scheduled: ['مجدول', 'wait'],
-    Live: ['مفتوح', 'live'],
-    Closed: ['مغلق', 'wait'],
-    PendingAward: ['بانتظار الترسية', 'wait'],
-    Awarded: ['مُرسّى', 'live'],
-    Settled: ['تم البيع', 'done'],
-    Unsold: ['غير مبيع', 'bad'],
-    Rejected: ['مرفوض', 'bad'],
-    Cancelled: ['أُلغي', 'bad'],
-  }
-  const [label, tone] = labels[outcome] ?? [outcome, 'done']
-  return <span className={`pill ${tone}`}>{label}</span>
+  // The same words as every other screen (shared/src/stages.ts): a report that
+  // called an auction «مُرسّى» while its own page said «تمت الترسية» is two truths.
+  const { ar, tone } = stageLabel(outcome)
+  return <span className={`pill ${tone}`}>{ar}</span>
 }
 
 function date(value: string | null): string {
-  if (!value) return '—'
-  // en-GB rather than ar-SA: the reports pair a Gregorian date with Arabic labels
-  // throughout, and a Hijri column beside a Gregorian CSV is how two dates for one
-  // event end up in a meeting.
-  return new Date(value).toLocaleDateString('en-GB')
+  // Hijri on screen, like every other date in the portals. The CSV export keeps
+  // ISO-8601 Gregorian: it is read by spreadsheets and other systems, not people.
+  return day(value)
 }
 
 function describe(e: unknown): string {

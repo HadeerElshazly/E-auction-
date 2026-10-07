@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { config, sar, untilText } from '@eauction/shared'
+import { config, finishedStages, sar, stageLabels, untilText } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Props {
@@ -16,14 +16,8 @@ export function documentUrl(documentId: string): string {
   return `${config.documentsApi.replace(/\/$/, '')}/documents/${documentId}`
 }
 
-export const statusAr: Record<string, { ar: string; tone: string }> = {
-  Scheduled: { ar: 'قادم', tone: 'wait' },
-  Live: { ar: 'جارٍ الآن', tone: 'live' },
-  Closed: { ar: 'أُغلق', tone: 'done' },
-  PendingAward: { ar: 'بانتظار الترسية', tone: 'done' },
-  Unsold: { ar: 'لم يُبع', tone: 'bad' },
-  Cancelled: { ar: 'أُلغي', tone: 'bad' },
-}
+// One vocabulary for both portals: see shared/src/stages.ts.
+export const statusAr = stageLabels
 
 /** The status filter, grouped the way a citizen thinks of them rather than by lifecycle. */
 const filters = [
@@ -33,8 +27,7 @@ const filters = [
   {
     key: 'closed',
     ar: 'المنتهية',
-    match: (s: string) =>
-      s === 'Closed' || s === 'PendingAward' || s === 'Unsold' || s === 'Cancelled',
+    match: (s: string) => finishedStages.includes(s),
   },
 ] as const
 

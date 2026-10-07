@@ -24,8 +24,30 @@ public static class Messages
     public static string Riyals(long minorUnits) =>
         (minorUnits / 100m).ToString("C2", CultureInfo.GetCultureInfo("ar-SA"));
 
-    private static string Date(DateTimeOffset at) =>
-        at.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    /// <summary>
+    /// A date in the Hijri calendar (Umm al-Qura, the official Saudi one), in Riyadh
+    /// time, as the portals show it: «30 ربيع الآخر 1448 هـ».
+    ///
+    /// The month names are spelled out here rather than taken from the culture: the
+    /// same ar-SA culture names the fourth month «ربيع الثاني» on Windows and «ربيع
+    /// الآخر» under ICU, and a notice that disagrees with the screen it points to is
+    /// a support call. These are the browser's names, so both say the same thing.
+    /// </summary>
+    private static string Date(DateTimeOffset at)
+    {
+        var riyadh = at.ToOffset(RiyadhOffset).DateTime;
+        return $"{UmAlQura.GetDayOfMonth(riyadh)} {HijriMonths[UmAlQura.GetMonth(riyadh) - 1]} "
+               + $"{UmAlQura.GetYear(riyadh)} هـ";
+    }
+
+    private static readonly TimeSpan RiyadhOffset = TimeSpan.FromHours(3);
+    private static readonly UmAlQuraCalendar UmAlQura = new();
+
+    private static readonly string[] HijriMonths =
+    [
+        "محرم", "صفر", "ربيع الأول", "ربيع الآخر", "جمادى الأولى", "جمادى الآخرة",
+        "رجب", "شعبان", "رمضان", "شوال", "ذو القعدة", "ذو الحجة",
+    ];
 
     public static (string Title, string Body) Eligible(string auction) =>
         ("مؤهّل للمزايدة",

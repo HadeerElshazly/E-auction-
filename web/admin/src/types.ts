@@ -1,3 +1,4 @@
+import { stageLabels } from '@eauction/shared'
 /** Mirrors the records in src/EAuction.AuctionAdmin/Program.cs. */
 
 export interface AuctionListItem {
@@ -14,6 +15,10 @@ export interface AuctionListItem {
   depositMinorUnits: number
   plotCount: number
   createdAt: string
+  bookletPriceMinorUnits: number
+  /** A Public document — the same cover the citizen's catalogue shows. */
+  coverImageDocumentId: string | null
+  totalAreaSqm: number
 }
 
 export interface Award {
@@ -82,21 +87,8 @@ export type AuctionStatus =
   | 'Cancelled'
 
 /** The Arabic label and the visual weight each status gets. */
-export const statusLabels: Record<string, { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' }> = {
-  Draft: { ar: 'مسودة', tone: 'done' },
-  PendingReview: { ar: 'بانتظار الاعتماد', tone: 'wait' },
-  Rejected: { ar: 'مرفوض', tone: 'bad' },
-  Approved: { ar: 'معتمد', tone: 'live' },
-  Scheduled: { ar: 'مجدول', tone: 'live' },
-  Live: { ar: 'جارٍ الآن', tone: 'live' },
-  PendingEligibilityReview: { ar: 'مراجعة الأهلية', tone: 'wait' },
-  PendingAward: { ar: 'بانتظار الترسية', tone: 'wait' },
-  Awarded: { ar: 'تمت الترسية', tone: 'live' },
-  WinnerDisqualified: { ar: 'سُحب الفوز', tone: 'bad' },
-  Unsold: { ar: 'لم يُبع', tone: 'bad' },
-  Settled: { ar: 'مُسدَّد', tone: 'done' },
-  Cancelled: { ar: 'أُلغي', tone: 'bad' },
-}
+// One vocabulary for both portals: see shared/src/stages.ts.
+export const statusLabels = stageLabels
 
 export function label(status: string): { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' } {
   return statusLabels[status] ?? { ar: status, tone: 'done' }

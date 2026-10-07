@@ -125,7 +125,7 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
       const page = committee.page
       await openAuction(page, auctionId)
       await page.getByRole('button', { name: 'اعتماد المزاد' }).click()
-      await expect(page.getByText(/معتمد|مجدول/).first()).toBeVisible({ timeout: 20_000 })
+      await expect(page.getByText(/معتمد|قادم/).first()).toBeVisible({ timeout: 20_000 })
     })
 
     await test.step('a bidder qualifies exactly as they would online', async () => {

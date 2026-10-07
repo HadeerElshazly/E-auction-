@@ -245,7 +245,8 @@ public class EventConsumerTests : IAsyncLifetime, IAsyncDisposable
         var awarded = await WaitForAsync(_sara, NotificationKind.Awarded);
 
         Assert.Contains("رُسي عليك", awarded.BodyAr);
-        Assert.Contains("2026-10-11", awarded.BodyAr);
+        // Hijri, in Riyadh time: 2026-10-11T00:00Z is 30 Rabi' al-Akhir 1448.
+        Assert.Contains("30 ربيع الآخر 1448 هـ", awarded.BodyAr);
 
         Assert.Empty(await AllFor(_khalid, NotificationKind.Awarded));
     }

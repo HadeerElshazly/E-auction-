@@ -560,6 +560,12 @@ public sealed class Auction
             throw new AuctionValidationException(new[] { "لا يوجد مزايد تالٍ مؤهل لهذا المزاد." });
 
         Status = AuctionStatus.PendingAward;
+        _events.Add(new NextBidderReferred
+        {
+            AuctionId = Id,
+            BidderId = PendingCandidateBidderId.Value,
+            AmountMinorUnits = PendingCandidateAmountMinorUnits.Value
+        });
     }
 
     public Guid? PendingCandidateBidderId { get; private set; }
