@@ -88,6 +88,12 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           ? { label: 'يُغلق بعد', value: untilText(endsAt) }
           : { label: 'الحالة', value: status.ar }
 
+  // A hall auction is bid in the hall: the clerk types what the room calls out and
+  // the catcher refuses an online frame for it with NotTheClerk (§29). Qualifying
+  // is still done from here — the booklet and the deposit are the same online — so
+  // what the channel changes is only the last step.
+  const onsite = auction.channel === 'Onsite'
+
   return (
     <>
       <button className="back-link" onClick={onBack}>
@@ -232,6 +238,17 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         </div>
       )}
 
+      {onsite && !cancelled && (
+        // Before the deposit, like the visibility notice below: a bidder about to
+        // commit a hundred thousand riyals needs to know they must be in the room
+        // on the day, not discover it once the money is gone.
+        <div className="notice info">
+          مزاد حضوري — تُقدّم المزايدات في قاعة المزاد ويُسجّلها موظف القاعة برقم
+          مجدافك. التأهّل — الكراسة والتأمين — يتم من هنا، أما المزايدة نفسها فلا
+          تُقبل إلا من القاعة.
+        </div>
+      )}
+
       {auction.bidderVisibility === 'Named' && (
         // Said before the deposit, not after. The administrator may run an auction
         // in which bidders are named to each other (D-22), and someone about to
@@ -265,7 +282,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         />
       )}
 
-      {session && canBid && eligible && !cancelled && (
+      {session && canBid && eligible && !cancelled && !onsite && (
         <BidBox
           auction={auction}
           session={session}
@@ -274,6 +291,20 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
           participant={participant}
           onBid={onRefresh}
         />
+      )}
+
+      {session && canBid && eligible && !cancelled && onsite && (
+        // Said rather than left blank. A qualified bidder who paid the deposit and
+        // then finds nothing to press would reasonably conclude the portal is
+        // broken, and the cost of that conclusion is a citizen who does not turn
+        // up to the hall.
+        <div className="card">
+          <h2>المزايدة</h2>
+          <div className="notice info">
+            المزايدة تجري في القاعة: ارفع مجدافك ويُسجّل موظف القاعة المبلغ باسمك فور
+            إعلانه. لا يوجد صندوق مزايدة هنا لأن مزايدة من هاتفك لا تعلم بها القاعة.
+          </div>
+        </div>
       )}
 
       <div className="card">

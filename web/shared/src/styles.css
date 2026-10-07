@@ -594,6 +594,8 @@ tr.detail-row > td { background: var(--surface-sunken); }
   font-size: 12px;
   font-weight: 600;
 }
+/* The opposite corner, for a card that carries two of them. */
+.auction-card .cover .channel.at-end { inset-inline-start: auto; inset-inline-end: 12px; }
 
 /* The countdown straddles the bottom edge of the image, which is what makes the
    card read as one object rather than a picture with a caption. */
