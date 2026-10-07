@@ -207,6 +207,41 @@ public sealed record AwardConfirmed : DomainEvent
     public override string AggregateId => AuctionId.ToString();
 }
 
+/// <summary>
+/// Where the award stands, for the winner: the whole follow-up as one snapshot,
+/// raised on every change to it — the letter, the notice, each receipt, the
+/// transfer, the settlement, a withdrawal. On <c>auctions.lifecycle</c>, keyed by
+/// the auction.
+///
+/// A snapshot rather than one event per step, because its one consumer — the
+/// participant service, which answers the winner's «ما الخطوة التالية؟» — wants the
+/// current state, and a snapshot cannot be applied out of order into a wrong one.
+/// Carries what the winner may know about their own award and nothing about anyone
+/// else: no other bidder, no receipt scans, no staff identities.
+/// </summary>
+public sealed record AwardFollowUpUpdated : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid AwardId { get; init; }
+    public required Guid WinnerBidderId { get; init; }
+    public required long AmountMinorUnits { get; init; }
+    public required long BrokerageMinorUnits { get; init; }
+    public required DateTimeOffset ConfirmedAt { get; init; }
+    public required DateTimeOffset ComplianceDeadline { get; init; }
+    public Guid? SignedLetterDocumentId { get; init; }
+    public DateTimeOffset? WinnerNotifiedAt { get; init; }
+    public required long PaidMinorUnits { get; init; }
+    public required long RemainingMinorUnits { get; init; }
+    public required string TransferStatus { get; init; }
+    public DateTimeOffset? TransferCompletedAt { get; init; }
+    public DateTimeOffset? SettledAt { get; init; }
+    public DateTimeOffset? DisqualifiedAt { get; init; }
+    public required DateTimeOffset At { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
 public sealed record WinnerDisqualified : DomainEvent
 {
     public required Guid AuctionId { get; init; }

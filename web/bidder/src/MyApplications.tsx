@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError, api, config, when, type Session } from '@eauction/shared'
-import type { AuctionSummary, Subscription } from './types'
+import type { AuctionSummary, Subscription, WinnerAward } from './types'
 import { statusAr } from './Catalogue'
 
 interface Props {
@@ -13,11 +13,50 @@ interface Props {
   onBack: () => void
 }
 
+type StageKey = 'all' | 'live' | 'upcoming' | 'finished' | 'won'
+
+/** The participant service's answer: the filtered rows and each chip's count. */
+interface ApplicationsPage {
+  items: Array<{
+    subscription: Subscription
+    auctionNameAr: string | null
+    stage: string
+    award: WinnerAward | null
+  }>
+  counts: { stage: Record<string, number>; eligibility: Record<string, number> }
+}
+type StandingKey = 'all' | Subscription['eligibility']
+
+const stageFilters: Array<{ key: StageKey; ar: string }> = [
+  { key: 'all', ar: 'الكل' },
+  { key: 'live', ar: 'الجارية' },
+  { key: 'upcoming', ar: 'القادمة' },
+  { key: 'finished', ar: 'المنتهية' },
+  { key: 'won', ar: 'فزت بها' },
+]
+
+const standingFilters: Array<{ key: StandingKey; ar: string }> = [
+  { key: 'all', ar: 'كل الحالات' },
+  { key: 'Accepted', ar: 'مقبول' },
+  { key: 'UnderReview', ar: 'قيد المراجعة' },
+  { key: 'Rejected', ar: 'مرفوض' },
+  { key: 'Incomplete', ar: 'قيد الاستكمال' },
+]
+
+
 const eligibilityAr: Record<Subscription['eligibility'], { ar: string; tone: string }> = {
   Incomplete: { ar: 'قيد الاستكمال', tone: 'done' },
   UnderReview: { ar: 'قيد المراجعة', tone: 'wait' },
   Accepted: { ar: 'مقبول', tone: 'live' },
   Rejected: { ar: 'مرفوض', tone: 'bad' },
+}
+
+const nextStepAr: Record<WinnerAward['nextStep'], string> = {
+  AwaitingLetter: 'بانتظار خطاب الترسية',
+  Pay: 'التالي: سداد مبلغ الترسية',
+  Transfer: 'التالي: الإفراغ',
+  Done: 'اكتملت الترسية',
+  Withdrawn: 'سُحبت الترسية',
 }
 
 const depositAr: Partial<Record<Subscription['depositSettlement'], string>> = {
@@ -36,19 +75,47 @@ const depositAr: Partial<Record<Subscription['depositSettlement'], string>> = {
  */
 export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }: Props) {
   const participant = useMemo(() => api({ baseUrl: config.participantApi, session }), [session])
-  const [items, setItems] = useState<Subscription[] | null>(null)
+  // Filtered, searched and counted by the participant service, not here: every
+  // client gets the same answer, and the counts are the server's, not this page's.
+  const [stage, setStage] = useState<StageKey>('all')
+  const [standing, setStanding] = useState<StandingKey>('all')
+  const [query, setQuery] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const [page, setPage] = useState<ApplicationsPage | null>(null)
+  const [total, setTotal] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // The search goes to the server a moment after typing stops, not per keystroke.
   useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(query.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [query])
+
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (stage !== 'all') params.set('stage', stage)
+    if (standing !== 'all') params.set('eligibility', standing)
+    if (debounced) params.set('q', debounced)
+    const qs = params.toString()
     participant
-      .get<{ items: Subscription[] }>(`/bidders/${session.subject}/subscriptions`)
-      .then((r) => setItems(r.items))
+      .get<ApplicationsPage>(`/bidders/${session.subject}/subscriptions${qs ? `?${qs}` : ''}`)
+      .then((r) => {
+        setPage(r)
+        setError(null)
+        // The unfiltered total, for the heading and the empty states.
+        if (stage === 'all' && standing === 'all' && !debounced) setTotal(r.items.length)
+        else setTotal((t) => t ?? r.counts.stage.all ?? 0)
+      })
       .catch((e) =>
         setError(e instanceof ApiError ? `تعذّر تحميل طلباتك (${e.status}).` : String(e)),
       )
-  }, [participant, session.subject])
+  }, [participant, session.subject, stage, standing, debounced])
 
   const byId = useMemo(() => new Map(auctions.map((a) => [a.id, a])), [auctions])
+  const items = page?.items.map((x) => x.subscription) ?? null
+  const visible = items ?? []
+  const nameOf = (id: string) => page?.items.find((x) => x.subscription.auctionId === id)?.auctionNameAr
+  const awardOf = (id: string) => page?.items.find((x) => x.subscription.auctionId === id)?.award ?? null
 
   return (
     <>
@@ -59,17 +126,49 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
       <div className="card">
         <div className="section-head">
           <h2>طلباتي</h2>
-          {items && <span className="pill teal plain">{items.length}</span>}
+          {total !== null && <span className="pill teal plain">{total}</span>}
         </div>
         <p className="lede">المزادات التي اشتركت فيها، وحالة أهليتك والتأمين في كلٍّ منها.</p>
 
         {error && <div className="notice error">{error}</div>}
-        {items === null && !error && <p className="muted">…</p>}
-        {items?.length === 0 && (
+        {page === null && !error && <p className="muted">…</p>}
+        {total !== null && total > 0 && (
+          <div className="applications-tools">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="ابحث باسم المزاد…"
+              aria-label="البحث في طلباتي"
+            />
+            <div className="chips" role="tablist" aria-label="حالة المزاد">
+              {stageFilters.map((f) => (
+                <button key={f.key} role="tab" aria-selected={stage === f.key}
+                  className={stage === f.key ? 'chip on' : 'chip'} onClick={() => setStage(f.key)}>
+                  {f.ar} <span className="num">({page?.counts.stage[f.key] ?? 0})</span>
+                </button>
+              ))}
+            </div>
+            <div className="chips" role="tablist" aria-label="الأهلية">
+              {standingFilters.map((f) => (
+                <button key={f.key} role="tab" aria-selected={standing === f.key}
+                  className={standing === f.key ? 'chip on' : 'chip'} onClick={() => setStanding(f.key)}>
+                  {f.ar} <span className="num">({page?.counts.eligibility[f.key] ?? 0})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {total !== null && total > 0 && page !== null && visible.length === 0 && (
+          <p className="muted">لا توجد طلبات مطابقة للتصفية.</p>
+        )}
+
+        {total === 0 && (
           <p className="muted">لم تشترك في أي مزاد بعد. اختر مزاداً من القائمة للبدء.</p>
         )}
 
-        {items && items.length > 0 && (
+        {visible.length > 0 && (
           <div className="table-scroll">
             <table>
               <thead>
@@ -82,17 +181,27 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
                 </tr>
               </thead>
               <tbody>
-                {items.map((s) => {
+                {visible.map((s) => {
                   const a = byId.get(s.auctionId)
                   const st = a ? (statusAr[a.status] ?? { ar: a.status, tone: 'done' }) : null
                   const e = eligibilityAr[s.eligibility] ?? eligibilityAr.Incomplete
+                  const won = awardOf(s.auctionId)
                   return (
                     <tr key={s.id}>
                       <td>
-                        <div className="strong">{a?.nameAr ?? 'مزاد غير معروض'}</div>
+                        <div className="strong">{a?.nameAr ?? nameOf(s.auctionId) ?? 'مزاد غير معروض'}</div>
                         {a && <div className="muted small">يبدأ {when(a.startsAt)}</div>}
                       </td>
-                      <td>{st && <span className={`pill ${st.tone}`}>{st.ar}</span>}</td>
+                      <td>
+                        {st && <span className={`pill ${st.tone}`}>{st.ar}</span>}
+                        {won && !won.withdrawnAt && (
+                          <div style={{ marginTop: 4 }}>
+                            <span className="pill live">🏆 رسا عليك</span>
+                            <div className="small muted" style={{ marginTop: 2 }}>{nextStepAr[won.nextStep]}</div>
+                          </div>
+                        )}
+                        {won?.withdrawnAt && <div className="small" style={{ color: 'var(--danger)' }}>سُحبت الترسية</div>}
+                      </td>
                       <td>
                         <span className={`pill ${e.tone}`}>{e.ar}</span>
                         {s.eligibilityReason && (
@@ -114,8 +223,8 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
                             شاشة المزايدة
                           </button>
                         ) : a ? (
-                          <button className="ghost" onClick={() => onOpen(s.auctionId)}>
-                            فتح المزاد
+                          <button className={won && !won.withdrawnAt ? 'primary' : 'ghost'} onClick={() => onOpen(s.auctionId)}>
+                            {won && !won.withdrawnAt ? 'متابعة الترسية' : 'فتح المزاد'}
                           </button>
                         ) : null}
                       </td>

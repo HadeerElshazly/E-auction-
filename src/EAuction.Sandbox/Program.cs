@@ -47,6 +47,11 @@ var people = builder.Configuration.GetSection("Sandbox:People").Get<Person[]>()
     ?? [
         new Person("sara", "سارة الحربي", "1012345678"),
         new Person("khalid", "خالد العتيبي", "1087654321"),
+        // Not yet registered in the platform: the first-login verification path.
+        new Person("noura", "نورة القحطاني", "1055555555"),
+        // Staff with a second factor: approving an auction and confirming an award
+        // ask for a code too. No national id — staff are not Nafath citizens.
+        new Person("committee-user", "لجنة الترسية", "—"),
     ];
 
 var paymentsBaseUrl = builder.Configuration["Sandbox:PaymentsBaseUrl"];

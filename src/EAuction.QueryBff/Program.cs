@@ -76,25 +76,42 @@ app.MapGet("/health/ready", (CatalogueConsumer c) =>
 // is reachable from here.
 // ---------------------------------------------------------------------------
 
-app.MapGet("/auctions", (string? state, CatalogueState catalogue) =>
+app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
 {
     var now = DateTimeOffset.UtcNow;
 
-    var items = catalogue.All()
-        .Where(a => state?.ToLowerInvariant() switch
-        {
-            null or "" or "all" => true,
-            "upcoming" => a.Status == "Scheduled" && a.StartsAt > now,
-            "live" => a.Status == "Live",
-            "closed" => a.Status is "Closed" or "PendingAward" or "Unsold" or "Cancelled"
-                or "Awarded" or "WinnerDisqualified" or "Settled",
-            _ => true
-        })
+    // The status groups the catalogue's chips offer, decided here so every client
+    // groups the same way.
+    bool InState(AuctionEntry a, string? s) => s?.ToLowerInvariant() switch
+    {
+        null or "" or "all" => true,
+        "upcoming" => a.Status == "Scheduled" && a.StartsAt > now,
+        "live" => a.Status == "Live",
+        "closed" => a.Status is "Closed" or "PendingAward" or "Unsold" or "Cancelled"
+            or "Awarded" or "WinnerDisqualified" or "Settled",
+        _ => true
+    };
+
+    // Searched on the server, Arabic- and English-name, with the same folding of
+    // أ/إ/آ, ة and ى that «طلباتي» uses (EAuction.Core.ArabicText).
+    var needle = ArabicText.Normalise(q);
+    bool Found(AuctionEntry a) =>
+        needle.Length == 0
+        || ArabicText.Normalise(a.NameAr).Contains(needle)
+        || ArabicText.Normalise(a.NameEn).Contains(needle);
+
+    var all = catalogue.All().ToArray();
+    var items = all
+        .Where(a => InState(a, state) && Found(a))
         .OrderBy(a => a.StartsAt)
         .Select(AuctionSummary.From)
         .ToArray();
 
-    return Results.Ok(new { count = items.Length, items });
+    // Each status chip's count under the current search.
+    var counts = new[] { "all", "upcoming", "live", "closed" }
+        .ToDictionary(k => k, k => all.Count(a => InState(a, k) && Found(a)));
+
+    return Results.Ok(new { count = items.Length, items, counts });
 }).AllowAnonymous();
 
 // ---------------------------------------------------------------------------
@@ -122,6 +139,28 @@ app.MapGet("/auctions/live", (CatalogueState catalogue, LeaderLabels labels) =>
 
     return Results.Ok(new { count = rows.Length, items = rows, asOf = DateTimeOffset.UtcNow });
 }).AllowAnonymous();
+
+// ---------------------------------------------------------------------------
+// Who leads, by id — staff only. The one endpoint here that reveals identity, and
+// so the one that is not anonymous: the people running the auction need to know
+// who is winning a running auction and who won a closed one, whatever the public
+// view masks (D-22). The id only; the portal asks the participant service for the
+// name, which is where names live.
+// ---------------------------------------------------------------------------
+app.MapGet("/staff/leaders", (CatalogueState catalogue) =>
+{
+    var rows = catalogue.All()
+        .Where(a => a.LeaderBidderId is not null)
+        .Select(a => new
+        {
+            auctionId = a.AuctionId,
+            leaderBidderId = a.LeaderBidderId,
+            priceMinorUnits = a.PriceMinorUnits,
+            status = a.Status,
+        })
+        .ToArray();
+    return Results.Ok(new { items = rows });
+}).RequireAuthorization(Policies.StaffOnTheFloor);
 
 app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
     catalogue.TryGet(id, out var a)

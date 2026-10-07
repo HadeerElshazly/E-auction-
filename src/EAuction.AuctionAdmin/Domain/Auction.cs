@@ -598,16 +598,58 @@ public sealed class Auction
             ComplianceDeadline = award.ComplianceDeadline,
             CascadeStep = award.CascadeStep
         });
+        RaiseFollowUp(award, now);
 
         return award;
     }
 
     public void GenerateAwardLetter(Guid documentId) => RequireOpenAward().AttachLetter(documentId);
 
-    public void UploadSignedAwardLetter(Guid documentId) =>
-        RequireOpenAward().AttachSignedLetter(documentId);
+    public void UploadSignedAwardLetter(Guid documentId, DateTimeOffset? now = null)
+    {
+        var award = RequireOpenAward();
+        award.AttachSignedLetter(documentId);
+        RaiseFollowUp(award, now ?? DateTimeOffset.UtcNow);
+    }
 
-    public void NotifyWinner(DateTimeOffset now) => RequireOpenAward().MarkWinnerNotified(now);
+    public void NotifyWinner(DateTimeOffset now)
+    {
+        var award = RequireOpenAward();
+        award.MarkWinnerNotified(now);
+        RaiseFollowUp(award, now);
+    }
+
+    /// <summary>
+    /// The latest award's snapshot again, unchanged — see AwardSnapshotRepublisher.
+    /// A withdrawn award is sent too, so its former winner is told it was withdrawn.
+    /// </summary>
+    public void RepublishFollowUp(DateTimeOffset now)
+    {
+        var latest = _awards.OrderByDescending(a => a.CascadeStep).FirstOrDefault();
+        if (latest is not null) RaiseFollowUp(latest, now);
+    }
+
+    /// <summary>The winner's view of the award, after anything that changed it.</summary>
+    private void RaiseFollowUp(Award award, DateTimeOffset now) =>
+        _events.Add(new AwardFollowUpUpdated
+        {
+            AuctionId = Id,
+            AwardId = award.Id,
+            WinnerBidderId = award.BidderId,
+            AmountMinorUnits = award.AmountMinorUnits,
+            BrokerageMinorUnits = (long)Math.Round(award.AmountMinorUnits * BrokerageFeePercent / 100m),
+            ConfirmedAt = award.ConfirmedAt,
+            ComplianceDeadline = award.ComplianceDeadline,
+            SignedLetterDocumentId = award.SignedLetterDocumentId,
+            WinnerNotifiedAt = award.WinnerNotifiedAt,
+            PaidMinorUnits = award.PaidMinorUnits,
+            RemainingMinorUnits = award.RemainingMinorUnits,
+            TransferStatus = award.TransferStatus.ToString(),
+            TransferCompletedAt = award.TransferCompletedAt,
+            SettledAt = award.SettledAt,
+            DisqualifiedAt = award.DisqualifiedAt,
+            At = now
+        });
 
     /// <summary>
     /// The award the follow-up is about: the open one, or once settled the one that
@@ -624,9 +666,11 @@ public sealed class Auction
     {
         if (Status != AuctionStatus.Awarded)
             throw new InvalidAuctionTransitionException(Status, "record a payment for");
-        RequireOpenAward().RecordReceipt(
+        var award = RequireOpenAward();
+        award.RecordReceipt(
             AwardReceiptKind.Payment, amountMinorUnits, paidOn, reference, documentId,
             recordedByUserId, now);
+        RaiseFollowUp(award, now);
     }
 
     /// <summary>
@@ -642,6 +686,7 @@ public sealed class Auction
             AwardReceiptKind.DepositCredit,
             Math.Min(DepositMinorUnits, award.RemainingMinorUnits),
             now, reference, null, recordedByUserId, now);
+        RaiseFollowUp(award, now);
     }
 
     public void UpdateTransfer(
@@ -652,6 +697,7 @@ public sealed class Auction
         var award = FollowUpAward
             ?? throw new InvalidOperationException("There is no award to transfer.");
         award.UpdateTransfer(status, reference, documentId, now);
+        RaiseFollowUp(award, now);
     }
 
     /// <summary>
@@ -668,6 +714,7 @@ public sealed class Auction
         var award = RequireOpenAward();
         award.Disqualify(reason.Trim(), forfeitDeposit, now);
         Status = AuctionStatus.WinnerDisqualified;
+        RaiseFollowUp(award, now);
 
         _events.Add(new WinnerDisqualified
         {
@@ -724,6 +771,7 @@ public sealed class Auction
         var award = RequireOpenAward();
         award.Settle(now);
         Status = AuctionStatus.Settled;
+        RaiseFollowUp(award, now);
 
         // The sale, as a fact on its own rather than something to be read out of
         // the deposit event below. Reporting counts this as revenue (§35), and a

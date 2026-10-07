@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { api, config, sar, untilText, when } from '@eauction/shared'
+import { api, config, sar, untilText, when, type Session } from '@eauction/shared'
 import type { AuctionListItem } from './types'
 import { label } from './types'
+import { BidderName, useLeaders } from './winners'
 
 interface Props {
+  session: Session
   auctions: AuctionListItem[]
   canCreate: boolean
   busy: boolean
@@ -20,8 +22,9 @@ interface Props {
  * — an auction is a thing with a place and a clock, and the card is what makes the
  * clock the most prominent thing on it.
  */
-export function AuctionList({ auctions, canCreate, busy, onOpen, onCreate }: Props) {
+export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCreate }: Props) {
   const live = useLiveFigures()
+  const leaders = useLeaders(session)
   const [nameAr, setNameAr] = useState('')
   const [nameEn, setNameEn] = useState('')
   const [creating, setCreating] = useState(false)
@@ -118,7 +121,14 @@ export function AuctionList({ auctions, canCreate, busy, onOpen, onCreate }: Pro
       ) : (
         <div className="auction-grid">
           {auctions.map((a) => (
-            <AuctionCard key={a.id} auction={a} live={live[a.id]} onOpen={onOpen} />
+            <AuctionCard
+              key={a.id}
+              session={session}
+              auction={a}
+              live={live[a.id]}
+              leaderId={leaders[a.id]}
+              onOpen={onOpen}
+            />
           ))}
         </div>
       )}
@@ -160,16 +170,28 @@ function useLiveFigures(): Record<string, LiveFigures> {
 }
 
 function AuctionCard({
+  session,
   auction,
   live: figures,
+  leaderId,
   onOpen,
 }: {
+  session: Session
   auction: AuctionListItem
   live?: LiveFigures
+  leaderId?: string
   onOpen: (id: string) => void
 }) {
   const l = label(auction.status)
   const live = auction.status === 'Live'
+  // Staff see who it is, not the public pseudonym: the leader while it runs, the
+  // awarded bidder once the committee has decided, the top bidder in between.
+  const winnerId = live ? leaderId : (auction.winnerBidderId ?? leaderId)
+  const winnerLabel = live
+    ? 'المزايد الأعلى'
+    : auction.winnerBidderId && ['Awarded', 'Settled'].includes(auction.status)
+      ? 'الفائز'
+      : 'الأعلى عند الإغلاق'
   const bidding = live && figures?.priceMinorUnits != null
   const onsite = auction.channel === 'Onsite'
 
@@ -237,6 +259,12 @@ function AuctionCard({
             <span>{live ? 'بدأ' : 'يبدأ'}</span>
             <span>{auction.startsAt ? when(auction.startsAt) : 'لم يُجدول بعد'}</span>
           </div>
+          {winnerId && auction.status !== 'Cancelled' && (
+            <div className="winner-row" data-testid="card-winner">
+              <span>{winnerLabel}</span>
+              <BidderName session={session} id={winnerId} />
+            </div>
+          )}
           <div className="ltr small">{auction.nameEn}</div>
         </div>
       </div>

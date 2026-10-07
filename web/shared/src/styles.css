@@ -584,14 +584,14 @@ tbody tr:hover { background: var(--surface-sunken); }
 
 .live-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
 }
 .live-card {
   display: grid;
-  gap: 12px;
+  gap: 9px;
   align-content: start;
-  padding: 18px;
+  padding: 14px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-inline-start: 5px solid var(--border-strong);
@@ -603,20 +603,34 @@ tbody tr:hover { background: var(--surface-sunken); }
 .live-card.closing { background: var(--danger-weak); }
 
 .live-card-head { display: flex; align-items: flex-start; gap: 10px; }
-.live-card-name { flex: 1; margin: 0; font-weight: 700; font-size: 16px; }
-.live-card-clock { font-size: 22px; font-weight: 700; color: var(--text); }
+.live-card-name { flex: 1; margin: 0; font-weight: 700; font-size: 15px; }
+.live-card-clock { font-size: 19px; font-weight: 700; color: var(--text); }
 .live-card-clock.urgent { color: var(--danger); }
 
-.live-card-price { display: grid; gap: 2px; min-height: 54px; align-content: center; }
-.live-card-figure { font-size: 28px; font-weight: 700; color: var(--accent-dark); line-height: 1.2; }
+.live-card-price { display: grid; gap: 0; min-height: 44px; align-content: center; }
+.live-card-figure { font-size: 23px; font-weight: 700; color: var(--accent-dark); line-height: 1.2; }
 
 .live-card-standing { font-weight: 600; color: var(--warn); }
 .live-card-standing.lead { color: var(--ok); }
 
-.live-card-raises { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.live-card-raises .quick-raise-btn { padding: 10px 6px; }
-.live-card-raises .quick-raise-amount { font-size: 14px; }
-.live-card-more { justify-self: start; padding-inline: 0; color: var(--muted); }
+.live-card-raises { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.live-card-raises .quick-raise-btn { padding: 7px 4px; gap: 2px; }
+.live-card-raises .quick-raise-step { font-size: 11px; }
+.live-card-raises .quick-raise-amount { font-size: 13px; }
+.live-card-custom { display: flex; gap: 6px; }
+.live-card-custom input {
+  flex: 1; min-width: 0; font: inherit; padding: 7px 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+}
+.live-card-custom button { padding: 7px 16px; }
+.live-card-more { justify-self: start; padding: 2px 0; color: var(--muted); font-size: 13px; }
+
+/* طلباتي: search and two rows of filters above the table. */
+.applications-tools { display: grid; gap: 10px; margin-bottom: 14px; }
+.applications-tools input[type="search"] {
+  font: inherit; padding: 9px 14px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface);
+}
 
 /* Search and status filter above the catalogue. */
 .catalogue-tools {
@@ -986,3 +1000,52 @@ button.notice-row:hover { background: var(--accent-weak); color: inherit; }
   }
   header.bar { background: var(--surface); }
 }
+
+/* The real winner on a staff card — highlighted, since it is the one fact the
+   public view masks and staff came to the card for. */
+.winner-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--teal-soft, rgba(13, 148, 136, 0.08));
+  font-size: 0.9rem;
+}
+.winner-row > span:first-child {
+  color: var(--muted, #64748b);
+}
+
+/* A staff account on the bidder portal: the message, and the way out of it. */
+.staff-redirect {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Paging under a long list — the audit trail. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+
+/* «رسا عليك المزاد» — the winner's panel on the auction page. */
+.winner-panel { border: 1px solid var(--accent); }
+.winner-head { display: flex; align-items: center; gap: 12px; }
+.winner-badge { font-size: 2rem; line-height: 1; }
+.award-steps { list-style: none; padding: 0; margin: 0; }
+.award-step { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.award-step:last-child { border-bottom: 0; }
+.award-step-mark {
+  width: 26px; height: 26px; flex: none; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 700;
+  background: var(--border, #e5e7eb); color: var(--muted, #64748b);
+}
+.award-step.done .award-step-mark { background: var(--accent); color: #fff; }
+.award-step.you .award-step-mark { background: #f59e0b; color: #fff; }
+.award-step-title { font-weight: 600; margin-bottom: 2px; }
+.pill.small { font-size: 0.75rem; padding: 1px 8px; }

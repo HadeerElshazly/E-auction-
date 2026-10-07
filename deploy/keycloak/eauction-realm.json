@@ -265,6 +265,37 @@
       ]
     },
     {
+      "username": "noura",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Noura",
+      "lastName": "Al-Qahtani",
+      "email": "noura@example.sa",
+      "attributes": {
+        "national_id": [
+          "1055555555"
+        ],
+        "name_ar": [
+          "نورة القحطاني"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        },
+        {
+          "type": "otp",
+          "secretData": "{\"value\": \"eauctiondevsecret1234567890\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
+        }
+      ],
+      "realmRoles": [
+        "bidder"
+      ]
+    },
+    {
       "username": "admin-user",
       "enabled": true,
       "emailVerified": true,

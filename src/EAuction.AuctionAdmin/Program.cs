@@ -80,6 +80,7 @@ builder.Services.AddSingleton<IEventStream>(sp =>
         }));
 builder.Services.AddSingleton<LifecycleConsumer>();
 builder.Services.AddHostedService<LifecycleConsumerService>();
+builder.Services.AddHostedService<AwardSnapshotRepublisher>();
 
 // Compliance window before a winner is disqualified and the award cascades.
 // A contract term, not a tuning knob: it has to match the كراسة الشروط, which
@@ -125,9 +126,10 @@ app.MapPost("/auctions", async (
     // Outside Mutate because the auction does not exist to be loaded yet, so the
     // audit row is written by hand. The transaction is the same one, which is what
     // matters.
-    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var actor = StaffAudit.ActorOf(http);
     db.RecordStaffAction(
-        who, roles, source, "CreateAuctionDraft", AuditSubject.Auction(auction.Id), r.NameAr);
+        actor.Subject, actor.Roles, actor.SourceAddress, "CreateAuctionDraft",
+        AuditSubject.Auction(auction.Id), r.NameAr, actor.Name, auction.NameAr);
 
     await db.SaveChangesAsync(ct);
     return Results.Created($"/auctions/{auction.Id}", AuctionResponse.From(auction));
@@ -193,10 +195,10 @@ app.MapGet("/auctions/{id:guid}/clerk-key", async (
     // asked after a disputed hall auction. Writing on a GET is the smaller
     // oddity — the audit row *is* a state change, and the alternative is the one
     // secret this service hands out leaving no trace.
-    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var actor = StaffAudit.ActorOf(http);
     db.RecordStaffAction(
-        who, roles, source, "ReadClerkSigningKey", AuditSubject.Auction(id),
-        $"Key epoch {auction.ClerkKeyEpoch}.");
+        actor.Subject, actor.Roles, actor.SourceAddress, "ReadClerkSigningKey",
+        AuditSubject.Auction(id), $"Key epoch {auction.ClerkKeyEpoch}.", actor.Name, auction.NameAr);
     await db.SaveChangesAsync(ct);
 
     return Results.Ok(new SigningKeyResponse(
@@ -541,7 +543,13 @@ app.MapGet("/auctions", async (
             a.BidderVisibility.ToString(),
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.DepositMinorUnits,
             a.Plots.Count, a.CreatedAt,
-            a.BookletPriceMinorUnits, a.CoverImageDocumentId, a.Plots.Sum(p => p.AreaSqm)))
+            a.BookletPriceMinorUnits, a.CoverImageDocumentId, a.Plots.Sum(p => p.AreaSqm),
+            // Who won: the latest award that was not disqualified — settled ones
+            // included — else the candidate before the committee.
+            a.Awards.Where(w => w.DisqualifiedAt == null)
+                .OrderByDescending(w => w.ConfirmedAt)
+                .Select(w => (Guid?)w.BidderId)
+                .FirstOrDefault() ?? a.PendingCandidateBidderId))
         .ToListAsync(ct);
 
     return Results.Ok(new { total, skip = offset, take = page, items = rows });
@@ -602,8 +610,10 @@ static async Task<IResult> Mutate(
     {
         change(auction);
 
-        var (who, roles, source) = StaffAudit.ActorOf(http);
-        db.RecordStaffAction(who, roles, source, action, AuditSubject.Auction(id), details);
+        var actor = StaffAudit.ActorOf(http);
+        db.RecordStaffAction(
+            actor.Subject, actor.Roles, actor.SourceAddress, action, AuditSubject.Auction(id),
+            details, actor.Name, auction.NameAr);
 
         await db.SaveChangesAsync(ct);
         return Results.Ok(AuctionResponse.From(auction));
@@ -680,7 +690,9 @@ public sealed record AuctionListItem(
     long OpeningPriceMinorUnits, long DepositMinorUnits,
     int PlotCount, DateTimeOffset CreatedAt,
     // What the bidder's catalogue card shows, so staff see the same card citizens do.
-    long BookletPriceMinorUnits, Guid? CoverImageDocumentId, decimal TotalAreaSqm);
+    long BookletPriceMinorUnits, Guid? CoverImageDocumentId, decimal TotalAreaSqm,
+    // Staff only see this list: the real winner, not the public pseudonym (D-22).
+    Guid? WinnerBidderId);
 
 public sealed record AuctionResponse(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,

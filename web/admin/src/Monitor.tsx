@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, config, sar, type Session } from '@eauction/shared'
+import { BidderName, useLeaders } from './winners'
 
 interface Row {
   auctionId: string
@@ -32,6 +33,7 @@ interface Row {
  * fraction of the traffic and has no such cliff.
  */
 export function Monitor({ session }: { session: Session }) {
+  const leaders = useLeaders(session)
   const [rows, setRows] = useState<Row[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -99,14 +101,14 @@ export function Monitor({ session }: { session: Session }) {
 
       <div className="monitor-grid" data-testid="monitor">
         {(rows ?? []).map((r) => (
-          <AuctionTile key={r.auctionId} row={r} />
+          <AuctionTile key={r.auctionId} row={r} session={session} leaderId={leaders[r.auctionId]} />
         ))}
       </div>
     </>
   )
 }
 
-function AuctionTile({ row }: { row: Row }) {
+function AuctionTile({ row, session, leaderId }: { row: Row; session: Session; leaderId?: string }) {
   const left = Math.max(0, new Date(row.effectiveEndsAt).getTime() - Date.now())
   const seconds = Math.floor(left / 1000)
 
@@ -150,7 +152,8 @@ function AuctionTile({ row }: { row: Row }) {
       <div className="facts">
         <div>
           <span className="muted">المزايد الأعلى</span>
-          <span>{row.leaderLabel ?? '—'}</span>
+          {/* The real bidder for staff; the public pseudonym only until it resolves. */}
+          <span>{leaderId ? <BidderName session={session} id={leaderId} /> : (row.leaderLabel ?? '—')}</span>
         </div>
         {row.extensionsUsed > 0 && (
           <div>

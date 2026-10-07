@@ -196,9 +196,14 @@ export function App() {
         )}
 
         {session && !isBidder && (
-          <div className="notice info">
-            أنت تتصفّح بحساب للاطلاع فقط — يمكنك مشاهدة المزادات وتفاصيلها، لكن المزايدة
-            متاحة لحسابات المزايدين المسجّلين.
+          <div className="notice info staff-redirect">
+            <span className="grow">
+              هذا حساب موظف، وهذه بوابة المزايدين — يمكنك مشاهدة المزادات فقط. التقارير وسجل
+              المراجعة وإدارة المزادات في بوابة الموظفين.
+            </span>
+            <a className="button primary" href={staffPortalUrl()}>
+              فتح بوابة الموظفين ←
+            </a>
           </div>
         )}
 
@@ -269,4 +274,10 @@ function describe(e: unknown): string {
     return e.message
   }
   return e instanceof Error ? e.message : String(e)
+}
+
+/** The staff portal: set at build, else the same host on its default port. */
+function staffPortalUrl(): string {
+  const configured = import.meta.env.VITE_STAFF_PORTAL as string | undefined
+  return configured || `${window.location.protocol}//${window.location.hostname}:3001/`
 }

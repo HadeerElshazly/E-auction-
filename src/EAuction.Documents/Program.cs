@@ -331,10 +331,12 @@ static async Task AuditReadAsync(
     var subject = http.User.SubjectId();
     if (subject is null || subject == metadata.OwnerSubject) return;
 
-    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var actor = StaffAudit.ActorOf(http);
+    var (who, roles, source) = actor;
     var entry = StaffActionRecorded.By(
         who, roles, source, action, AuditSubject.Document(metadata.Id),
-        $"{metadata.Access} document owned by {metadata.OwnerSubject}, {metadata.FileName}.");
+        $"{metadata.Access} document owned by {metadata.OwnerSubject}, {metadata.FileName}.",
+        actor.Name, metadata.FileName);
 
     var logger = loggers.CreateLogger("EAuction.Documents.Audit");
 

@@ -67,6 +67,13 @@ export function App() {
 
   const [view, setView] = useState<View>('auctions')
 
+  // A reader lands on their own screen, not on an auction list they cannot use:
+  // the auditor on سجل المراجعة, reporting on التقارير.
+  const readerOnly = !!session && !isAdmin && !isCommittee && !isClerk
+  useEffect(() => {
+    if (readerOnly) setView(canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
+  }, [readerOnly, canAudit, canReport])
+
   const refreshList = useCallback(async () => {
     if (!session) return
     try {
@@ -292,7 +299,7 @@ export function App() {
           <div className="card">
             <h2>المزادات</h2>
             <p className="muted small">
-              هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من الأعلى.
+              هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من القائمة الجانبية.
             </p>
           </div>
         ) : selected ? (
@@ -326,6 +333,7 @@ export function App() {
             )}
 
             <AwardPanel
+              session={session}
               auction={selected}
               client={client}
               busy={busy}
@@ -336,6 +344,7 @@ export function App() {
           </>
         ) : (
           <AuctionList
+            session={session}
             auctions={auctions}
             canCreate={isAdmin}
             busy={busy}

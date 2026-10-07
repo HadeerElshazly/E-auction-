@@ -3,6 +3,7 @@ using System;
 using EAuction.Participant.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EAuction.Participant.Persistence.Migrations
 {
     [DbContext(typeof(ParticipantDbContext))]
-    partial class ParticipantDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261007075619_AddAuctionNameAndStage")]
+    partial class AddAuctionNameAndStage
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -270,65 +273,6 @@ namespace EAuction.Participant.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("subscription", (string)null);
-                });
-
-            modelBuilder.Entity("EAuction.Participant.Domain.WinnerAward", b =>
-                {
-                    b.Property<Guid>("AuctionId")
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("AmountMinorUnits")
-                        .HasColumnType("bigint");
-
-                    b.Property<Guid>("AwardId")
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("BrokerageMinorUnits")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("ComplianceDeadline")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("ConfirmedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("DisqualifiedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("PaidMinorUnits")
-                        .HasColumnType("bigint");
-
-                    b.Property<long>("RemainingMinorUnits")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset?>("SettledAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("SignedLetterDocumentId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("TransferCompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("TransferStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WinnerBidderId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("WinnerNotifiedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("AuctionId");
-
-                    b.HasIndex("WinnerBidderId");
-
-                    b.ToTable("winner_award", (string)null);
                 });
 #pragma warning restore 612, 618
         }

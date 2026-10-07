@@ -10,6 +10,7 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
     public DbSet<Bidder> Bidders => Set<Bidder>();
     public DbSet<Subscription> Subscriptions => Set<Subscription>();
     public DbSet<AuctionTerms> AuctionTerms => Set<AuctionTerms>();
+    public DbSet<WinnerAward> WinnerAwards => Set<WinnerAward>();
     public DbSet<OutboxMessage> Outbox => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -61,6 +62,19 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             e.ToTable("auction_terms");
             e.HasKey(x => x.AuctionId);
             e.Property(x => x.AuctionId).ValueGeneratedNever();
+            e.Property(x => x.NameAr).HasMaxLength(300);
+            e.Property(x => x.Stage).HasConversion<int>();
+            e.HasIndex(x => x.Stage);
+        });
+
+        b.Entity<WinnerAward>(e =>
+        {
+            e.ToTable("winner_award");
+            e.HasKey(x => x.AuctionId);
+            e.Property(x => x.AuctionId).ValueGeneratedNever();
+            e.Property(x => x.TransferStatus).HasMaxLength(20);
+            e.Ignore(x => x.NextStep);
+            e.HasIndex(x => x.WinnerBidderId);
         });
 
         b.Entity<OutboxMessage>(e =>

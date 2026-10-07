@@ -117,13 +117,13 @@ ol li{margin-bottom:4px}
       اقرأ الرمز من هنا وأدخله هناك.
     </p>
     <p class="lede" style="margin-top:-8px">
-      الرمز نفسه لكل المزايدين هنا، وهذا متوقَّع: النطاق التجريبي يزرع السرّ ذاته على
+      الرمز نفسه لكل الحسابات هنا — المزايدين ولجنة الترسية، وهذا متوقَّع: النطاق التجريبي يزرع السرّ ذاته على
       كل حساب. في الإنتاج لكل مواطن جهازه.
     </p>
     <div id="nafath-error"></div>
     <table>
       <thead>
-        <tr><th>المزايد</th><th>رقم الهوية</th><th>الرمز</th></tr>
+        <tr><th></th><th>يصلح لـ</th><th>الرمز</th></tr>
       </thead>
       <tbody id="nafath"></tbody>
     </table>
@@ -211,7 +211,9 @@ async function nafath() {
     const body = document.getElementById('nafath')
     body.innerHTML = ''
 
-    for (const p of data.people) {
+    // One row: every demo account carries the same secret, so a row per person
+    // would repeat one code and suggest each has their own.
+    for (const p of data.people.slice(0, 1)) {
       const code = el('span', { class: 'code', title: 'انقر للتحديد' }, p.code)
       const fill = el('div', { class: 'bar-fill' + (p.secondsRemaining <= 5 ? ' low' : '') })
       fill.style.width = `${(p.secondsRemaining / 30) * 100}%`
@@ -225,8 +227,8 @@ async function nafath() {
 
       const row = el('tr')
       row.append(
-        el('td', {}, p.nameAr + ' · ' + p.username),
-        el('td', { class: 'num' }, p.nationalId),
+        el('td', {}, 'رمز التحقق — لكل الحسابات التجريبية'),
+        el('td', { class: 'small' }, data.people.map((x) => x.username).join(' · ')),
         cell)
       body.append(row)
     }

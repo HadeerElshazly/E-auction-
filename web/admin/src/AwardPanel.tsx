@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { day, sar, type Api } from '@eauction/shared'
+import { day, sar, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
+import { BidderName } from './winners'
 
 interface Props {
+  session: Session
   auction: Auction
   client: Api
   busy: boolean
@@ -25,7 +27,7 @@ interface Props {
  * award, then letter, then signed letter, then notify — visible rather than
  * something a clerk discovers by getting a 409.
  */
-export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onAct }: Props) {
+export function AwardPanel({ session, auction, client, busy, canAct, committeeUserId, onAct }: Props) {
   const [reason, setReason] = useState('')
   const [forfeit, setForfeit] = useState(true)
   const [resultReason, setResultReason] = useState('')
@@ -110,7 +112,7 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
               {/* The committee is the one party that must see the real identity:
                   they sign the award letter to a named person. The masking in the
                   public view (D-22) is for everyone else. */}
-              <code className="small">{auction.pendingCandidateBidderId}</code>
+              <BidderName session={session} id={auction.pendingCandidateBidderId} />
             </div>
           </div>
 
@@ -187,7 +189,7 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
             </div>
             <div>
               <div className="muted small">المزايد</div>
-              <code className="small">{award.bidderId}</code>
+              <BidderName session={session} id={award.bidderId} />
             </div>
           </div>
 

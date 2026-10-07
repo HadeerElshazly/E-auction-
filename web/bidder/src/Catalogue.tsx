@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { config, finishedStages, sar, stageLabels, untilText } from '@eauction/shared'
+import { useEffect, useMemo, useState } from 'react'
+import { api, config, sar, stageLabels, untilText } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Props {
@@ -19,48 +19,52 @@ export function documentUrl(documentId: string): string {
 // One vocabulary for both portals: see shared/src/stages.ts.
 export const statusAr = stageLabels
 
-/** The status filter, grouped the way a citizen thinks of them rather than by lifecycle. */
+/**
+ * The status chips. The grouping itself — which lifecycle stages count as
+ * "finished" — is the catalogue service's, as is the search: filtered on the server,
+ * so every client gets the same list and the counts are the real ones.
+ */
 const filters = [
-  { key: 'all', ar: 'الكل', match: () => true },
-  { key: 'upcoming', ar: 'القادمة', match: (s: string) => s === 'Scheduled' },
-  { key: 'live', ar: 'الجارية', match: (s: string) => s === 'Live' },
-  {
-    key: 'closed',
-    ar: 'المنتهية',
-    match: (s: string) => finishedStages.includes(s),
-  },
+  { key: 'all', ar: 'الكل' },
+  { key: 'upcoming', ar: 'القادمة' },
+  { key: 'live', ar: 'الجارية' },
+  { key: 'closed', ar: 'المنتهية' },
 ] as const
 
 type FilterKey = (typeof filters)[number]['key']
 
-/** Arabic search that ignores the hamza and taa-marbuta spellings people type either way. */
-function normalise(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[أإآ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/[ً-ْ]/g, '')
-    .trim()
+interface CataloguePage {
+  items: AuctionSummary[]
+  counts: Record<FilterKey, number>
 }
 
 export function Catalogue({ auctions, signedIn, onOpen }: Props) {
   const [query, setQuery] = useState('')
+  const [debounced, setDebounced] = useState('')
   const [filter, setFilter] = useState<FilterKey>('all')
+  const [page, setPage] = useState<CataloguePage | null>(null)
+  const client = useMemo(() => api({ baseUrl: config.queryApi, session: null }), [])
 
-  const visible = useMemo(() => {
-    const q = normalise(query)
-    const match = filters.find((f) => f.key === filter)?.match ?? (() => true)
-    return auctions.filter(
-      (a) =>
-        match(a.status) &&
-        (q === '' || normalise(`${a.nameAr} ${a.nameEn}`).includes(q)),
-    )
-  }, [auctions, query, filter])
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(query.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [query])
 
-  const countFor = (key: FilterKey) =>
-    auctions.filter((a) => (filters.find((f) => f.key === key)?.match ?? (() => true))(a.status))
-      .length
+  // Re-asked when the filter or the search changes, and whenever the app's own
+  // catalogue poll brings new data, so prices and stages stay current.
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (filter !== 'all') params.set('state', filter)
+    if (debounced) params.set('q', debounced)
+    const qs = params.toString()
+    client
+      .get<CataloguePage>(`/auctions${qs ? `?${qs}` : ''}`)
+      .then(setPage)
+      .catch(() => undefined)
+  }, [client, filter, debounced, auctions])
+
+  const visible = page?.items ?? []
+  const countFor = (key: FilterKey) => page?.counts[key] ?? 0
 
   if (auctions.length === 0) {
     return (

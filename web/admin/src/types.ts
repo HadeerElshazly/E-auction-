@@ -19,6 +19,8 @@ export interface AuctionListItem {
   /** A Public document — the same cover the citizen's catalogue shows. */
   coverImageDocumentId: string | null
   totalAreaSqm: number
+  /** The awarded bidder (or the candidate before the committee). Staff only. */
+  winnerBidderId: string | null
 }
 
 export interface Award {
@@ -69,6 +71,8 @@ export interface Auction {
   pendingCandidateBidderId: string | null
   pendingCandidateAmountMinorUnits: number | null
   currentAward: Award | null
+  /** The open award, or the settled one whose title transfer is still tracked. */
+  followUpAward: Award | null
 }
 
 export type AuctionStatus =

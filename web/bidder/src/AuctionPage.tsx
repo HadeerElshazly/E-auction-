@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, config, sar, untilText, when, type Session } from '@eauction/shared'
-import type { AuctionDetail, Bidder, Subscription } from './types'
+import type { AuctionDetail, Bidder, Subscription, WinnerAward } from './types'
+import { WinnerPanel } from './WinnerPanel'
 import { useLivePrice } from './useLivePrice'
 import { SubscriptionSteps } from './SubscriptionSteps'
 import { documentUrl, statusAr } from './Catalogue'
@@ -33,6 +34,7 @@ export function AuctionPage({
 
   const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [bidder, setBidder] = useState<Bidder | null>(null)
+  const [award, setAward] = useState<WinnerAward | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Both, because the steps depend on both: a 404 on either simply means that part
@@ -54,6 +56,8 @@ export function AuctionPage({
     setSubscription(
       await read<Subscription>(`/auctions/${auction.id}/subscriptions/${session.subject}`),
     )
+    // 404 for everyone but the winner, which is most of the time.
+    setAward(await read<WinnerAward>(`/auctions/${auction.id}/award`))
   }, [participant, auction.id, session, canBid])
 
   useEffect(() => {
@@ -70,6 +74,11 @@ export function AuctionPage({
   const lifecycle = price?.status ?? auction.status
   const live = lifecycle === 'Live'
   const cancelled = lifecycle === 'Cancelled'
+  // Bidding is still ahead or under way. Anything after it — closed, awarded,
+  // settled — has nothing to enter, and a «شاشة المزايدة» button there misleads.
+  const biddingOpen = live || lifecycle === 'Scheduled' || lifecycle === 'Approved'
+  const closed = !biddingOpen && !cancelled
+  const closingPrice = closed ? price?.priceMinorUnits ?? null : null
   const currentPrice = live
     ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
     : auction.openingPriceMinorUnits
@@ -171,17 +180,23 @@ export function AuctionPage({
 
         <div className="stat-grid">
           <div className={`stat${live ? ' highlight' : ''}`}>
-            <div className="stat-label">{live ? 'السعر الحالي' : 'سعر الافتتاح'}</div>
+            <div className="stat-label">
+              {live ? 'السعر الحالي' : closingPrice !== null ? 'أعلى سعر عند الإغلاق' : 'سعر الافتتاح'}
+            </div>
             <div className="stat-value num">
               {sar(
-                live ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits : auction.openingPriceMinorUnits,
+                live
+                  ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
+                  : closingPrice ?? auction.openingPriceMinorUnits,
                 'ar',
               )}
             </div>
             {price?.leaderLabel && (
               <div className="stat-sub">
                 {price.leaderIsYou ? (
-                  <strong style={{ color: 'var(--accent)' }}>أنت الأعلى حالياً</strong>
+                  <strong style={{ color: 'var(--accent)' }}>
+                    {live ? 'أنت الأعلى حالياً' : 'كنت الأعلى عند الإغلاق'}
+                  </strong>
                 ) : (
                   // Rendered exactly as sent. The label is a pseudonym on a masked
                   // auction and a name on a named one (D-22), and the server decides
@@ -271,6 +286,28 @@ export function AuctionPage({
         </div>
       )}
 
+      {session && canBid && award && (
+        <WinnerPanel
+          award={award}
+          auctionId={auction.id}
+          session={session}
+          participant={participant}
+          onError={setError}
+        />
+      )}
+
+      {session && canBid && eligible && closed && !award && (
+        // A bidder who took part and did not win is told so, rather than left with a
+        // page that looks the same as before the auction.
+        <div className="notice info" role="status" data-testid="closed-notice">
+          {['Awarded', 'Settled'].includes(lifecycle)
+            ? 'انتهى المزاد ورسا على مزايد آخر. يُرد تأمينك أو يُحرَّر ضمانك البنكي بعد تسوية المزاد.'
+            : lifecycle === 'Unsold'
+              ? 'انتهى المزاد دون ترسية، ويُرد تأمينك أو يُحرَّر ضمانك البنكي.'
+              : 'انتهت المزايدة في هذا المزاد. تُعلن النتيجة بعد اعتماد لجنة الترسية، وسيصلك إشعار.'}
+        </div>
+      )}
+
       {session && canBid && !cancelled && (
         <SubscriptionSteps
           auction={auction}
@@ -283,7 +320,7 @@ export function AuctionPage({
         />
       )}
 
-      {session && canBid && eligible && !cancelled && !onsite && (
+      {session && canBid && eligible && biddingOpen && !onsite && (
         // The bidding itself has its own screen (شاشة المزايدة): price, standing,
         // clock and the raise, with nothing to scroll past. Here only the way in.
         <div className="card room-entry">
@@ -301,7 +338,7 @@ export function AuctionPage({
         </div>
       )}
 
-      {session && canBid && eligible && !cancelled && onsite && (
+      {session && canBid && eligible && biddingOpen && onsite && (
         // Said rather than left blank. A qualified bidder who paid the deposit and
         // then finds nothing to press would reasonably conclude the portal is
         // broken, and the cost of that conclusion is a citizen who does not turn

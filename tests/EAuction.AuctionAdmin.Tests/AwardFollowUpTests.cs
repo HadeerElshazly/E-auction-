@@ -108,4 +108,21 @@ public class AwardFollowUpTests
         Assert.Throws<InvalidAuctionTransitionException>(
             () => auction.RecordAwardPayment(100_00, Now, "R", null, Build.Committee, Now));
     }
+
+    [Fact]
+    public void Every_change_to_the_award_tells_the_winner_where_it_stands()
+    {
+        var auction = Build.AwaitingSettlement(Now, out var winner);
+        auction.ClearEvents();
+
+        auction.RecordAwardPayment(500_000_00, Now, "SADAD-1", null, Build.Committee, Now);
+
+        var snapshot = Assert.IsType<AwardFollowUpUpdated>(Assert.Single(auction.Events));
+        Assert.Equal(winner, snapshot.WinnerBidderId);
+        Assert.Equal(500_000_00, snapshot.PaidMinorUnits);
+        Assert.Equal(auction.CurrentAward!.RemainingMinorUnits, snapshot.RemainingMinorUnits);
+        Assert.NotNull(snapshot.SignedLetterDocumentId);
+        Assert.NotNull(snapshot.WinnerNotifiedAt);
+        Assert.Equal("NotStarted", snapshot.TransferStatus);
+    }
 }

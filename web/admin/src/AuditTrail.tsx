@@ -24,6 +24,18 @@ interface Entry {
   at: string | null
   malformed: boolean
   hash: string
+  /** The event as published; newer entries carry who acted and on what, by name. */
+  payload?: string
+}
+
+/** The names the recording service put beside the IDs, when it did. */
+function namesOf(e: Entry): { actor: string | null; subject: string | null } {
+  try {
+    const p = JSON.parse(e.payload ?? '{}') as { actorName?: string; subjectLabel?: string }
+    return { actor: p.actorName || null, subject: p.subjectLabel || null }
+  } catch {
+    return { actor: null, subject: null }
+  }
 }
 
 interface Verdict {
@@ -68,6 +80,16 @@ const ACTIONS: Record<string, string> = {
   RotateBidderKey: 'تدوير مفتاح مزايد',
   ReadDocument: 'فتح مستند',
   ReadDocumentMetadata: 'عرض بيانات مستند',
+  AddPublicDocument: 'إضافة مرفق عام',
+  RemovePublicDocument: 'إزالة مرفق عام',
+  CancelAuction: 'إلغاء المزاد',
+  RecordAwardPayment: 'تسجيل دفعة من ثمن الترسية',
+  CreditDepositToAward: 'احتساب التأمين من الثمن',
+  UpdateTransfer: 'تحديث حالة الإفراغ',
+  RejectPreliminaryResult: 'رفض النتيجة الأولية',
+  ReferToNextBidder: 'إحالة إلى المزايد التالي',
+  RejectBankGuarantee: 'رفض ضمان بنكي',
+  CloseDeposit: 'تسوية التأمين',
 }
 
 export function AuditTrail({ session }: { session: Session }) {
@@ -81,6 +103,27 @@ export function AuditTrail({ session }: { session: Session }) {
   const [verdict, setVerdict] = useState<Verdict | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // Auction names for entries recorded before the payload carried a label.
+  const [auctionNames, setAuctionNames] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    api({ baseUrl: config.adminApi, session })
+      .get<{ items: Array<{ id: string; nameAr: string }> }>('/auctions?take=200')
+      .then((r) => setAuctionNames(new Map(r.items.map((a) => [a.id, a.nameAr]))))
+      .catch(() => undefined)
+  }, [session])
+  const subjectOf = (e: Entry) => {
+    const named = namesOf(e).subject
+    if (named) return named
+    const m = /^auction\/([0-9a-f-]+)/i.exec(e.subject ?? '')
+    return m ? (auctionNames.get(m[1] ?? "") ?? null) : null
+  }
+
+  // Pages of PAGE_SIZE, newest first. Back to the first page whenever the filter
+  // changes, so a narrower search never opens on an empty page 7.
+  const [pageIndex, setPageIndex] = useState(0)
+  useEffect(() => setPageIndex(0), [action, subject])
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   /** Bumped by تحديث, so a manual refresh re-runs the fetch below. */
   const [refresh, setRefresh] = useState(0)
@@ -105,7 +148,7 @@ export function AuditTrail({ session }: { session: Session }) {
     setBusy(true)
     setError(null)
 
-    const parts = ['take=100']
+    const parts = [`take=${PAGE_SIZE}`, `skip=${pageIndex * PAGE_SIZE}`]
     if (action) parts.push(`action=${encodeURIComponent(action)}`)
     if (subject) parts.push(`subject=${encodeURIComponent(subject)}`)
 
@@ -127,7 +170,7 @@ export function AuditTrail({ session }: { session: Session }) {
     return () => {
       cancelled = true
     }
-  }, [action, client, subject, refresh])
+  }, [action, client, subject, refresh, pageIndex])
 
   useEffect(() => {
     void (async () => {
@@ -212,9 +255,7 @@ export function AuditTrail({ session }: { session: Session }) {
         </p>
       ) : (
         <>
-          <p className="muted small">
-            {total} إجراء — يُعرض أحدث {entries.length}
-          </p>
+          <Pager index={pageIndex} pages={pages} total={total} onGo={setPageIndex} />
           <div className="table-scroll">
             <table data-testid="audit-table">
               <thead>
@@ -240,11 +281,15 @@ export function AuditTrail({ session }: { session: Session }) {
                         (ACTIONS[e.action ?? ''] ?? e.action ?? '—')
                       )}
                     </td>
-                    {/* The raw subject, deliberately. The audit service does not know
-                        what an auction is and should not — it stores "auction/<id>"
-                        and whoever is reading knows one when they see it. */}
-                    <td className="small ltr mono">{short(e.subject)}</td>
-                    <td className="small ltr mono">{short(e.actorSubject)}</td>
+                    {/* The name the recording service stamped on the event, else the
+                        auction's current name, else the raw id. The audit service
+                        itself still does not know what an auction is. */}
+                    <td className="small" title={e.subject ?? undefined}>
+                      {subjectOf(e) ?? <span className="ltr mono">{short(e.subject)}</span>}
+                    </td>
+                    <td className="small" title={e.actorSubject ?? undefined}>
+                      {namesOf(e).actor ?? <span className="ltr mono">{short(e.actorSubject)}</span>}
+                    </td>
                     <td className="small muted">{e.actorRoles ?? '—'}</td>
                     <td className="small">{e.details ?? '—'}</td>
                   </tr>
@@ -252,8 +297,42 @@ export function AuditTrail({ session }: { session: Session }) {
               </tbody>
             </table>
           </div>
+          {pages > 1 && <Pager index={pageIndex} pages={pages} total={total} onGo={setPageIndex} />}
         </>
       )}
+    </div>
+  )
+}
+
+const PAGE_SIZE = 25
+
+/** Newest first: page 1 is the latest PAGE_SIZE actions. */
+function Pager({
+  index,
+  pages,
+  total,
+  onGo,
+}: {
+  index: number
+  pages: number
+  total: number
+  onGo: (i: number) => void
+}) {
+  const from = total === 0 ? 0 : index * PAGE_SIZE + 1
+  const to = Math.min(total, (index + 1) * PAGE_SIZE)
+  return (
+    <div className="pager" data-testid="audit-pager">
+      <span className="muted small">
+        <span className="num">{from}–{to}</span> من <span className="num">{total}</span> إجراء
+      </span>
+      <span className="grow" />
+      <button className="ghost" disabled={index === 0} onClick={() => onGo(0)} aria-label="الصفحة الأولى">«</button>
+      <button className="ghost" disabled={index === 0} onClick={() => onGo(index - 1)}>السابق</button>
+      <span className="small">
+        صفحة <span className="num">{index + 1}</span> من <span className="num">{pages}</span>
+      </span>
+      <button className="ghost" disabled={index >= pages - 1} onClick={() => onGo(index + 1)}>التالي</button>
+      <button className="ghost" disabled={index >= pages - 1} onClick={() => onGo(pages - 1)} aria-label="الصفحة الأخيرة">»</button>
     </div>
   )
 }

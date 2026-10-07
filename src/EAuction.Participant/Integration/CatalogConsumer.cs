@@ -33,34 +33,94 @@ public sealed class CatalogConsumer(
     }
 
     /// <summary>
-    /// Cancellations that arrived before the auction's terms. The two topics are read
-    /// concurrently, so on a replay the cancellation can come first; it is applied
-    /// the moment the terms are written instead of being lost.
+    /// Lifecycle events that arrived before the auction's terms, in order. The topics
+    /// are read concurrently, so on a replay they can come first; they are applied the
+    /// moment the terms are written instead of being lost.
     /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> _cancelledEarly = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, List<string>> _early = new();
 
     /// <summary>
-    /// Only a cancellation: it is the one lifecycle fact that changes what this
-    /// service may accept. The rest — open, closed, awarded — reaches it as
-    /// deposit releases, or does not concern enrolment.
+    /// The auction's stage — for «طلباتي»'s server-side filter — and its cancellation,
+    /// which also stops enrolment and deposits (AuctionTerms.RequireOpen).
     /// </summary>
     private async Task ApplyLifecycleAsync(StreamEvent record, CancellationToken ct)
     {
-        if (record.EventType != "AuctionCancelled") return;
         if (!Guid.TryParse(record.Key, out var auctionId)) return;
 
-        var at = DateTimeOffset.UtcNow;
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
-        if (terms is null)
+
+        // The winner's view of their award. Needs no terms, so it is never deferred.
+        if (record.EventType == "AwardFollowUpUpdated")
         {
-            _cancelledEarly[auctionId] = at;
+            await ApplyAwardAsync(db, auctionId, record, ct);
             return;
         }
 
-        terms.Cancel(at);
+        var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+        if (terms is null)
+        {
+            var list = _early.GetOrAdd(auctionId, _ => new List<string>());
+            lock (list) list.Add(record.EventType);
+            return;
+        }
+
+        if (!Apply(terms, record.EventType)) return;
         await db.SaveChangesAsync(ct);
-        logger.LogInformation("Auction {AuctionId} cancelled: no further enrolment or deposits.", auctionId);
+        if (record.EventType == "AuctionCancelled")
+            logger.LogInformation("Auction {AuctionId} cancelled: no further enrolment or deposits.", auctionId);
+    }
+
+    private async Task ApplyAwardAsync(
+        ParticipantDbContext db, Guid auctionId, StreamEvent record, CancellationToken ct)
+    {
+        var p = JsonSerializer.Deserialize<AwardFollowUpPayload>(record.Payload, Json);
+        if (p is null) return;
+
+        var award = await db.WinnerAwards.FindAsync(new object?[] { auctionId }, ct);
+        if (award is null)
+        {
+            award = new WinnerAward(auctionId);
+            db.WinnerAwards.Add(award);
+        }
+
+        if (!award.Apply(
+                p.AwardId, p.WinnerBidderId, p.AmountMinorUnits, p.BrokerageMinorUnits,
+                p.ConfirmedAt, p.ComplianceDeadline, p.SignedLetterDocumentId, p.WinnerNotifiedAt,
+                p.PaidMinorUnits, p.RemainingMinorUnits, p.TransferStatus ?? "NotStarted",
+                p.TransferCompletedAt, p.SettledAt, p.DisqualifiedAt, p.At))
+            return;
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    private sealed record AwardFollowUpPayload
+    {
+        public Guid AwardId { get; init; }
+        public Guid WinnerBidderId { get; init; }
+        public long AmountMinorUnits { get; init; }
+        public long BrokerageMinorUnits { get; init; }
+        public DateTimeOffset ConfirmedAt { get; init; }
+        public DateTimeOffset ComplianceDeadline { get; init; }
+        public Guid? SignedLetterDocumentId { get; init; }
+        public DateTimeOffset? WinnerNotifiedAt { get; init; }
+        public long PaidMinorUnits { get; init; }
+        public long RemainingMinorUnits { get; init; }
+        public string? TransferStatus { get; init; }
+        public DateTimeOffset? TransferCompletedAt { get; init; }
+        public DateTimeOffset? SettledAt { get; init; }
+        public DateTimeOffset? DisqualifiedAt { get; init; }
+        public DateTimeOffset At { get; init; }
+    }
+
+    private static bool Apply(AuctionTerms terms, string eventType)
+    {
+        if (eventType == "AuctionCancelled")
+        {
+            var was = terms.CancelledAt;
+            terms.Cancel(DateTimeOffset.UtcNow);
+            return was is null;
+        }
+        return terms.Advance(eventType);
     }
 
     private async Task ApplyAuctionAsync(StreamEvent record, CancellationToken ct)
@@ -89,8 +149,12 @@ public sealed class CatalogConsumer(
                 payload.BookletDocumentId);
         }
 
-        if (_cancelledEarly.TryRemove(payload.AuctionId, out var cancelledAt))
-            (existing ?? db.AuctionTerms.Local.First(t => t.AuctionId == payload.AuctionId)).Cancel(cancelledAt);
+        var written = existing ?? db.AuctionTerms.Local.First(t => t.AuctionId == payload.AuctionId);
+        written.Name(payload.NameAr);
+        if (_early.TryRemove(payload.AuctionId, out var early))
+            lock (early)
+                foreach (var eventType in early)
+                    Apply(written, eventType);
 
         await db.SaveChangesAsync(ct);
     }
@@ -159,6 +223,7 @@ public sealed class CatalogConsumer(
     private sealed record AuctionApprovedPayload
     {
         public Guid AuctionId { get; init; }
+        public string? NameAr { get; init; }
         public string? BidderVisibility { get; init; }
         public DateTimeOffset StartsAt { get; init; }
         public DateTimeOffset EndsAt { get; init; }

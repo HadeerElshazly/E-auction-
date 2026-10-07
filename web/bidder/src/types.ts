@@ -173,3 +173,21 @@ export interface BidCertificate {
   presentedSignatureMatched: boolean | null
   issuedAt: string
 }
+
+/** The award, for its winner (participant service, from the award's snapshot). */
+export interface WinnerAward {
+  auctionId: string
+  amountMinorUnits: number
+  brokerageMinorUnits: number
+  confirmedAt: string
+  complianceDeadline: string
+  letterAvailable: boolean
+  winnerNotifiedAt: string | null
+  paidMinorUnits: number
+  remainingMinorUnits: number
+  transferStatus: 'NotStarted' | 'InProgress' | 'Completed'
+  transferCompletedAt: string | null
+  settledAt: string | null
+  withdrawnAt: string | null
+  nextStep: 'AwaitingLetter' | 'Pay' | 'Transfer' | 'Done' | 'Withdrawn'
+}

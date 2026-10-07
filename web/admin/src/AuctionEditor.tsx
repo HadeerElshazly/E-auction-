@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, config, parseRiyals, riyals, sar, when, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
 import { label } from './types'
+import { BidderName, useLeaders } from './winners'
 
 interface Props {
   auction: Auction
@@ -50,7 +51,7 @@ export function AuctionEditor({
       {open && canEdit ? (
         <Details auction={auction} client={client} busy={busy} onAct={onAct} />
       ) : (
-        <Summary auction={auction} />
+        <Summary auction={auction} session={session} />
       )}
 
       {auction.channel === 'Onsite' && (
@@ -85,8 +86,10 @@ export function AuctionEditor({
  * costs to take part, and how it is set up — in that order, because that is the
  * order the committee and the clerk ask about it in.
  */
-function Summary({ auction }: { auction: Auction }) {
+function Summary({ auction, session }: { auction: Auction; session: Session }) {
   const figures = usePublicPrice(auction)
+  const leaderId = useLeaders(session)[auction.id]
+  const award = auction.currentAward ?? auction.followUpAward
   const ended = figures?.effectiveEndsAt ?? auction.endsAt
   const extension = auction.quietPeriodSeconds
     ? `${auction.quietPeriodSeconds} ثانية، حتى ${auction.maxExtensions} مرات`
@@ -128,7 +131,21 @@ function Summary({ auction }: { auction: Auction }) {
               {figures.status === 'Live' ? 'السعر الحالي' : 'أعلى سعر عند الإغلاق'}
             </div>
             <div className="stat-value num">{sar(figures.priceMinorUnits, 'ar')}</div>
-            {figures.leaderLabel && <div className="stat-sub">المزايد الأعلى: {figures.leaderLabel}</div>}
+            {(leaderId || figures.leaderLabel) && (
+              <div className="stat-sub">
+                المزايد الأعلى:{' '}
+                {leaderId ? <BidderName session={session} id={leaderId} /> : figures.leaderLabel}
+              </div>
+            )}
+          </div>
+        )}
+        {award && (
+          <div className="stat highlight" data-testid="summary-winner">
+            <div className="stat-label">الفائز بالترسية</div>
+            <div className="stat-value num">{sar(award.amountMinorUnits, 'ar')}</div>
+            <div className="stat-sub">
+              <BidderName session={session} id={award.bidderId} />
+            </div>
           </div>
         )}
         <Stat label="سعر الافتتاح" value={sar(auction.openingPriceMinorUnits, 'ar')} />

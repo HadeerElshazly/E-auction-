@@ -324,18 +324,59 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/
 // «صفحة شخصية لمتابعة الحالة» (الخاصية 09): every auction this bidder applied to, and
 // where each stands. Their own only — the subject must be the bidder asked about.
 app.MapGet("/bidders/{bidderId:guid}/subscriptions", async (
-    HttpContext http, Guid bidderId,
+    HttpContext http, Guid bidderId, string? stage, string? eligibility, string? q,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
     if (http.User.SubjectId() != bidderId) return Results.Forbid();
 
     await using var db = await f.CreateDbContextAsync(ct);
+
+    // A bidder has a handful of applications, so they are read whole and filtered
+    // here — on the server, so every client gets the same answer and the counts are
+    // the real ones — rather than one SQL query per combination. Eligibility is
+    // derived, not stored (Subscription.Eligibility), which is the other reason.
     var rows = await db.Subscriptions
         .Where(s => s.BidderId == bidderId)
-        .OrderByDescending(s => s.CreatedAt)
+        .Join(db.AuctionTerms, s => s.AuctionId, t => t.AuctionId, (s, t) => new { s, t })
+        .OrderByDescending(x => x.s.CreatedAt)
         .ToListAsync(ct);
 
-    return Results.Ok(new { items = rows.Select(SubscriptionResponse.From) });
+    // The awards this bidder holds, and any withdrawn from them.
+    var won = (await db.WinnerAwards
+            .Where(a => a.WinnerBidderId == bidderId)
+            .ToListAsync(ct))
+        .ToDictionary(a => a.AuctionId);
+
+    var wantedStage = MyApplications.Stage(stage);
+    var wantedStanding = MyApplications.Standing(eligibility);
+    var needle = MyApplications.Normalise(q);
+
+    bool Matches(Subscription s, AuctionTerms t, string? stageKey, string? standingKey) =>
+        (stageKey is null
+            || (stageKey == "won"
+                ? won.TryGetValue(t.AuctionId, out var w) && w.DisqualifiedAt is null
+                : MyApplications.StageKey(t) == stageKey))
+        && (standingKey is null || s.Eligibility.State.ToString() == standingKey)
+        && (needle.Length == 0 || MyApplications.Normalise(t.NameAr).Contains(needle));
+
+    var items = rows
+        .Where(x => Matches(x.s, x.t, wantedStage, wantedStanding))
+        .Select(x => new MyApplication(
+            SubscriptionResponse.From(x.s), x.t.NameAr, MyApplications.StageKey(x.t),
+            won.TryGetValue(x.t.AuctionId, out var a) ? WinnerAwardResponse.From(a) : null))
+        .ToArray();
+
+    // Each filter's counts under the other filter and the search, so a chip says how
+    // many rows pressing it would show.
+    var counts = new
+    {
+        stage = MyApplications.StageKeys.ToDictionary(
+            k => k, k => rows.Count(x => Matches(x.s, x.t, k == "all" ? null : k, wantedStanding))),
+        eligibility = MyApplications.StandingKeys.ToDictionary(
+            k => k, k => rows.Count(x => Matches(x.s, x.t, wantedStage, k == "all" ? null : k))),
+    };
+
+    return Results.Ok(new { items, counts });
 }).RequireAuthorization(Policies.Bidder);
 
 // Closing a deposit once the award is final: the refund made, the guarantee released,
@@ -437,6 +478,31 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions", async (
     });
 }).RequireAuthorization(Policies.StaffOnTheFloor);
 
+// Staff only: who a bidder id is, for the administrator's view of who leads a
+// running auction and who won a finished one. Names and contact, nothing more —
+// the same narrowness as the roster above. Masking (D-22) governs what bidders and
+// the public see of each other, not what the people running the auction see.
+app.MapGet("/staff/bidders", async (
+    string? ids, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var wanted = (ids ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(x => Guid.TryParse(x, out var g) ? g : Guid.Empty)
+        .Where(g => g != Guid.Empty)
+        .Distinct()
+        .Take(200)
+        .ToArray();
+    if (wanted.Length == 0) return Results.Ok(new { items = Array.Empty<object>() });
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Bidders.AsNoTracking()
+        .Where(b => wanted.Contains(b.Id))
+        .Select(b => new { b.Id, b.NameAr, b.Phone, b.Email })
+        .ToListAsync(ct);
+
+    return Results.Ok(new { items = rows });
+}).RequireAuthorization(Policies.StaffOnTheFloor);
+
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
@@ -524,6 +590,40 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/booklet-gra
         DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
 }).RequireAuthorization(Policies.Bidder);
 
+// «رسا عليك المزاد» — the award, for its winner only. Anyone else, including another
+// bidder in the same auction, is told there is nothing: 404, not 403, so the
+// answer does not confirm that someone else won.
+app.MapGet("/auctions/{auctionId:guid}/award", async (
+    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var award = await db.WinnerAwards.FindAsync(new object?[] { auctionId }, ct);
+    return award is null || award.WinnerBidderId != subject
+        ? Results.NotFound()
+        : Results.Ok(WinnerAwardResponse.From(award));
+}).RequireAuthorization(Policies.Bidder);
+
+// The signed award letter, for the winner: a grant to read a Restricted document,
+// the same mechanism as the booklet. Only once the winner has been notified; until
+// then the letter is the committee's, not yet theirs.
+app.MapGet("/auctions/{auctionId:guid}/award/letter-grant", async (
+    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var award = await db.WinnerAwards.FindAsync(new object?[] { auctionId }, ct);
+    if (award is null || award.WinnerBidderId != subject || award.DisqualifiedAt is not null)
+        return Results.NotFound();
+    if (award.SignedLetterDocumentId is not { } letter || award.WinnerNotifiedAt is null)
+        return Results.Conflict(new { error = "The award letter has not been issued yet." });
+
+    return Results.Ok(new DocumentGrantResponse(
+        letter,
+        DocumentGrants.Mint(documentGrantKey, letter, subject!.Value, DateTimeOffset.UtcNow),
+        DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
+}).RequireAuthorization(Policies.Bidder);
+
 app.Run();
 
 // ---------------------------------------------------------------------------
@@ -570,10 +670,12 @@ static async Task<IResult> Mutate(
 
         if (audit is not null && http is not null)
         {
-            var (who, roles, source) = StaffAudit.ActorOf(http);
+            var actor = StaffAudit.ActorOf(http);
             db.RecordStaffAction(
-                who, roles, source, audit,
-                AuditSubject.Subscription(auctionId, bidderId), details);
+                actor.Subject, actor.Roles, actor.SourceAddress, audit,
+                AuditSubject.Subscription(auctionId, bidderId), details, actor.Name,
+                // Whose application, in which auction — what the auditor reads first.
+                $"{bidder.NameAr} — {terms.NameAr ?? auctionId.ToString()}");
         }
 
         await db.SaveChangesAsync(ct);
@@ -682,4 +784,47 @@ public sealed record SubscriptionResponse(
         s.DepositSettlement.ToString(),
         s.DepositResolvedAt, s.DepositForfeited,
         s.PaymentFailurePurpose, s.PaymentFailureReason, s.PaymentFailedAt);
+}
+
+public sealed record MyApplication(
+    SubscriptionResponse Subscription, string? AuctionNameAr, string Stage, WinnerAwardResponse? Award);
+
+/// <summary>The winner's award, as the winner reads it.</summary>
+public sealed record WinnerAwardResponse(
+    Guid AuctionId, long AmountMinorUnits, long BrokerageMinorUnits,
+    DateTimeOffset ConfirmedAt, DateTimeOffset ComplianceDeadline,
+    bool LetterAvailable, DateTimeOffset? WinnerNotifiedAt,
+    long PaidMinorUnits, long RemainingMinorUnits,
+    string TransferStatus, DateTimeOffset? TransferCompletedAt,
+    DateTimeOffset? SettledAt, DateTimeOffset? WithdrawnAt, string NextStep)
+{
+    public static WinnerAwardResponse From(WinnerAward a) => new(
+        a.AuctionId, a.AmountMinorUnits, a.BrokerageMinorUnits,
+        a.ConfirmedAt, a.ComplianceDeadline,
+        a.SignedLetterDocumentId is not null && a.WinnerNotifiedAt is not null, a.WinnerNotifiedAt,
+        a.PaidMinorUnits, a.RemainingMinorUnits,
+        a.TransferStatus, a.TransferCompletedAt, a.SettledAt, a.DisqualifiedAt, a.NextStep);
+}
+
+/// <summary>«طلباتي»'s filter vocabulary, and the search's Arabic normalisation.</summary>
+public static class MyApplications
+{
+    public static readonly string[] StageKeys = ["all", "live", "upcoming", "finished", "won"];
+    public static readonly string[] StandingKeys = ["all", "Accepted", "UnderReview", "Rejected", "Incomplete"];
+
+    /// <summary>Cancelled counts as finished: nothing more will happen in it.</summary>
+    public static string StageKey(AuctionTerms t) => t.Stage switch
+    {
+        AuctionStage.Live => "live",
+        AuctionStage.Upcoming => "upcoming",
+        _ => "finished",
+    };
+
+    public static string? Stage(string? value) =>
+        value is "live" or "upcoming" or "finished" or "won" ? value : null;
+
+    public static string? Standing(string? value) =>
+        value is "Accepted" or "UnderReview" or "Rejected" or "Incomplete" ? value : null;
+
+    public static string Normalise(string? text) => EAuction.Core.ArabicText.Normalise(text);
 }

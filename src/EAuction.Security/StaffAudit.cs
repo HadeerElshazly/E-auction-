@@ -11,7 +11,11 @@ namespace EAuction.Security;
 /// name out of a body would produce an audit trail saying whatever the audited
 /// person typed.
 /// </summary>
-public sealed record StaffActor(Guid Subject, string Roles, string? SourceAddress);
+public sealed record StaffActor(Guid Subject, string Roles, string? SourceAddress)
+{
+    /// <summary>The account's display name, from the token — for the audit trail's reader.</summary>
+    public string? Name { get; init; }
+}
 
 /// <summary>
 /// Reads the actor out of a request.
@@ -28,7 +32,11 @@ public static class StaffAudit
     public static StaffActor ActorOf(HttpContext http) => new(
         http.User.SubjectId() ?? Guid.Empty,
         RolesOf(http.User),
-        SourceOf(http));
+        SourceOf(http))
+    {
+        Name = http.User.FindFirst("name")?.Value
+               ?? http.User.FindFirst("preferred_username")?.Value,
+    };
 
     /// <summary>
     /// The roles the token carried, ordered so two entries for the same person are

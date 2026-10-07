@@ -128,7 +128,12 @@ public class OutboxTests(PostgresFixture pg)
             await db.SaveChangesAsync();
         }
 
-        var types = (await MessagesFor(auction.Id)).Select(m => m.Type).ToList();
+        var all = (await MessagesFor(auction.Id)).Select(m => m.Type).ToList();
+
+        // The winner's follow-up snapshot rides along with every award change; the
+        // trail below is the decisions themselves.
+        Assert.Contains(nameof(AwardFollowUpUpdated), all);
+        var types = all.Where(t => t != nameof(AwardFollowUpUpdated)).ToList();
 
         Assert.Equal(new[]
         {
