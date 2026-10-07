@@ -52,6 +52,13 @@ sessions do not fight:
 | **Live board** | http://localhost:3001 → المتابعة المباشرة | `committee-user` |
 | Reports | http://localhost:3001 | `reporting-user` |
 | Audit | http://localhost:3001 | `auditor-user` |
+| Inquiries desk | http://localhost:3001 | `inquiries-user` |
+| Inquiries approval | http://localhost:3001 | `inquiries-supervisor` |
+| Hall clerk (optional) | http://localhost:3001 | `clerk-user` — assign them to A3 as `admin-user` first |
+| New citizen (optional) | http://localhost:3000 | `noura` — not yet registered |
+
+`sara`, `khalid`, `noura` and `committee-user` also need the one-time code shown on
+the sandbox page — one code, valid for all of them.
 
 Password for every account: `dev-only-password`.
 
@@ -234,6 +241,22 @@ Now the auditor tab. Every consequential thing done in the last half hour is
 listed: who created the auction, who approved it, who accepted the guarantee, who
 disqualified the winner. Find the reserve-price change — it says the reserve was
 changed and by whom, and no figure.
+
+Then open the other two tabs at the top of the screen:
+
+- **أحداث النظام** — what the platform did with no member of staff involved: Sara
+  becoming eligible when her deposit settled, each booklet and deposit payment, a
+  refund. The actor is «النظام».
+- **سجل المزايدات** — pick A5: every bid in the order it was recorded, with the time,
+  the bidder's name, the amount and whether the processor accepted it; then, below,
+  how the result became an award — who confirmed it, the winner and the amount.
+
+> "Nobody can edit a recorded bid — there is no screen, no endpoint and no role for
+> it. This is read straight from the bid log."
+
+An edit to an auction now reads «سعر الافتتاح: 900,000.00 ر.س ← 950,000.00 ر.س» —
+the value before, the value after, and the date. The reserve is the exception: it
+says only that it changed.
 
 Then press **تحقّق من السلسلة.**
 
