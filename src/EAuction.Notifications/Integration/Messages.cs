@@ -80,6 +80,14 @@ public static class Messages
         ("أُلغي المزاد",
          $"أُلغي مزاد «{auction}» قبل بدئه. السبب: {reason}. يُرد التأمين المدفوع أو يُحرَّر الضمان البنكي.");
 
+    public static (string Title, string Body) InquiryAnswered(string auction) =>
+        ("وصلك رد على استفسارك",
+         $"ردّت الأمانة على استفسارك في مزاد «{auction}». اطّلع على الرد في صفحة المزاد، قسم الاستفسارات.");
+
+    public static (string Title, string Body) ClarificationPublished(string auction) =>
+        ("توضيح جديد على المزاد",
+         $"نُشر توضيح جديد على مزاد «{auction}». اطّلع عليه في صفحة المزاد، قسم الاستفسارات.");
+
     public static (string Title, string Body) AuctionUnsold(string auction) =>
         ("انتهى المزاد دون ترسية",
          $"انتهى مزاد «{auction}» دون ترسية. يُرد التأمين المدفوع أو يُحرَّر الضمان البنكي وفق الشروط.");

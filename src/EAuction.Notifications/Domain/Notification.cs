@@ -52,6 +52,12 @@ public enum NotificationKind
     /// a bidder's last word was «ستُعلن النتيجة» and no result ever came.
     /// </summary>
     AuctionUnsold = 11,
+
+    /// <summary>وصلك رد — staff replied to a question this bidder asked (الخاصية 10).</summary>
+    InquiryAnswered = 12,
+
+    /// <summary>توضيح جديد — a clarification was published on an auction you are in.</summary>
+    ClarificationPublished = 13,
 }
 
 /// <summary>

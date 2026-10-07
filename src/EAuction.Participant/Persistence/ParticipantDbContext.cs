@@ -11,6 +11,7 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
     public DbSet<Subscription> Subscriptions => Set<Subscription>();
     public DbSet<AuctionTerms> AuctionTerms => Set<AuctionTerms>();
     public DbSet<WinnerAward> WinnerAwards => Set<WinnerAward>();
+    public DbSet<Inquiry> Inquiries => Set<Inquiry>();
     public DbSet<OutboxMessage> Outbox => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -77,6 +78,23 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             e.HasIndex(x => x.WinnerBidderId);
         });
 
+        b.Entity<Inquiry>(e =>
+        {
+            e.ToTable("inquiry");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.Question).HasMaxLength(Inquiry.MaxLength).IsRequired();
+            e.Property(x => x.Answer).HasMaxLength(Inquiry.MaxLength);
+            e.Property(x => x.ClarificationQuestion).HasMaxLength(Inquiry.MaxLength);
+            e.Property(x => x.ClarificationAnswer).HasMaxLength(Inquiry.MaxLength);
+            e.Property(x => x.Status).HasConversion<int>();
+            e.Property(x => x.Clarification).HasConversion<int>();
+            e.Ignore(x => x.Events);
+            e.HasIndex(x => new { x.AuctionId, x.AskedAt });
+            e.HasIndex(x => x.BidderId);
+            e.HasIndex(x => x.Status);
+        });
+
         b.Entity<OutboxMessage>(e =>
         {
             e.ToTable("outbox");
@@ -112,6 +130,14 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             foreach (var domainEvent in aggregate.Events)
                 Outbox.Add(OutboxMessage.From(domainEvent));
             aggregate.ClearEvents();
+        }
+
+        foreach (var inquiry in ChangeTracker.Entries<Inquiry>().Select(x => x.Entity)
+                     .Where(x => x.Events.Count > 0).ToList())
+        {
+            foreach (var domainEvent in inquiry.Events)
+                Outbox.Add(OutboxMessage.From(domainEvent));
+            inquiry.ClearEvents();
         }
 
         return await base.SaveChangesAsync(ct);

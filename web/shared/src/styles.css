@@ -1049,3 +1049,14 @@ button.notice-row:hover { background: var(--accent-weak); color: inherit; }
 .award-step.you .award-step-mark { background: #f59e0b; color: #fff; }
 .award-step-title { font-weight: 600; margin-bottom: 2px; }
 .pill.small { font-size: 0.75rem; padding: 1px 8px; }
+
+/* الاستفسارات — staff list and the bidder's section on the auction page. */
+.inquiry-list { display: grid; gap: 12px; }
+.inquiry-card { border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+.inquiry-question { margin: 0; white-space: pre-wrap; font-weight: 500; }
+.inquiry-answer { background: var(--surface-2, #f8fafc); border-radius: 8px; padding: 10px; white-space: pre-wrap; }
+.inquiry-actions { display: grid; gap: 8px; }
+.inquiry-actions textarea { width: 100%; font: inherit; }
+.clarification { padding: 10px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.clarification:last-child { border-bottom: 0; }
+.clarification .q { font-weight: 600; margin-bottom: 4px; }

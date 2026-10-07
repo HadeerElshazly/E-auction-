@@ -45,6 +45,10 @@
       {
         "name": "auditor",
         "description": "مراجع — reads the staff audit trail, and nothing else. Deliberately held by nobody who operates the platform: an auditor who could also approve an auction would be reading their own record."
+      },
+      {
+        "name": "inquiries",
+        "description": "موظف الاستفسارات — replies to bidders' questions and publishes clarifications (الخاصية 10). Publishing takes two holders: whoever drafted a clarification cannot approve it."
       }
     ]
   },
@@ -370,6 +374,42 @@
       ],
       "realmRoles": [
         "auditor"
+      ]
+    },
+    {
+      "username": "inquiries-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Inquiries",
+      "lastName": "Officer",
+      "email": "inquiries@example.sa",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "inquiries"
+      ]
+    },
+    {
+      "username": "inquiries-supervisor",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Inquiries",
+      "lastName": "Supervisor",
+      "email": "inquiries-lead@example.sa",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "inquiries"
       ]
     },
     {

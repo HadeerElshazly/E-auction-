@@ -19,6 +19,7 @@ import { ClerkTerminal } from './ClerkTerminal'
 import { Reports } from './Reports'
 import { AuditTrail } from './AuditTrail'
 import { FollowUp } from './FollowUp'
+import { Inquiries } from './Inquiries'
 import { Monitor } from './Monitor'
 
 /**
@@ -29,7 +30,7 @@ import { Monitor } from './Monitor'
  * a dependency plus the redirect-URI registration every Keycloak client here
  * already pins to one path.
  */
-type View = 'auctions' | 'monitor' | 'followup' | 'reports' | 'audit'
+type View = 'auctions' | 'monitor' | 'followup' | 'inquiries' | 'reports' | 'audit'
 
 
 export function App() {
@@ -58,6 +59,8 @@ export function App() {
   // rather than a missing permission.
   const canReport = has(session, Roles.reporting) || isAdmin || isCommittee
   const canAudit = has(session, Roles.auditor)
+  // The inquiries desk: its own role, so administrators and the committee are not it.
+  const canInquire = has(session, Roles.inquiries)
 
   // المتابعة المباشرة is operational: who is running auctions right now. The three
   // roles that run them see it. Not `reporting`, whose screens are all after the
@@ -71,8 +74,9 @@ export function App() {
   // the auditor on سجل المراجعة, reporting on التقارير.
   const readerOnly = !!session && !isAdmin && !isCommittee && !isClerk
   useEffect(() => {
-    if (readerOnly) setView(canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
-  }, [readerOnly, canAudit, canReport])
+    if (readerOnly)
+      setView(canInquire ? 'inquiries' : canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
+  }, [readerOnly, canInquire, canAudit, canReport])
 
   const refreshList = useCallback(async () => {
     if (!session) return
@@ -168,7 +172,7 @@ export function App() {
     )
   }
 
-  if (!isAdmin && !isCommittee && !isClerk && !canReport && !canAudit) {
+  if (!isAdmin && !isCommittee && !isClerk && !canReport && !canAudit && !canInquire) {
     return (
       <div className="centre">
         <div className="notice error">
@@ -176,7 +180,7 @@ export function App() {
           <div className="small" style={{ marginTop: 8 }}>
             هذا الحساب لا يحمل أيًّا من الأدوار: <code>auction-admin</code>،{' '}
             <code>award-committee</code>، <code>operator</code>،{' '}
-            <code>reporting</code>، <code>auditor</code>.
+            <code>reporting</code>، <code>auditor</code>، <code>inquiries</code>.
           </div>
         </div>
         <button onClick={signOut}>تسجيل الخروج</button>
@@ -199,6 +203,7 @@ export function App() {
           {isClerk && 'قاعة المزاد'}
           {has(session, Roles.reporting) && ' التقارير'}
           {canAudit && ' المراجعة'}
+          {canInquire && ' الاستفسارات'}
         </span>
 
         {isClerk && (
@@ -251,6 +256,17 @@ export function App() {
               <span className="chevron" aria-hidden="true">‹</span>
             </button>
           )}
+          {(canInquire || isAdmin || isCommittee) && (
+            <button
+              className={view === 'inquiries' ? 'on' : ''}
+              data-testid="nav-inquiries"
+              onClick={() => setView('inquiries')}
+            >
+              <span className="icon" aria-hidden="true">?</span>
+              الاستفسارات
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
           {canReport && (
             <button
               className={view === 'reports' ? 'on' : ''}
@@ -288,6 +304,8 @@ export function App() {
           <Monitor session={session} />
         ) : view === 'followup' ? (
           <FollowUp session={session} canRecord={isAdmin} />
+        ) : view === 'inquiries' ? (
+          <Inquiries session={session} canAct={canInquire} />
         ) : view === 'reports' ? (
           <Reports session={session} />
         ) : view === 'audit' ? (

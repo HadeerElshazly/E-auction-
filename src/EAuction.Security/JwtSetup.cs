@@ -159,6 +159,7 @@ public static class JwtSetup
             // changes nothing, and an auditor who had to be an administrator to
             // reach it would be reading their own record.
             auth.AddPolicy(Policies.Auditor, p => p.RequireRole(Roles.Auditor));
+            auth.AddPolicy(Policies.Inquiries, p => p.RequireRole(Roles.Inquiries));
 
             // Three roles, and the point of the first is that it is the only one of
             // the three that cannot change an auction.

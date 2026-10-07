@@ -63,6 +63,20 @@ public sealed record GuaranteeRejectedPayload
     public DateTimeOffset At { get; init; }
 }
 
+public sealed record InquiryAnsweredPayload
+{
+    public Guid InquiryId { get; init; }
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public bool Closed { get; init; }
+}
+
+public sealed record ClarificationPublishedPayload
+{
+    public Guid ClarificationId { get; init; }
+    public Guid AuctionId { get; init; }
+}
+
 public sealed record AuctionCancelledPayload
 {
     public Guid AuctionId { get; init; }

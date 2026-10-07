@@ -54,7 +54,7 @@ public sealed class EventConsumer(
     ///
     /// Built here rather than held in a field because a field initialiser cannot
     /// reference an instance method — and one list is what makes the first-run
-    /// drain and the ordinary follow provably cover the same six topics, rather
+    /// drain and the ordinary follow provably cover the same topics, rather
     /// than two lists that drift the first time a seventh is added.
     ///
     /// The auction catalogue is first on purpose: a notice that cannot name its
@@ -69,6 +69,7 @@ public sealed class EventConsumer(
         (Core.Topics.Lifecycle, ApplyLifecycleAsync),
         (Core.Topics.CurrentWinner, ApplyCurrentWinnerAsync),
         (Core.Topics.Deposits, ApplyDepositsAsync),
+        (Core.Topics.Inquiries, ApplyInquiriesAsync),
     ];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -554,6 +555,44 @@ public sealed class EventConsumer(
     {
         var name = await db.AuctionNames.FindAsync(new object?[] { auctionId }, ct);
         return string.IsNullOrWhiteSpace(name?.NameAr) ? Messages.UnnamedAuction : name.NameAr;
+    }
+
+    /// <summary>
+    /// «الاستفسارات والإجابات»: the asker is told a reply arrived — not what it says,
+    /// which they read in the portal — and the auction's bidders that a clarification
+    /// was published.
+    /// </summary>
+    private async Task ApplyInquiriesAsync(StreamEvent record, bool notify, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        switch (record.EventType)
+        {
+            case "InquiryAnswered":
+            {
+                var p = JsonSerializer.Deserialize<InquiryAnsweredPayload>(record.Payload, Json);
+                if (p is null) return;
+                var (title, body) = Messages.InquiryAnswered(await NameOf(db, p.AuctionId, ct));
+                await RaiseAsync(p.BidderId, p.AuctionId, NotificationKind.InquiryAnswered,
+                    title, body, now, notify, ct, dedup: p.InquiryId.ToString());
+                return;
+            }
+            case "ClarificationPublished":
+            {
+                var p = JsonSerializer.Deserialize<ClarificationPublishedPayload>(record.Payload, Json);
+                if (p is null || !notify) return;
+                var (title, body) = Messages.ClarificationPublished(await NameOf(db, p.AuctionId, ct));
+                var audience = await db.Audience
+                    .Where(a => a.AuctionId == p.AuctionId && a.Eligible)
+                    .Select(a => a.BidderId)
+                    .ToListAsync(ct);
+                foreach (var bidder in audience)
+                    await RaiseAsync(bidder, p.AuctionId, NotificationKind.ClarificationPublished,
+                        title, body, now, notify, ct, dedup: p.ClarificationId.ToString());
+                return;
+            }
+        }
     }
 
     private async Task RaiseForAudienceAsync(

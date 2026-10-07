@@ -141,6 +141,9 @@ public static class AuditSubject
 
     public static string Document(Guid id) => $"document/{id}";
 
+    /// <summary>A bidder's question on an auction (الخاصية 10).</summary>
+    public static string Inquiry(Guid auctionId, Guid inquiryId) => $"auction/{auctionId}/inquiry/{inquiryId}";
+
     public static string Bidder(Guid id) => $"bidder/{id}";
 }
 

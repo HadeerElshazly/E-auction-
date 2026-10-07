@@ -90,6 +90,11 @@ const ACTIONS: Record<string, string> = {
   ReferToNextBidder: 'إحالة إلى المزايد التالي',
   RejectBankGuarantee: 'رفض ضمان بنكي',
   CloseDeposit: 'تسوية التأمين',
+  ReplyToInquiry: 'الرد على استفسار',
+  ReplyAndCloseInquiry: 'الرد على استفسار وإغلاقه',
+  CloseInquiry: 'إغلاق استفسار',
+  DraftClarification: 'صياغة توضيح عام',
+  PublishClarification: 'اعتماد ونشر توضيح عام',
 }
 
 export function AuditTrail({ session }: { session: Session }) {

@@ -33,6 +33,8 @@ builder.Services.AddSingleton<BidderAliases>();
 builder.Services.AddSingleton<BidderNames>();
 builder.Services.AddSingleton<LeaderLabels>();
 builder.Services.AddSingleton<FanOut>();
+builder.Services.AddSingleton<Clarifications>();
+builder.Services.AddHostedService<ClarificationsConsumer>();
 builder.Services.AddSingleton(sp => new CatalogueConsumer(
     sp.GetRequiredService<CatalogueState>(),
     sp.GetRequiredService<BidderNames>(),
@@ -161,6 +163,11 @@ app.MapGet("/staff/leaders", (CatalogueState catalogue) =>
         .ToArray();
     return Results.Ok(new { items = rows });
 }).RequireAuthorization(Policies.StaffOnTheFloor);
+
+// «التوضيحات العامة» (الخاصية 10): what staff published, after approval, for
+// everyone reading the auction — anonymous, like the auction itself.
+app.MapGet("/auctions/{id:guid}/clarifications", (Guid id, Clarifications store) =>
+    Results.Ok(new { items = store.For(id) })).AllowAnonymous();
 
 app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
     catalogue.TryGet(id, out var a)

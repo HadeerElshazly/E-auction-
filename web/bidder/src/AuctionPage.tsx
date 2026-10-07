@@ -4,6 +4,7 @@ import type { AuctionDetail, Bidder, Subscription, WinnerAward } from './types'
 import { WinnerPanel } from './WinnerPanel'
 import { useLivePrice } from './useLivePrice'
 import { SubscriptionSteps } from './SubscriptionSteps'
+import { AuctionInquiries } from './AuctionInquiries'
 import { documentUrl, statusAr } from './Catalogue'
 
 const areaFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
@@ -425,6 +426,13 @@ export function AuctionPage({
           </ul>
         </div>
       )}
+
+      <AuctionInquiries
+        auctionId={auction.id}
+        participant={session ? participant : null}
+        canAsk={!!session && canBid}
+        open={biddingOpen}
+      />
     </>
   )
 }

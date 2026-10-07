@@ -77,6 +77,14 @@ public static class Topics
     /// </summary>
     public const string Checkpoints = "processor.checkpoints";
 
+    /// <summary>
+    /// Event log, keyed by auction. «الاستفسارات والإجابات» (الخاصية 10): a reply sent
+    /// to the bidder who asked, and a clarification published for everyone once
+    /// approved. Written by the participant service; read by the query BFF (the
+    /// public clarifications) and the notification service (the reply).
+    /// </summary>
+    public const string Inquiries = "auctions.inquiries";
+
     public const string BidTopicPrefix = "bids.";
 
     public static string BidTopicFor(Guid auctionId) => BidTopicPrefix + auctionId.ToString("N");

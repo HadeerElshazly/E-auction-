@@ -590,6 +590,124 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/booklet-gra
         DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
 }).RequireAuthorization(Policies.Bidder);
 
+// --- «الاستفسارات والإجابات» (الخاصية 10) ----------------------------------
+
+// A registered bidder asks about an auction that has not finished. Not only the
+// eligible: a question about the booklet is exactly what someone deciding whether
+// to subscribe asks.
+app.MapPost("/auctions/{auctionId:guid}/inquiries", async (
+    HttpContext http, Guid auctionId, AskInquiryRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    if (subject is null) return Results.Forbid();
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    if (await db.Bidders.FindAsync(new object?[] { subject.Value }, ct) is null)
+        return Results.BadRequest(new { problems = new[] { "سجّل كمزايد أولاً لتتمكن من إرسال استفسار." } });
+
+    var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+    if (terms is null) return Results.NotFound(new { error = "Unknown auction." });
+    if (terms.Stage is not (AuctionStage.Upcoming or AuctionStage.Live))
+        return Results.BadRequest(new { problems = new[] { "لا تُقبل الاستفسارات بعد انتهاء المزاد أو إلغائه." } });
+
+    // A ceiling, not a quota: enough for anyone with real questions, and the end of
+    // the road for a script.
+    var open = await db.Inquiries.CountAsync(
+        i => i.AuctionId == auctionId && i.BidderId == subject && i.Status == InquiryStatus.Open, ct);
+    if (open >= 5)
+        return Results.BadRequest(new { problems = new[] { "لديك خمسة استفسارات بانتظار الرد في هذا المزاد." } });
+
+    try
+    {
+        var inquiry = Inquiry.Ask(auctionId, subject.Value, r.Question, DateTimeOffset.UtcNow);
+        db.Inquiries.Add(inquiry);
+        await db.SaveChangesAsync(ct);
+        return Results.Created($"/inquiries/{inquiry.Id}", InquiryResponse.Mine(inquiry));
+    }
+    catch (ParticipantValidationException ex)
+    {
+        return Results.BadRequest(new { problems = ex.Problems });
+    }
+}).RequireAuthorization(Policies.Bidder);
+
+// The bidder's own questions on one auction, with the private replies.
+app.MapGet("/auctions/{auctionId:guid}/inquiries/mine", async (
+    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Inquiries.AsNoTracking()
+        .Where(i => i.AuctionId == auctionId && i.BidderId == subject)
+        .OrderByDescending(i => i.AskedAt)
+        .ToListAsync(ct);
+    return Results.Ok(new { items = rows.Select(InquiryResponse.Mine) });
+}).RequireAuthorization(Policies.Bidder);
+
+// Staff: every question, filtered. The inquiries desk works them; administrators and
+// the committee may read them — only the desk replies or publishes.
+app.MapGet("/inquiries", async (
+    string? status, string? clarification, Guid? auctionId,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var query = db.Inquiries.AsNoTracking();
+    if (Enum.TryParse<InquiryStatus>(status, true, out var s)) query = query.Where(i => i.Status == s);
+    if (Enum.TryParse<ClarificationStatus>(clarification, true, out var c)) query = query.Where(i => i.Clarification == c);
+    if (auctionId is not null) query = query.Where(i => i.AuctionId == auctionId);
+
+    var rows = await query
+        .OrderBy(i => i.Status).ThenByDescending(i => i.AskedAt)
+        .Take(200)
+        .Join(db.Bidders, i => i.BidderId, b => b.Id, (i, b) => new { i, b.NameAr })
+        .ToListAsync(ct);
+    var auctions = await db.AuctionTerms.AsNoTracking()
+        .Where(t => rows.Select(x => x.i.AuctionId).Contains(t.AuctionId))
+        .ToDictionaryAsync(t => t.AuctionId, t => t.NameAr, ct);
+
+    var all = await db.Inquiries.AsNoTracking().GroupBy(i => i.Status)
+        .Select(g => new { g.Key, Count = g.Count() }).ToListAsync(ct);
+    var drafted = await db.Inquiries.CountAsync(i => i.Clarification == ClarificationStatus.Drafted, ct);
+
+    return Results.Ok(new
+    {
+        items = rows.Select(x => InquiryResponse.ForStaff(
+            x.i, x.NameAr, auctions.GetValueOrDefault(x.i.AuctionId))),
+        counts = new
+        {
+            open = all.FirstOrDefault(x => x.Key == InquiryStatus.Open)?.Count ?? 0,
+            answered = all.FirstOrDefault(x => x.Key == InquiryStatus.Answered)?.Count ?? 0,
+            closed = all.FirstOrDefault(x => x.Key == InquiryStatus.Closed)?.Count ?? 0,
+            awaitingApproval = drafted,
+        }
+    });
+}).RequireAuthorization(p => p.RequireRole(Roles.Inquiries, Roles.AuctionAdmin, Roles.AwardCommittee));
+
+app.MapPost("/inquiries/{id:guid}/reply", (
+    HttpContext http, Guid id, ReplyInquiryRequest r, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct, (i, staff, now) => i.Reply(r.Answer, r.Close, staff, now),
+        r.Close ? "ReplyAndCloseInquiry" : "ReplyToInquiry"))
+    .RequireAuthorization(Policies.Inquiries);
+
+app.MapPost("/inquiries/{id:guid}/close", (
+    HttpContext http, Guid id, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct, (i, _, now) => i.Close(now), "CloseInquiry"))
+    .RequireAuthorization(Policies.Inquiries);
+
+app.MapPost("/inquiries/{id:guid}/clarification", (
+    HttpContext http, Guid id, DraftClarificationRequest r, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct,
+        (i, staff, now) => i.DraftClarification(r.QuestionAr, r.AnswerAr, staff, now), "DraftClarification"))
+    .RequireAuthorization(Policies.Inquiries);
+
+// «بعد اعتماده»: a second member of the inquiries desk approves what the first
+// drafted (Inquiry.ApproveClarification refuses the author), and only then does it
+// reach the public auction page.
+app.MapPost("/inquiries/{id:guid}/clarification/approve", (
+    HttpContext http, Guid id, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct, (i, staff, now) => i.ApproveClarification(staff, now), "PublishClarification"))
+    .RequireAuthorization(Policies.Inquiries);
+
 // «رسا عليك المزاد» — the award, for its winner only. Anyone else, including another
 // bidder in the same auction, is told there is nothing: 404, not 403, so the
 // answer does not confirm that someone else won.
@@ -695,6 +813,33 @@ static async Task<IResult> Mutate(
     }
 }
 
+static async Task<IResult> MutateInquiry(
+    IDbContextFactory<ParticipantDbContext> factory, Guid id, HttpContext http, CancellationToken ct,
+    Action<Inquiry, Guid, DateTimeOffset> change, string audit)
+{
+    await using var db = await factory.CreateDbContextAsync(ct);
+    var inquiry = await db.Inquiries.FindAsync(new object?[] { id }, ct);
+    if (inquiry is null) return Results.NotFound();
+
+    var actor = StaffAudit.ActorOf(http);
+    try
+    {
+        change(inquiry, actor.Subject, DateTimeOffset.UtcNow);
+        var bidder = await db.Bidders.FindAsync(new object?[] { inquiry.BidderId }, ct);
+        var terms = await db.AuctionTerms.FindAsync(new object?[] { inquiry.AuctionId }, ct);
+        db.RecordStaffAction(
+            actor.Subject, actor.Roles, actor.SourceAddress, audit,
+            AuditSubject.Inquiry(inquiry.AuctionId, inquiry.Id), null, actor.Name,
+            $"استفسار {bidder?.NameAr} — {terms?.NameAr ?? inquiry.AuctionId.ToString()}");
+        await db.SaveChangesAsync(ct);
+        return Results.Ok(InquiryResponse.ForStaff(inquiry, bidder?.NameAr, terms?.NameAr));
+    }
+    catch (ParticipantValidationException ex)
+    {
+        return Results.BadRequest(new { problems = ex.Problems });
+    }
+}
+
 // Not `public partial class Program;` — it would collide with the other
 // services' Program in a test assembly referencing more than one.
 
@@ -788,6 +933,37 @@ public sealed record SubscriptionResponse(
 
 public sealed record MyApplication(
     SubscriptionResponse Subscription, string? AuctionNameAr, string Stage, WinnerAwardResponse? Award);
+
+public sealed record AskInquiryRequest(string Question);
+public sealed record ReplyInquiryRequest(string Answer, bool Close);
+public sealed record DraftClarificationRequest(string QuestionAr, string AnswerAr);
+
+/// <summary>
+/// A question and where it stands. The bidder's view carries no staff identities
+/// and no clarification draft; the staff view adds who asked and on what.
+/// </summary>
+public sealed record InquiryResponse(
+    Guid Id, Guid AuctionId, string Question, DateTimeOffset AskedAt, string Status,
+    string? Answer, DateTimeOffset? AnsweredAt, DateTimeOffset? ClosedAt,
+    string Clarification, DateTimeOffset? ClarificationPublishedAt,
+    // Staff only:
+    string? BidderNameAr, string? AuctionNameAr,
+    string? ClarificationQuestion, string? ClarificationAnswer,
+    Guid? ClarificationDraftedBy, DateTimeOffset? ClarificationDraftedAt)
+{
+    public static InquiryResponse Mine(Inquiry i) => new(
+        i.Id, i.AuctionId, i.Question, i.AskedAt, i.Status.ToString(),
+        i.Answer, i.AnsweredAt, i.ClosedAt,
+        i.Clarification == ClarificationStatus.Published ? "Published" : "None",
+        i.ClarificationPublishedAt, null, null, null, null, null, null);
+
+    public static InquiryResponse ForStaff(Inquiry i, string? bidderNameAr, string? auctionNameAr) => new(
+        i.Id, i.AuctionId, i.Question, i.AskedAt, i.Status.ToString(),
+        i.Answer, i.AnsweredAt, i.ClosedAt,
+        i.Clarification.ToString(), i.ClarificationPublishedAt,
+        bidderNameAr, auctionNameAr, i.ClarificationQuestion, i.ClarificationAnswer,
+        i.ClarificationDraftedBy, i.ClarificationDraftedAt);
+}
 
 /// <summary>The winner's award, as the winner reads it.</summary>
 public sealed record WinnerAwardResponse(
