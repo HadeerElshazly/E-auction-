@@ -272,6 +272,37 @@ public class EventConsumerTests : IAsyncLifetime, IAsyncDisposable
     }
 
     [Fact]
+    public async Task Each_recorded_payment_tells_the_winner_once_and_a_republished_snapshot_none()
+    {
+        await ApproveAsync("مخطط الملقا");
+        await StartAsync();
+
+        object Snapshot(long paid, string transfer = "NotStarted") => new
+        {
+            auctionId = _auction,
+            winnerBidderId = _sara,
+            paidMinorUnits = paid,
+            remainingMinorUnits = 960_000_00L - paid,
+            transferStatus = transfer,
+        };
+
+        // Confirmation's own snapshot: nothing paid, nothing to say.
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(0));
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(48_000_00));
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(960_000_00));
+        // auction-admin restarting republishes the same state.
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(960_000_00));
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(960_000_00, "Completed"));
+
+        await WaitForAsync(_sara, NotificationKind.TransferCompleted);
+        var paid = await AllFor(_sara, NotificationKind.AwardPaymentRecorded);
+
+        Assert.Equal(2, paid.Count);
+        Assert.Contains(paid, n => n.TitleAr == "تم سداد مبلغ الترسية");
+        Assert.Contains(paid, n => n.BodyAr.Contains("المتبقي"));
+    }
+
+    [Fact]
     public async Task A_refused_payment_says_which_payment_and_why()
     {
         await ApproveAsync("مخطط السعيد");

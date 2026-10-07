@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, config, timestamp as when, type Session } from '@eauction/shared'
+import { BidHistoryScreen, SystemEvents, WithNames } from './AuditViews'
 
 /**
  * سجل المراجعة — the staff audit trail (§34).
@@ -97,7 +98,48 @@ const ACTIONS: Record<string, string> = {
   PublishClarification: 'اعتماد ونشر توضيح عام',
 }
 
+type Tab = 'staff' | 'system' | 'bids'
+
+/**
+ * سجل المراجعة, in three parts (الخاصية 14): what staff did (hash-chained), what
+ * the platform did by itself, and each auction's bids with the award that followed.
+ */
 export function AuditTrail({ session }: { session: Session }) {
+  const [tab, setTab] = useState<Tab>('staff')
+  return (
+    <>
+      <div className="chips" role="tablist" aria-label="أقسام السجل" style={{ marginBottom: 12 }}>
+        {(
+          [
+            ['staff', 'إجراءات الموظفين'],
+            ['system', 'أحداث النظام'],
+            ['bids', 'سجل المزايدات'],
+          ] as Array<[Tab, string]>
+        ).map(([key, ar]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={tab === key}
+            className={tab === key ? 'chip on' : 'chip'}
+            data-testid={`audit-tab-${key}`}
+            onClick={() => setTab(key)}
+          >
+            {ar}
+          </button>
+        ))}
+      </div>
+      {tab === 'staff' ? (
+        <StaffTrail session={session} />
+      ) : tab === 'system' ? (
+        <SystemEvents session={session} />
+      ) : (
+        <BidHistoryScreen session={session} />
+      )}
+    </>
+  )
+}
+
+function StaffTrail({ session }: { session: Session }) {
   const client = useMemo(() => api({ baseUrl: config.auditApi, session }), [session])
 
   const [entries, setEntries] = useState<Entry[]>([])
@@ -296,7 +338,9 @@ export function AuditTrail({ session }: { session: Session }) {
                       {namesOf(e).actor ?? <span className="ltr mono">{short(e.actorSubject)}</span>}
                     </td>
                     <td className="small muted">{e.actorRoles ?? '—'}</td>
-                    <td className="small">{e.details ?? '—'}</td>
+                    <td className="small">
+                      <WithNames session={session} text={e.details} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

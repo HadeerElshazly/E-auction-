@@ -371,6 +371,9 @@ public sealed class Subscription
         Guid verifiedByUserId, Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.AwaitingDeposit, "verify a bank guarantee for");
+        if (now >= terms.EndsAt)
+            throw new ParticipantValidationException(
+                new[] { "This auction has already ended." });
         if (GuaranteeDocumentId is null)
             throw new ParticipantValidationException(new[] { "No guarantee has been submitted." });
 
@@ -405,6 +408,13 @@ public sealed class Subscription
     public void Revoke(string reason, Bidder bidder, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.Eligible, "revoke");
+        // Eligibility is permission to bid. Once bidding has ended there is nothing
+        // left to withdraw, and the result is the committee's: a non-compliant
+        // winner is disqualified on the award (سحب الفوز), which moves the deposit
+        // and the ladder correctly — a revocation here would do neither.
+        if (now >= terms.EndsAt)
+            throw new ParticipantValidationException(
+                new[] { "Bidding has ended; a non-compliant winner is disqualified on the award instead." });
         if (string.IsNullOrWhiteSpace(reason))
             throw new ParticipantValidationException(new[] { "A revocation reason is required." });
 

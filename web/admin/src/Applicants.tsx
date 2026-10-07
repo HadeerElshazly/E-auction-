@@ -30,6 +30,13 @@ const eligibilityAr: Record<Application['eligibility'], { ar: string; tone: stri
 /** Before approval no bidder can apply, so there is nothing to review. */
 const reviewable = new Set(['Draft', 'PendingReview', 'Rejected'])
 
+/**
+ * While bidding is still to come or under way — the only time eligibility can be
+ * granted or withdrawn. After the close the list is a record; a non-compliant
+ * winner is disqualified on the award (سحب الفوز), not here.
+ */
+const decidable = new Set(['Approved', 'Scheduled', 'Live'])
+
 interface Props {
   auction: Auction
   session: Session
@@ -71,6 +78,7 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
   }, [load, auction.status])
 
   if (reviewable.has(auction.status)) return null
+  const canDecide = decidable.has(auction.status)
 
   const base = (bidderId: string) => `/auctions/${auction.id}/subscriptions/${bidderId}`
 
@@ -103,8 +111,9 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
         </button>
       </div>
       <p className="lede">
-        راجع الضمانات البنكية المرفوعة واقبلها أو ارفضها مع ذكر السبب. التأمين المدفوع
-        إلكترونياً يُقبل تلقائياً عند تأكيد بوابة الدفع.
+        {canDecide
+          ? 'راجع الضمانات البنكية المرفوعة واقبلها أو ارفضها مع ذكر السبب. التأمين المدفوع إلكترونياً يُقبل تلقائياً عند تأكيد بوابة الدفع.'
+          : 'انتهت المزايدة، فالقائمة للاطلاع فقط. إن لم يستوفِ الفائز الشروط فسحب الفوز من صلاحية لجنة الترسية في قسم «الترسية».'}
       </p>
 
       {loadError && <div className="notice error">{loadError}</div>}
@@ -195,7 +204,9 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
                       )}
                     </td>
                     <td>
-                      {open ? (
+                      {!canDecide ? (
+                        <span className="muted small">—</span>
+                      ) : open ? (
                         <div className="refuse">
                           <input
                             autoFocus

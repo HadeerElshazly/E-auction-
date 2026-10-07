@@ -277,6 +277,22 @@ public class SubscriptionTests
     }
 
     [Fact]
+    public void Eligibility_cannot_be_revoked_once_bidding_has_ended()
+    {
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
+        s.ClearEvents();
+
+        Assert.Throws<ParticipantValidationException>(
+            () => s.Revoke("شيك مرتجع", bidder, terms, terms.EndsAt));
+
+        Assert.Equal(SubscriptionStatus.Eligible, s.Status);
+        Assert.Empty(s.Events);
+    }
+
+    [Fact]
     public void Rotating_the_key_keeps_the_bidder_eligible_under_a_new_epoch()
     {
         var auctionId = Guid.NewGuid();

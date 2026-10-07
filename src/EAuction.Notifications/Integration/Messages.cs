@@ -102,6 +102,20 @@ public static class Messages
          $"رُسي عليك «{auction}» بمبلغ {Riyals(amountMinorUnits)}. "
          + $"يجب إكمال الإجراءات قبل {Date(complianceDeadline)}.");
 
+    public static (string Title, string Body) AwardPaymentRecorded(
+        string auction, long paidMinorUnits, long remainingMinorUnits) =>
+        remainingMinorUnits <= 0
+            ? ("تم سداد مبلغ الترسية",
+               $"سُدّد مبلغ الترسية في «{auction}» كاملاً ({Riyals(paidMinorUnits)}). "
+               + "ستحدّد الأمانة موعد الإفراغ لدى كتابة العدل.")
+            : ("سُجّلت دفعة من مبلغ الترسية",
+               $"سجّلت الأمانة سداداً في «{auction}». المسدَّد {Riyals(paidMinorUnits)}، "
+               + $"والمتبقي {Riyals(remainingMinorUnits)}.");
+
+    public static (string Title, string Body) TransferCompleted(string auction) =>
+        ("اكتمل الإفراغ",
+         $"اكتمل إفراغ «{auction}» باسمك لدى كتابة العدل.");
+
     public static (string Title, string Body) Disqualified(
         string auction, string reason, bool depositForfeited) =>
         ("أُلغيت الترسية",
@@ -143,6 +157,7 @@ public static class Messages
     {
         NotificationKind.AuctionClosed => false,
         NotificationKind.DepositResolved => false,
+        NotificationKind.TransferCompleted => false,
         _ => true,
     };
 }

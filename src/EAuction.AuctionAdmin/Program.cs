@@ -153,9 +153,7 @@ app.MapPut("/auctions/{id:guid}", (
         // service's database, for ever. An auditor who needs the figure asks the
         // auction service; what they need from here is that somebody changed it, and
         // who.
-        details: r.ReservePriceMinorUnits is null
-            ? null
-            : "The reserve price was changed (the figure is deliberately not recorded here)."))
+        diff: true))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 // --- قاعة المزاد: the clerk on the floor (§29) ------------------------------
@@ -212,7 +210,7 @@ app.MapPost("/auctions/{id:guid}/extend", (
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "ExtendAuction",
         a => a.ExtendByClerk(http.User.SubjectId() ?? Guid.Empty, r.Seconds),
-        details: $"By {r.Seconds} seconds."))
+        details: $"تمديد {r.Seconds} ثانية."))
     .RequireAuthorization(Policies.Operator);
 
 app.MapPost("/auctions/{id:guid}/close", (
@@ -341,7 +339,11 @@ app.MapPost("/auctions/{id:guid}/award", (
     Guid id, ConfirmAwardRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "ConfirmAward",
-        a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)))
+        a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow),
+        after: a => a.CurrentAward is { } w
+            ? $"الفائز: {w.BidderId} · مبلغ الترسية: {AuctionChanges.Money(w.AmountMinorUnits)} · "
+              + $"مهلة السداد: {AuctionChanges.Date(w.ComplianceDeadline)}"
+            : null))
     // The single most consequential act in the platform: it transfers a parcel of
     // state land to a named person. A committee member's role is not enough on its
     // own — the second factor is what ties the decision to the person, which is
@@ -413,21 +415,28 @@ app.MapPost("/auctions/{id:guid}/award/disqualify", (
         a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow),
         details: r.ForfeitDeposit
             ? $"Deposit forfeited. {r.Reason}"
-            : $"Deposit returned. {r.Reason}"))
+            : $"Deposit returned. {r.Reason}",
+        after: a => a.Awards.Where(w => w.DisqualifiedAt != null).OrderByDescending(w => w.DisqualifiedAt)
+            .FirstOrDefault() is { } w
+            ? $"المزايد: {w.BidderId} · {(r.ForfeitDeposit ? "صودر التأمين" : "يُرد التأمين")} · السبب: {r.Reason}"
+            : null))
     .RequireAuthorization(Policies.AwardCommittee);
 
 // After a winner is disqualified, the committee — not the system — decides whether
 // the next bidder is put up for award.
 app.MapPost("/auctions/{id:guid}/next-bidder", (
     Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, http, "ReferToNextBidder", a => a.ReferToNextBidder()))
+    Mutate(f, id, ct, http, "ReferToNextBidder", a => a.ReferToNextBidder(),
+        after: a => a.PendingCandidateBidderId is { } next
+            ? $"المرشّح التالي: {next} · {AuctionChanges.Money(a.PendingCandidateAmountMinorUnits ?? 0)}"
+            : "أُحيلت الترسية إلى المزايد التالي في الترتيب."))
     .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/result/reject", (
     Guid id, RejectRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "RejectPreliminaryResult", a => a.RejectResult(r.Reason),
-        details: r.Reason))
+        details: r.Reason, after: a => $"السبب: {r.Reason}"))
     .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/unsold", (
@@ -437,7 +446,10 @@ app.MapPost("/auctions/{id:guid}/unsold", (
 
 app.MapPost("/auctions/{id:guid}/settle", (
     Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, http, "SettleAuction", a => a.Settle(DateTimeOffset.UtcNow)))
+    Mutate(f, id, ct, http, "SettleAuction", a => a.Settle(DateTimeOffset.UtcNow),
+        after: a => a.FollowUpAward is { } w
+            ? $"الفائز: {w.BidderId} · المبلغ: {AuctionChanges.Money(w.AmountMinorUnits)} — اكتمل السداد."
+            : null))
     .RequireAuthorization(Policies.AwardCommittee);
 
 // The list the portal opens on. Staff-only: it carries every auction including
@@ -457,7 +469,9 @@ app.MapPost("/auctions/{id:guid}/award/receipts", (
     Mutate(f, id, ct, http, "RecordAwardPayment",
         a => a.RecordAwardPayment(r.AmountMinorUnits, r.PaidOn, r.Reference, r.DocumentId,
             http.User.SubjectId() ?? Guid.Empty, DateTimeOffset.UtcNow),
-        details: $"{r.AmountMinorUnits} halalas, reference {r.Reference}."))
+        details: $"{r.AmountMinorUnits} halalas, reference {r.Reference}.",
+        after: a => $"دفعة: {AuctionChanges.Money(r.AmountMinorUnits)} · المرجع: {r.Reference} · "
+            + $"المتبقي: {AuctionChanges.Money(a.CurrentAward?.RemainingMinorUnits ?? 0)}"))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/award/deposit-credit", (
@@ -466,7 +480,9 @@ app.MapPost("/auctions/{id:guid}/award/deposit-credit", (
     Mutate(f, id, ct, http, "CreditDepositToAward",
         a => a.CreditDepositToAward(r.Reference, http.User.SubjectId() ?? Guid.Empty,
             DateTimeOffset.UtcNow),
-        details: $"Deposit counted towards the price, reference {r.Reference}."))
+        details: $"Deposit counted towards the price, reference {r.Reference}.",
+        after: a => $"احتُسب التأمين من الثمن · المرجع: {r.Reference} · "
+            + $"المتبقي: {AuctionChanges.Money(a.CurrentAward?.RemainingMinorUnits ?? 0)}"))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{id:guid}/award/transfer", (
@@ -474,7 +490,9 @@ app.MapPost("/auctions/{id:guid}/award/transfer", (
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "UpdateTransfer",
         a => a.UpdateTransfer(r.Status, r.Reference, r.DocumentId, DateTimeOffset.UtcNow),
-        details: $"Transfer {r.Status}, reference {r.Reference ?? "—"}."))
+        details: $"Transfer {r.Status}, reference {r.Reference ?? "—"}.",
+        after: _ => $"الإفراغ: {(r.Status switch { TransferStatus.Completed => "مكتمل", TransferStatus.InProgress => "قيد الإجراء", _ => "لم يبدأ" })}"
+            + $" · المرجع: {r.Reference ?? "—"}"))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 // Every award still being followed up, overdue first: unpaid, unsettled, or settled
@@ -598,9 +616,16 @@ static async Task<Auction?> Load(AdminDbContext db, Guid id, CancellationToken c
 /// transaction for the attempt — buys a trail a portal's ordinary validation
 /// failures would fill.
 /// </remarks>
+/// <param name="diff">Record each changed field, before and after (الخاصية 14).</param>
+/// <param name="after">
+/// Details read from the auction once the change is made — the award's winner and
+/// amount, what remains to pay — so the trail says what was decided, not only that
+/// something was.
+/// </param>
 static async Task<IResult> Mutate(
     IDbContextFactory<AdminDbContext> factory, Guid id, CancellationToken ct,
-    HttpContext http, string action, Action<Auction> change, string? details = null)
+    HttpContext http, string action, Action<Auction> change, string? details = null,
+    bool diff = false, Func<Auction, string?>? after = null)
 {
     await using var db = await factory.CreateDbContextAsync(ct);
     var auction = await Load(db, id, ct);
@@ -608,7 +633,10 @@ static async Task<IResult> Mutate(
 
     try
     {
+        var before = diff ? AuctionChanges.Of(auction) : null;
         change(auction);
+        if (before is not null) details = AuctionChanges.Describe(before, AuctionChanges.Of(auction));
+        else if (after is not null) details = after(auction) ?? details;
 
         var actor = StaffAudit.ActorOf(http);
         db.RecordStaffAction(

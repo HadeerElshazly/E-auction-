@@ -11,6 +11,7 @@ import {
   when,
   type Session,
 } from '@eauction/shared'
+import { useBidders } from './winners'
 
 /**
  * متابعة الترسية — the requirements' feature 11.
@@ -90,7 +91,6 @@ export function FollowUp({ session, canRecord }: Props) {
 
   const [awards, setAwards] = useState<FollowUpEntry[] | null>(null)
   const [deposits, setDeposits] = useState<Deposit[] | null>(null)
-  const [names, setNames] = useState<Record<string, string>>({})
   const [open, setOpen] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -104,21 +104,6 @@ export function FollowUp({ session, canRecord }: Props) {
       setAwards(a.items)
       setDeposits(d.items)
       setError(null)
-
-      // The award carries the winner's id; their name is the participant
-      // service's, read once per winner.
-      const missing = a.items.map((x) => x.award.bidderId).filter((id) => !(id in names))
-      const found = await Promise.all(
-        [...new Set(missing)].map(async (id) => {
-          try {
-            const b = await participant.get<{ nameAr: string }>(`/bidders/${id}`)
-            return [id, b.nameAr] as const
-          } catch {
-            return [id, '—'] as const
-          }
-        }),
-      )
-      if (found.length) setNames((n) => ({ ...n, ...Object.fromEntries(found) }))
     } catch (e) {
       setError(describe(e))
     }
@@ -140,6 +125,10 @@ export function FollowUp({ session, canRecord }: Props) {
       setBusy(false)
     }
   }
+
+  // The award carries the winner's id; the name is the participant service's,
+  // through its staff lookup — the committee and operators read this page too.
+  const bidder = useBidders(session, awards?.map((a) => a.award.bidderId) ?? [])
 
   const auctionName = (id: string) =>
     awards?.find((a) => a.auctionId === id)?.nameAr ?? id.slice(0, 8)
@@ -204,7 +193,7 @@ export function FollowUp({ session, canRecord }: Props) {
                     <FollowUpRows
                       key={e.auctionId}
                       entry={e}
-                      winner={names[a.bidderId] ?? '…'}
+                      winner={bidder(a.bidderId)?.nameAr ?? '…'}
                       transfer={t}
                       expanded={isOpen}
                       onToggle={() => setOpen(isOpen ? null : e.auctionId)}

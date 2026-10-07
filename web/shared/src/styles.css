@@ -1060,3 +1060,9 @@ button.notice-row:hover { background: var(--accent-weak); color: inherit; }
 .clarification { padding: 10px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
 .clarification:last-child { border-bottom: 0; }
 .clarification .q { font-weight: 600; margin-bottom: 4px; }
+
+/* سجل المزايدات — the bid history and the decisions after it. */
+tr.row-lead td { background: var(--accent-soft, rgba(13, 148, 136, 0.08)); font-weight: 600; }
+.decision-list { padding-inline-start: 20px; display: grid; gap: 10px; }
+.bid-history-card summary { cursor: pointer; list-style: none; }
+.bid-history-card[open] summary { margin-bottom: 12px; }

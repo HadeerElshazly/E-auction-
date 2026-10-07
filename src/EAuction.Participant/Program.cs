@@ -501,7 +501,10 @@ app.MapGet("/staff/bidders", async (
         .ToListAsync(ct);
 
     return Results.Ok(new { items = rows });
-}).RequireAuthorization(Policies.StaffOnTheFloor);
+}).RequireAuthorization(p => p.RequireRole(
+    Roles.Operator, Roles.AuctionAdmin, Roles.AwardCommittee,
+    // The auditor reads who did what; an id alone answers neither.
+    Roles.Auditor));
 
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
     HttpContext http, Guid auctionId, Guid bidderId,

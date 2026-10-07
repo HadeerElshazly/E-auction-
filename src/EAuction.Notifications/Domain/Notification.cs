@@ -58,6 +58,16 @@ public enum NotificationKind
 
     /// <summary>توضيح جديد — a clarification was published on an auction you are in.</summary>
     ClarificationPublished = 13,
+
+    /// <summary>
+    /// سُجّل سداد — staff recorded a payment towards the award price (or credited the
+    /// deposit to it), with what is left. The price is paid outside the platform, so
+    /// without this the winner learns it was received only by opening the auction.
+    /// </summary>
+    AwardPaymentRecorded = 14,
+
+    /// <summary>اكتمل الإفراغ — the title passed to the winner at the notary.</summary>
+    TransferCompleted = 15,
 }
 
 /// <summary>

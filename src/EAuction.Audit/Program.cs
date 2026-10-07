@@ -42,6 +42,25 @@ builder.Services.AddSingleton<IEventStream>(
 builder.Services.AddSingleton<AuditConsumer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AuditConsumer>());
 
+// The system's own actions — eligibility, payments, refused bids — on a consumer
+// group of their own, so they never share offsets with the staff trail above.
+builder.Services.AddHostedService(sp => new SystemEventsConsumer(
+    sp.GetRequiredService<IDbContextFactory<AuditDbContext>>(),
+    string.IsNullOrWhiteSpace(bootstrap)
+        ? sp.GetRequiredService<IEventStream>()
+        : new KafkaEventStream(new KafkaEventStreamOptions
+        {
+            BootstrapServers = bootstrap,
+            ConsumerGroup = "audit-system"
+        }),
+    sp.GetRequiredService<ILogger<SystemEventsConsumer>>()));
+
+// Read-only: the bid history is read from each auction's bid log on request.
+builder.Services.AddSingleton<IBidLog>(_ =>
+    string.IsNullOrWhiteSpace(bootstrap)
+        ? new InMemoryBidLog()
+        : new KafkaBidLog(new KafkaBidLogOptions { BootstrapServers = bootstrap, ConsumerGroup = "audit-bids" }));
+
 builder.Services.AddEAuctionJwt(builder.Configuration, builder.Environment);
 builder.Services.AddEAuctionCors(builder.Configuration);
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -112,6 +131,82 @@ app.MapGet("/audit", async (
         items = rows.Select(AuditEntryResponse.From)
     });
 }).RequireAuthorization(Policies.Auditor);
+
+// «سجل المزايدات والإجراءات» (الخاصية 14) — what the platform did by itself:
+// eligibility gained or lost, money charged, refused, refunded or forfeited.
+app.MapGet("/audit/system", async (
+    Guid? auctionId, string? kind, int? skip, int? take,
+    IDbContextFactory<AuditDbContext> f, CancellationToken ct) =>
+{
+    var page = Math.Clamp(take ?? 25, 1, 200);
+    var offset = Math.Max(0, skip ?? 0);
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    // Refused bids belong to the bid history, where they sit beside the bid.
+    var query = db.SystemEvents.AsNoTracking().Where(e => e.Kind != SystemEventKinds.BidRejected);
+    if (auctionId is not null) query = query.Where(e => e.AuctionId == auctionId);
+    if (!string.IsNullOrWhiteSpace(kind)) query = query.Where(e => e.Kind == kind);
+
+    var total = await query.CountAsync(ct);
+    var items = await query.OrderByDescending(e => e.At).ThenByDescending(e => e.Id)
+        .Skip(offset).Take(page).ToListAsync(ct);
+    return Results.Ok(new { total, skip = offset, take = page, items });
+}).RequireAuthorization(Policies.Auditor);
+
+// The bid sequence of one auction, rebuilt from the record itself: every bid the
+// catcher recorded, in the order it was recorded, with the processor's verdict
+// beside it — refused with its reason, or accepted. Nothing here can change a bid:
+// the log is append-only and this only reads it.
+//
+// Staff who decide or check the result read it: the auditor, administrators and
+// the award committee.
+app.MapGet("/audit/auctions/{auctionId:guid}/bids", async (
+    Guid auctionId, IBidLog log, IDbContextFactory<AuditDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var refusals = await db.SystemEvents.AsNoTracking()
+        .Where(e => e.AuctionId == auctionId && e.Kind == SystemEventKinds.BidRejected && e.ClientBidId != null)
+        .OrderBy(e => e.Id)
+        .Select(e => new { Id = e.ClientBidId!.Value, e.Reason })
+        .ToListAsync(ct);
+    var refused = new Dictionary<Guid, string?>();
+    foreach (var r in refusals) refused[r.Id] = r.Reason;
+
+    var bids = new List<BidHistoryEntry>();
+    long end;
+    try { end = await log.GetEndOffsetAsync(auctionId, ct); }
+    catch (Exception) { end = 0; }
+
+    if (end > 0)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            await foreach (var bid in log.ReadAsync(auctionId, 0, timeout.Token))
+            {
+                if (BidHistoryEntry.Decode(bid, refused) is { } entry) bids.Add(entry);
+                if (bid.Offset >= end - 1) break;
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Partial rather than nothing; the count below says how much was read.
+        }
+    }
+
+    var accepted = bids.Where(b => b.Accepted).ToList();
+    return Results.Ok(new
+    {
+        auctionId,
+        recorded = end,
+        read = bids.Count,
+        acceptedCount = accepted.Count,
+        rejectedCount = bids.Count - accepted.Count,
+        leader = accepted.Count == 0 ? null : accepted[^1],
+        items = bids,
+    });
+}).RequireAuthorization(p => p.RequireRole(Roles.Auditor, Roles.AuctionAdmin, Roles.AwardCommittee));
 
 app.MapGet("/audit/{offset:long}", async (
     long offset, IDbContextFactory<AuditDbContext> f, CancellationToken ct) =>
@@ -306,6 +401,34 @@ app.Run();
 /// it needs the bytes — and a reader who only wants to know who did what should not
 /// have to parse JSON to find out.
 /// </summary>
+/// <summary>One bid as recorded, and what the processor made of it.</summary>
+public sealed record BidHistoryEntry(
+    long Offset, DateTimeOffset At, Guid BidderId, long AmountMinorUnits,
+    string Channel, Guid? EnteredBy, Guid ClientBidId, bool Accepted, string? RejectionReason)
+{
+    /// <summary>Null for a frame too short to carry the server's metadata.</summary>
+    public static BidHistoryEntry? Decode(LoggedBid bid, IReadOnlyDictionary<Guid, string?> refused)
+    {
+        var frame = bid.Frame.Span;
+        if (frame.Length < BidFrame.ServerLength) return null;
+
+        var clientBidId = BidFrame.ClientBidId(frame);
+        var channel = BidFrame.Channel(frame);
+        refused.TryGetValue(clientBidId, out var reason);
+        var wasRefused = refused.ContainsKey(clientBidId);
+        return new BidHistoryEntry(
+            bid.Offset,
+            DateTimeOffset.FromUnixTimeMilliseconds(BidFrame.ServerTimestamp(frame)),
+            BidFrame.BidderId(frame),
+            BidFrame.Amount(frame),
+            channel.ToString(),
+            channel == BidChannel.Onsite ? BidFrame.EnteredBy(frame) : null,
+            clientBidId,
+            !wasRefused,
+            wasRefused ? reason ?? "Rejected" : null);
+    }
+}
+
 public sealed record AuditEntryResponse(
     long Offset, string EventType, string Key,
     Guid? ActorSubject, string? ActorRoles, string? Action, string? Subject,

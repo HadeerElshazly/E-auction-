@@ -35,15 +35,25 @@ export function AwardPanel({ session, auction, client, busy, canAct, committeeUs
   const before = ['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Live', 'Cancelled']
   if (before.includes(auction.status)) return null
 
-  const award = auction.currentAward
+  // Once settled there is no open award; the settled one is still the result.
+  const award = auction.currentAward ?? auction.followUpAward
+  const awaitingCommittee = auction.status === 'PendingAward' || auction.status === 'WinnerDisqualified'
 
   return (
     <div className="card">
       <h2>الترسية</h2>
 
-      {!canAct && (
+      {/* Say what has happened, to everyone; the viewer's own permission only
+          matters while a decision is still the committee's to take. */}
+      {award && (
+        <div className="notice ok" data-testid="award-confirmed">
+          اعتمدت لجنة الترسية الترسية في {day(award.confirmedAt)}
+          {auction.status === 'Settled' ? ' — واعتُمدت التسوية.' : '.'}
+        </div>
+      )}
+      {!canAct && awaitingCommittee && (
         <div className="notice info">
-          العرض فقط — تأكيد الترسية من صلاحية لجنة الترسية.
+          بانتظار قرار لجنة الترسية — التأكيد من صلاحيتها، وهذه الصفحة للعرض فقط.
         </div>
       )}
 
@@ -198,9 +208,18 @@ export function AwardPanel({ session, auction, client, busy, canAct, committeeUs
             <Step done={award.letterDocumentId !== null} text="إصدار خطاب الترسية" />
             <Step done={award.signedLetterDocumentId !== null} text="توقيع الخطاب" />
             <Step done={award.winnerNotifiedAt !== null} text="إشعار المزايد الفائز" />
+            <Step
+              done={award.remainingMinorUnits === 0}
+              text={
+                award.remainingMinorUnits === 0
+                  ? 'سداد مبلغ الترسية'
+                  : `سداد مبلغ الترسية — المتبقي ${sar(award.remainingMinorUnits, 'ar')}`
+              }
+            />
+            <Step done={auction.status === 'Settled'} text="اعتماد التسوية" />
           </ol>
 
-          {canAct && (
+          {canAct && auction.status === 'Awarded' && (
             <div className="row">
               {!award.letterDocumentId && (
                 <button

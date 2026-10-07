@@ -3,6 +3,7 @@ import { api, config, parseRiyals, riyals, sar, when, type Api, type Session } f
 import type { Auction } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
+import { BidHistory } from './AuditViews'
 
 interface Props {
   auction: Auction
@@ -59,6 +60,16 @@ export function AuctionEditor({
       )}
 
       <Plots auction={auction} client={client} busy={busy} canEdit={open && canEdit} onAct={onAct} />
+
+      {!['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled'].includes(auction.status) && (
+        <details className="card bid-history-card">
+          <summary>
+            <h2 style={{ display: 'inline' }}>سجل المزايدات</h2>
+            <span className="muted small"> — تسلسل المزايدات وقرار المعالج في كل منها (للاطلاع فقط)</span>
+          </summary>
+          <BidHistory session={session} auctionId={auction.id} withDecisions={false} />
+        </details>
+      )}
 
       <Documents
         auction={auction}

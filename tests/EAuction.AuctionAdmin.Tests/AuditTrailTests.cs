@@ -158,8 +158,12 @@ public class AuditTrailTests : IDisposable
         var update = (await ActionsOnAsync(id)).Single(a => a.Action == "UpdateAuctionDetails");
 
         // Null means "leave it" (see ReserveUpdateTests), so an entry claiming it
-        // changed would be false.
-        Assert.Null(update.Details);
+        // changed would be false. The other fields the edit set are recorded, each
+        // with its value before and after (الخاصية 14).
+        Assert.NotNull(update.Details);
+        Assert.DoesNotContain("reserve", update.Details);
+        Assert.DoesNotContain("الحد الأدنى للبيع", update.Details);
+        Assert.Contains("←", update.Details);
     }
 
     [Fact]

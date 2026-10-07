@@ -473,6 +473,36 @@ public sealed class EventConsumer(
                     title, body, now, notify, ct, dedup: payload.Reason);
                 return;
             }
+
+            // A snapshot after every step staff record, and republished whole when
+            // auction-admin starts — so deduped on the state it reports, never on
+            // the record: the same paid total is the same notice however often it
+            // arrives, and each new payment moves the total and is news.
+            case InboundEvents.AwardFollowUpUpdated:
+            {
+                var payload = JsonSerializer.Deserialize<AwardFollowUpPayload>(record.Payload, Json);
+                if (payload is null || payload.DisqualifiedAt is not null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+
+                if (payload.PaidMinorUnits > 0)
+                {
+                    var (title, body) = Messages.AwardPaymentRecorded(
+                        name, payload.PaidMinorUnits, payload.RemainingMinorUnits);
+                    await RaiseAsync(
+                        payload.WinnerBidderId, payload.AuctionId, NotificationKind.AwardPaymentRecorded,
+                        title, body, now, notify, ct, dedup: payload.PaidMinorUnits.ToString());
+                }
+
+                if (payload.TransferStatus == "Completed")
+                {
+                    var (title, body) = Messages.TransferCompleted(name);
+                    await RaiseAsync(
+                        payload.WinnerBidderId, payload.AuctionId, NotificationKind.TransferCompleted,
+                        title, body, now, notify, ct);
+                }
+                return;
+            }
         }
     }
 
