@@ -92,7 +92,7 @@ export function BidderName({ session, id }: { session: Session; id: string | nul
   return bidder?.nameAr ? (
     <span title={id}>
       <strong>{bidder.nameAr}</strong>
-      {bidder.phone && <span className="muted small ltr"> · {bidder.phone}</span>}
+      {bidder.phone && <span className="muted small"> · <span className="ltr">{bidder.phone}</span></span>}
     </span>
   ) : (
     <code className="small">{id}</code>

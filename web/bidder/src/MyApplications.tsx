@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, when, type Session } from '@eauction/shared'
+import { ApiError, PageHead, Stats, api, config, when, type Session } from '@eauction/shared'
 import type { AuctionSummary, Subscription, WinnerAward } from './types'
 import { statusAr } from './Catalogue'
 
@@ -119,16 +119,23 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
 
   return (
     <>
-      <button className="back-link" onClick={onBack}>
-        → كل المزادات
-      </button>
+      <PageHead
+        eyebrow="مساحة المزايد"
+        title="مشاركاتي"
+        sub="تابع أهليتك وتأمينك ومزايداتك في كل مزاد من مكان واحد."
+        action={<button onClick={onBack}>جميع المزادات</button>}
+      />
+
+      <Stats
+        items={[
+          { label: 'طلبات المشاركة', value: page?.counts.stage.all ?? 0, icon: 'file' },
+          { label: 'مشاركات مقبولة', value: page?.counts.eligibility.Accepted ?? 0, icon: 'shield' },
+          { label: 'قيد المراجعة', value: page?.counts.eligibility.UnderReview ?? 0, icon: 'clock' },
+          { label: 'مزادات فزت بها', value: page?.counts.stage.won ?? 0, icon: 'gavel' },
+        ]}
+      />
 
       <div className="card">
-        <div className="section-head">
-          <h2>طلباتي</h2>
-          {total !== null && <span className="pill teal plain">{total}</span>}
-        </div>
-        <p className="lede">المزادات التي اشتركت فيها، وحالة أهليتك والتأمين في كلٍّ منها.</p>
 
         {error && <div className="notice error">{error}</div>}
         {page === null && !error && <p className="muted">…</p>}

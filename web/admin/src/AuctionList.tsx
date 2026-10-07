@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CardClock, api, config, sar, when, type Session } from '@eauction/shared'
+import { CardClock, Icon, PageHead, Stats, api, config, sar, when, type Session } from '@eauction/shared'
 import type { AuctionListItem } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
@@ -72,21 +72,29 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
 
   return (
     <>
-      <div className="page-head">
-        <div className="grow">
-          <h2>المزادات</h2>
-          <p>
-            {auctions.length === 0
-              ? 'لا توجد مزادات بعد.'
-              : `يمكنك إدارة المزادات أو إنشاء مزادات جديدة — ${auctions.length} مزاد.`}
-          </p>
-        </div>
-        {canCreate && !creating && (
-          <button className="primary" onClick={() => setCreating(true)}>
-            + إنشاء مزاد
-          </button>
-        )}
-      </div>
+      <PageHead
+        eyebrow="مساحة الإدارة"
+        title="إدارة المزادات"
+        sub="إعداد المزادات ومتابعتها ونتائجها."
+        action={
+          canCreate &&
+          !creating && (
+            <button className="primary" onClick={() => setCreating(true)}>
+              <Icon name="plus" size={18} /> إضافة مزاد
+            </button>
+          )
+        }
+      />
+
+      <Stats
+        items={[
+          { label: 'جميع المزادات', value: page?.counts.all ?? auctions.length, icon: 'grid' },
+          { label: 'قيد الإعداد', value: page?.counts.preparing ?? 0, icon: 'file' },
+          { label: 'جارية الآن', value: page?.counts.live ?? 0, icon: 'gavel' },
+          { label: 'القادمة', value: page?.counts.upcoming ?? 0, icon: 'clock' },
+          { label: 'المنتهية', value: page?.counts.closed ?? 0, icon: 'check' },
+        ]}
+      />
 
       {canCreate && creating && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -156,27 +164,30 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
       )}
 
       {auctions.length > 0 && (
-        <div className="catalogue-tools">
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="ابحث باسم المزاد أو المخطط…"
-            aria-label="البحث في المزادات"
-          />
-          <div className="chips" role="tablist" aria-label="تصفية حسب الحالة">
+        <div className="toolbar">
+          <div className="tabs" role="tablist" aria-label="تصفية حسب الحالة">
             {filters.map((f) => (
               <button
                 key={f.key}
                 role="tab"
                 aria-selected={filter === f.key}
-                className={filter === f.key ? 'chip on' : 'chip'}
+                className={`tab${filter === f.key ? ' active' : ''}`}
                 onClick={() => setFilter(f.key)}
               >
-                {f.ar} <span className="num">({page?.counts[f.key] ?? 0})</span>
+                {f.ar} <span className="num">{page?.counts[f.key] ?? 0}</span>
               </button>
             ))}
           </div>
+          <label className="search">
+            <Icon name="search" size={18} />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="ابحث باسم المزاد أو المخطط"
+              aria-label="البحث في المزادات"
+            />
+          </label>
         </div>
       )}
 
@@ -189,7 +200,7 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
           <p className="muted" style={{ margin: 0 }}>لا توجد مزادات مطابقة للبحث أو التصفية.</p>
         </div>
       ) : (
-        <div className="auction-grid">
+        <div className="lot-grid">
           {visible.map((a) => (
             <AuctionCard
               key={a.id}

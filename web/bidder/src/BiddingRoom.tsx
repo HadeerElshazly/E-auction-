@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, config, sar, untilText, when, type Session } from '@eauction/shared'
+import { PageHead, api, config, sar, untilText, when, type Session } from '@eauction/shared'
 import type { AuctionDetail } from './types'
 import { useLivePrice } from './useLivePrice'
 import { BidBox } from './BidBox'
@@ -41,16 +41,18 @@ export function BiddingRoom({ auction, session, onBack, onRefresh }: Props) {
 
   return (
     <div className="room">
-      <div className="room-head">
-        <button className="back-link" onClick={onBack} style={{ margin: 0 }}>
-          → تفاصيل المزاد
-        </button>
-        <span className="grow" />
-        {live && transport === 'stream' && <span className="pill teal">مباشر</span>}
-        {live && transport === 'polling' && <span className="pill wait">تحديث دوري</span>}
-      </div>
-
-      <h1 className="room-title">{auction.nameAr}</h1>
+      <PageHead
+        eyebrow="شاشة المزايدة"
+        title={auction.nameAr}
+        sub={
+          live && transport === 'stream'
+            ? 'مباشر — يُحدَّث السعر فور تغيّره.'
+            : live && transport === 'polling'
+              ? 'تحديث دوري — تعذّر البث المباشر، يُحدَّث السعر كل ثانيتين.'
+              : undefined
+        }
+        action={<button onClick={onBack}>تفاصيل المزاد</button>}
+      />
 
       <div className={`room-board${closing ? ' closing' : ''}`}>
         <div className="room-price">

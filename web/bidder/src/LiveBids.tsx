@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, config, parseRiyals, riyals, sar, when, type Api, type Session } from '@eauction/shared'
+import { PageHead, api, config, parseRiyals, riyals, sar, when, type Api, type Session } from '@eauction/shared'
 import type { AuctionDetail, AuctionSummary, LivePrice, Subscription } from './types'
 import { useBidSender } from './useBidSender'
 import { recordSubmitted } from './BidBox'
@@ -52,22 +52,18 @@ export function LiveBids({ session, auctions, onOpenRoom, onBack }: Props) {
 
   return (
     <>
-      <button className="back-link" onClick={onBack}>
-        → كل المزادات
-      </button>
-
-      <div className="page-head">
-        <div className="grow">
-          <h2>مزاداتي الجارية</h2>
-          <p>
-            {eligible === null
-              ? '…'
-              : running.length === 0
-                ? 'لا يوجد مزاد جارٍ الآن من المزادات التي تأهّلت لها.'
-                : `${running.length} مزاد جارٍ — زايد من البطاقة مباشرة.`}
-          </p>
-        </div>
-      </div>
+      <PageHead
+        eyebrow="مساحة المزايد"
+        title="مزاداتي الجارية"
+        sub={
+          eligible === null
+            ? '…'
+            : running.length === 0
+              ? 'لا يوجد مزاد جارٍ الآن من المزادات التي تأهّلت لها.'
+              : `${running.length} مزاد جارٍ — زايد من البطاقة مباشرة.`
+        }
+        action={<button onClick={onBack}>جميع المزادات</button>}
+      />
 
       {running.length > 0 && (
         <div className="live-grid">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, useStepUp, type Session } from '@eauction/shared'
+import { ApiError, PageHead, api, config, useStepUp, type Session } from '@eauction/shared'
 import { authConfig } from './authConfig'
 import type { Bidder } from './types'
 
@@ -68,13 +68,16 @@ export function Profile({ session, onBack }: Props) {
 
   return (
     <>
-      <button className="back-link" onClick={onBack}>
-        → كل المزادات
-      </button>
+      <PageHead
+        eyebrow="مساحة المزايد"
+        title="الملف الشخصي"
+        sub="بيانات المزايد وقنوات التواصل."
+        action={<button onClick={onBack}>جميع المزادات</button>}
+      />
 
-      <div className="card auction-hero">
+      <div className="card profile-card">
         <div className="section-head">
-          <h1>ملفي</h1>
+          <h2>{bidder?.nameAr ?? session.nameAr ?? session.name}</h2>
           {bidder && (
             <span className={`pill ${bidder.profileComplete ? 'live' : 'wait'}`}>
               {bidder.profileComplete ? 'الملف مكتمل' : 'الملف غير مكتمل'}

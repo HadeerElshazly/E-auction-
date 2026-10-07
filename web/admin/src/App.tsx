@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  AppHeader,
+  AppShell,
+  PageHead,
+  useHashRoute,
+  type NavItem,
   ApiError,
   api,
   config,
@@ -31,7 +34,6 @@ import { Monitor } from './Monitor'
  * a dependency plus the redirect-URI registration every Keycloak client here
  * already pins to one path.
  */
-type View = 'auctions' | 'monitor' | 'followup' | 'inquiries' | 'reports' | 'audit'
 
 
 export function App() {
@@ -69,35 +71,22 @@ export function App() {
   // by design (§34).
   const canWatch = isAdmin || isCommittee || isClerk
 
-  // Back where the decision was being made, after the second-factor round trip.
-  // The side menu, open or folded to its icons. A per-browser preference, so it is
-  // remembered where the browser allows and simply open where it does not.
-  const [menuOpen, setMenuOpen] = useState(() => {
-    try {
-      return localStorage.getItem('admin.menu') !== 'collapsed'
-    } catch {
-      return true
-    }
-  })
-  const toggleMenu = () =>
-    setMenuOpen((open) => {
-      try {
-        localStorage.setItem('admin.menu', open ? 'collapsed' : 'open')
-      } catch {
-        // Not remembered; still toggles.
-      }
-      return !open
-    })
+  // Every page has an address: back, refresh and a shared link land where they should.
+  const [route, navigate] = useHashRoute('auctions')
+  const [view, routeId] = route
 
-  const [view, setView] = useState<View>(() => (confirmed === 'followup-decision' ? 'followup' : 'auctions'))
-
-  // A reader lands on their own screen, not on an auction list they cannot use:
-  // the auditor on سجل المراجعة, reporting on التقارير.
+  // Where each person starts. A reader lands on their own screen, not on an auction
+  // list they cannot use: the auditor on سجل المراجعة, reporting on التقارير, the
+  // inquiries desk on الاستفسارات. A committee member back from the second-factor
+  // round trip lands where the decision was being made.
   const readerOnly = !!session && !isAdmin && !isCommittee && !isClerk
   useEffect(() => {
-    if (readerOnly)
-      setView(canInquire ? 'inquiries' : canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
-  }, [readerOnly, canInquire, canAudit, canReport])
+    if (!session) return
+    if (confirmed === 'followup-decision') navigate('followup')
+    else if (readerOnly && !window.location.hash)
+      navigate(canInquire ? 'inquiries' : canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, readerOnly])
 
   const refreshList = useCallback(async () => {
     if (!session) return
@@ -109,7 +98,7 @@ export function App() {
     }
   }, [client, session])
 
-  const open = useCallback(
+  const loadAuction = useCallback(
     async (id: string) => {
       setError(null)
       try {
@@ -120,14 +109,45 @@ export function App() {
     },
     [client],
   )
+  const open = useCallback((id: string) => navigate(`auction/${id}`), [navigate])
+
+  // The auction in the address, read whenever the address names a different one.
+  const selectedId = view === 'auction' ? routeId : undefined
+
+  // Which part of the auction page is open: the one this person came for. The
+  // committee on a result waiting for it, the clerk on a hall auction, else the
+  // auction itself.
+  const [auctionTab, setAuctionTab] = useState<'details' | 'applicants' | 'hall' | 'award'>('details')
+  const [tabFor, setTabFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selected || tabFor === selected.id) return
+    setAuctionTab(
+      isCommittee && ['PendingAward', 'WinnerDisqualified', 'Awarded'].includes(selected.status)
+        ? 'award'
+        : isClerk && selected.channel === 'Onsite'
+          ? 'hall'
+          : 'details',
+    )
+    setTabFor(selected.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id])
+  useEffect(() => {
+    if (!selectedId) {
+      setSelected(null)
+      return
+    }
+    if (selected?.id !== selectedId) setSelected(null)
+    void loadAuction(selectedId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, loadAuction])
 
   // Reload the open auction after anything that changes it. The award workflow runs
   // partly through Kafka — the processor's CandidateOffered arrives on
   // auctions.lifecycle — so the server's copy is the only one worth trusting.
   const reload = useCallback(async () => {
-    if (selected) await open(selected.id)
+    if (selected) await loadAuction(selected.id)
     await refreshList()
-  }, [open, refreshList, selected])
+  }, [loadAuction, refreshList, selected])
 
   // Confirming an award requires a second factor confirmed in the last few
   // minutes. The runner turns the service's refusal into a confirmation the
@@ -172,11 +192,11 @@ export function App() {
     const timer = window.setInterval(() => {
       // Not while a mutation is in flight: reloading underneath one would replace
       // the form's auction while the clerk is mid-edit.
-      if (!busy && !document.hidden) void open(watchedId)
+      if (!busy && !document.hidden) void loadAuction(watchedId)
     }, 5000)
 
     return () => window.clearInterval(timer)
-  }, [watchedId, busy, open])
+  }, [watchedId, busy, loadAuction])
 
   if (loading) return <div className="centre muted">…</div>
 
@@ -209,105 +229,51 @@ export function App() {
     )
   }
 
+  // This person's workspace: only the screens their roles open.
+  const nav: NavItem[] = [
+    ...(isAdmin || isCommittee || isClerk ? [{ to: 'auctions', label: 'المزادات', icon: 'grid' }] : []),
+    ...(canWatch ? [{ to: 'monitor', label: 'المتابعة المباشرة', icon: 'live' }] : []),
+    ...(canReport ? [{ to: 'followup', label: 'متابعة الترسية', icon: 'wallet' }] : []),
+    ...(canInquire || isAdmin || isCommittee ? [{ to: 'inquiries', label: 'الاستفسارات', icon: 'message' }] : []),
+    ...(canReport ? [{ to: 'reports', label: 'التقارير', icon: 'chart' }] : []),
+    ...(canAudit ? [{ to: 'audit', label: 'سجل المراجعة', icon: 'file' }] : []),
+  ]
+  const active = view === 'auction' ? 'auctions' : view ?? 'auctions'
+  const crumb =
+    view === 'auction'
+      ? selected?.nameAr ?? 'تفاصيل المزاد'
+      : nav.find((n) => n.to === active)?.label ?? 'المزادات'
+
   return (
-    <>
-      <AppHeader
-        title="إدارة المزادات"
-        session={session}
-        onSignOut={signOut}
-        onToggleMenu={toggleMenu}
-        menuOpen={menuOpen}
-        extra={
-          isClerk && (
-            // A clerk's own id, where they can read it out before they have been
-            // assigned to anything: an administrator needs it to put them on the
-            // floor, and nothing here can list municipal staff (§29).
-            <span className="muted small ltr-id">
-              معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
-            </span>
-          )
-        }
-      />
-
-      <div className="shell">
-        {/* The navigation rail from the proposal. Always present, even for an
-            account that holds only one of these — a single item still tells a
-            reader where they are, and a rail that appears and disappears with the
-            signed-in role makes the product look like two different products. */}
-        <nav className={`rail${menuOpen ? '' : ' collapsed'}`} data-testid="nav">
-          <button
-              title={menuOpen ? undefined : 'المزادات'}
-            className={view === 'auctions' ? 'on' : ''}
-            data-testid="nav-auctions"
-            onClick={() => setView('auctions')}
-          >
-            <span className="icon" aria-hidden="true">⌂</span>
-            <span className="label">المزادات</span>
-            <span className="chevron" aria-hidden="true">‹</span>
-          </button>
-          {canWatch && (
-            <button
-              title={menuOpen ? undefined : 'المتابعة المباشرة'}
-              className={view === 'monitor' ? 'on' : ''}
-              data-testid="nav-monitor"
-              onClick={() => setView('monitor')}
-            >
-              <span className="icon" aria-hidden="true">◉</span>
-            <span className="label">المتابعة المباشرة</span>
-              <span className="chevron" aria-hidden="true">‹</span>
-            </button>
-          )}
-          {canReport && (
-            <button
-              title={menuOpen ? undefined : 'متابعة الترسية'}
-              className={view === 'followup' ? 'on' : ''}
-              data-testid="nav-followup"
-              onClick={() => setView('followup')}
-            >
-              <span className="icon" aria-hidden="true">✓</span>
-            <span className="label">متابعة الترسية</span>
-              <span className="chevron" aria-hidden="true">‹</span>
-            </button>
-          )}
-          {(canInquire || isAdmin || isCommittee) && (
-            <button
-              title={menuOpen ? undefined : 'الاستفسارات'}
-              className={view === 'inquiries' ? 'on' : ''}
-              data-testid="nav-inquiries"
-              onClick={() => setView('inquiries')}
-            >
-              <span className="icon" aria-hidden="true">?</span>
-            <span className="label">الاستفسارات</span>
-              <span className="chevron" aria-hidden="true">‹</span>
-            </button>
-          )}
-          {canReport && (
-            <button
-              title={menuOpen ? undefined : 'التقارير'}
-              className={view === 'reports' ? 'on' : ''}
-              data-testid="nav-reports"
-              onClick={() => setView('reports')}
-            >
-              <span className="icon" aria-hidden="true">◴</span>
-            <span className="label">التقارير</span>
-              <span className="chevron" aria-hidden="true">‹</span>
-            </button>
-          )}
-          {canAudit && (
-            <button
-              title={menuOpen ? undefined : 'سجل المراجعة'}
-              className={view === 'audit' ? 'on' : ''}
-              data-testid="nav-audit"
-              onClick={() => setView('audit')}
-            >
-              <span className="icon" aria-hidden="true">☰</span>
-            <span className="label">سجل المراجعة</span>
-              <span className="chevron" aria-hidden="true">‹</span>
-            </button>
-          )}
-        </nav>
-
-        <main>
+    <AppShell
+      brand="إدارة المزادات"
+      brandSub="بوابة الأمانة للمزادات"
+      nav={nav}
+      active={active}
+      crumb={crumb}
+      session={session}
+      onSignOut={signOut}
+      tools={
+        isClerk && (
+          // A clerk's own id, where they can read it out before they have been
+          // assigned to anything: an administrator needs it to put them on the
+          // floor, and nothing here can list municipal staff (§29).
+          <span className="muted small ltr-id">
+            معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
+          </span>
+        )
+      }
+      sidebarFoot={
+        <>
+          <div>بوابة الموظفين</div>
+          <strong>مزادات الأراضي</strong>
+          <div className="sidebar-foot">
+            الإصدار الأول <span className="pill teal plain">MVP</span>
+          </div>
+        </>
+      }
+      footer="كل إجراء في هذه البوابة يُسجَّل في سجل المراجعة باسم من نفّذه."
+    >
         {error && <div className="notice error">{error}</div>}
 
         {confirmed && (
@@ -316,7 +282,7 @@ export function App() {
           </div>
         )}
 
-        {view === 'monitor' ? (
+        {view === 'monitor' && canWatch ? (
           <Monitor session={session} />
         ) : view === 'followup' ? (
           <FollowUp
@@ -325,10 +291,7 @@ export function App() {
             canDecide={isCommittee}
             committeeUserId={session.subject}
             runDecision={(work) => stepUp.run('followup-decision', work)}
-            onOpenAuction={(id) => {
-              setView('auctions')
-              void open(id)
-            }}
+            onOpenAuction={open}
           />
         ) : view === 'inquiries' ? (
           <Inquiries session={session} canAct={canInquire} />
@@ -346,45 +309,82 @@ export function App() {
               هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من القائمة الجانبية.
             </p>
           </div>
+        ) : view === 'auction' && !selected ? (
+          <p className="muted">…</p>
         ) : selected ? (
           <>
-            <div className="row" style={{ marginBottom: 14 }}>
-              <button onClick={() => setSelected(null)}>← كل المزادات</button>
-            </div>
-
-            <AuctionEditor
-              auction={selected}
-              client={client}
-              session={session}
-              busy={busy}
-              canEdit={isAdmin}
-              canApprove={isCommittee}
-              onAct={act}
+            <PageHead
+              eyebrow={selected.nameEn || 'مزاد'}
+              title={selected.nameAr}
+              sub={`${selected.plotCount} قطعة · ${selected.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'}`}
+              action={<button onClick={() => navigate('auctions')}>جميع المزادات</button>}
             />
 
-            {isAdmin && session && (
-              <Applicants auction={selected} session={session} busy={busy} onAct={act} />
-            )}
+            {(() => {
+              const tabs: Array<{ key: typeof auctionTab; label: string }> = [
+                { key: 'details', label: 'بيانات المزاد' },
+                ...(isAdmin ? [{ key: 'applicants' as const, label: 'المتقدّمون' }] : []),
+                ...(isClerk && selected.channel === 'Onsite' ? [{ key: 'hall' as const, label: 'القاعة' }] : []),
+                { key: 'award', label: 'النتيجة والترسية' },
+              ]
+              const current = tabs.some((t) => t.key === auctionTab) ? auctionTab : 'details'
+              return (
+                <>
+                  <div className="detail-tabs page-tabs" role="tablist" aria-label="أقسام المزاد">
+                    {tabs.map((t) => (
+                      <button
+                        key={t.key}
+                        role="tab"
+                        aria-selected={current === t.key}
+                        className={`tab${current === t.key ? ' active' : ''}`}
+                        onClick={() => setAuctionTab(t.key)}
+                        data-testid={`auction-tab-${t.key}`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
 
-            {isClerk && selected.channel === 'Onsite' && (
-              <ClerkTerminal
-                auction={selected}
-                session={session}
-                client={client}
-                onAct={act}
-                busy={busy}
-              />
-            )}
+                  {current === 'details' && (
+                    <AuctionEditor
+                      auction={selected}
+                      client={client}
+                      session={session}
+                      busy={busy}
+                      canEdit={isAdmin}
+                      canApprove={isCommittee}
+                      onAct={act}
+                    />
+                  )}
 
-            <AwardPanel
-              session={session}
-              auction={selected}
-              client={client}
-              busy={busy}
-              canAct={isCommittee}
-              committeeUserId={session.subject}
-              onAct={act}
-            />
+                  {current === 'applicants' && isAdmin && (
+                    <Applicants auction={selected} session={session} busy={busy} onAct={act} />
+                  )}
+
+                  {current === 'hall' && isClerk && selected.channel === 'Onsite' && (
+                    <ClerkTerminal
+                      auction={selected}
+                      session={session}
+                      client={client}
+                      onAct={act}
+                      busy={busy}
+                    />
+                  )}
+
+                  {current === 'award' && (
+                    <AwardPanel
+                      session={session}
+                      auction={selected}
+                      client={client}
+                      busy={busy}
+                      canAct={isCommittee}
+                      committeeUserId={session.subject}
+                      onAct={act}
+                    />
+                  )}
+                </>
+              )
+            })()}
           </>
         ) : (
           <AuctionList
@@ -401,13 +401,12 @@ export function App() {
                   nameEn,
                 })
                 setSelected(created)
+                navigate(`auction/${created.id}`)
               })
             }
           />
         )}
-        </main>
-      </div>
-    </>
+    </AppShell>
   )
 }
 

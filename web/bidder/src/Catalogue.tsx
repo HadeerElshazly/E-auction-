@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CardClock, api, config, sar, stageLabels } from '@eauction/shared'
+import { CardClock, Icon, PageHead, Stats, api, config, sar, stageLabels } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Props {
@@ -20,14 +20,14 @@ export function documentUrl(documentId: string): string {
 export const statusAr = stageLabels
 
 /**
- * The status chips. The grouping itself — which lifecycle stages count as
+ * The status tabs. The grouping itself — which lifecycle stages count as
  * "finished" — is the catalogue service's, as is the search: filtered on the server,
  * so every client gets the same list and the counts are the real ones.
  */
 const filters = [
-  { key: 'all', ar: 'الكل' },
+  { key: 'all', ar: 'جميع المزادات' },
+  { key: 'live', ar: 'جارية الآن' },
   { key: 'upcoming', ar: 'القادمة' },
-  { key: 'live', ar: 'الجارية' },
   { key: 'closed', ar: 'المنتهية' },
 ] as const
 
@@ -38,6 +38,7 @@ interface CataloguePage {
   counts: Record<FilterKey, number>
 }
 
+/** المزادات — the public catalogue: what is on offer, what is running, what is next. */
 export function Catalogue({ auctions, signedIn, onOpen }: Props) {
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
@@ -66,143 +67,146 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
   const visible = page?.items ?? []
   const countFor = (key: FilterKey) => page?.counts[key] ?? 0
 
-  if (auctions.length === 0) {
-    return (
-      <div className="card">
-        <h2>لا توجد مزادات معروضة حالياً</h2>
-        <p className="muted small">
-          تُعرض المزادات هنا بعد اعتمادها من لجنة الترسية.
-        </p>
-      </div>
-    )
-  }
-
   return (
     <>
+      <PageHead
+        eyebrow="مزادات الأراضي"
+        title="فرصتك تبدأ بقطعة أرض"
+        sub="استعرض القطع المطروحة، وتابع المزادات وشارك بثقة."
+        action={
+          signedIn && (
+            <a className="button" href="#applications">
+              <Icon name="file" size={18} /> مشاركاتي
+            </a>
+          )
+        }
+      />
+
       {!signedIn && (
         <div className="notice info">
-          يمكنك تصفّح المزادات دون تسجيل دخول. للمزايدة يلزم الدخول بنفاذ وشراء كراسة
-          الشروط وسداد التأمين.
+          يمكنك تصفّح المزادات دون تسجيل دخول. للمزايدة يلزم الدخول بنفاذ وشراء كراسة الشروط
+          وسداد التأمين.
         </div>
       )}
 
-      <div className="catalogue-tools">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="ابحث باسم المزاد أو المخطط…"
-          aria-label="البحث في المزادات"
-        />
-        <div className="chips" role="tablist" aria-label="تصفية حسب الحالة">
+      <Stats
+        items={[
+          { label: 'المزادات المطروحة', value: countFor('all'), icon: 'grid' },
+          { label: 'جارية الآن', value: countFor('live'), icon: 'gavel' },
+          { label: 'تفتح قريباً', value: countFor('upcoming'), icon: 'clock' },
+          { label: 'منتهية', value: countFor('closed'), icon: 'check' },
+        ]}
+      />
+
+      <div className="toolbar">
+        <div className="tabs" role="tablist" aria-label="تصفية حسب الحالة">
           {filters.map((f) => (
             <button
               key={f.key}
               role="tab"
               aria-selected={filter === f.key}
-              className={filter === f.key ? 'chip on' : 'chip'}
+              className={`tab${filter === f.key ? ' active' : ''}`}
               onClick={() => setFilter(f.key)}
             >
-              {f.ar} <span className="num">({countFor(f.key)})</span>
+              {f.ar} <span className="num">{countFor(f.key)}</span>
             </button>
           ))}
         </div>
+        <label className="search">
+          <Icon name="search" size={18} />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ابحث باسم المزاد أو المخطط"
+            aria-label="البحث في المزادات"
+          />
+        </label>
       </div>
 
-      {visible.length === 0 && (
-        <div className="card">
-          <p className="muted" style={{ margin: 0 }}>
-            لا توجد مزادات مطابقة للبحث أو التصفية.
-          </p>
+      {auctions.length === 0 ? (
+        <div className="empty-state card">
+          <h3>لا توجد مزادات معروضة حالياً</h3>
+          <p className="muted">تُعرض المزادات هنا بعد اعتمادها من لجنة الترسية.</p>
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="empty-state card">
+          <h3>لا توجد مزادات مطابقة</h3>
+          <p className="muted">جرّب اسماً آخر أو غيّر حالة المزاد.</p>
+        </div>
+      ) : (
+        <div className="lot-grid" data-testid="catalogue">
+          {visible.map((a) => (
+            <LotCard key={a.id} auction={a} onOpen={onOpen} />
+          ))}
         </div>
       )}
 
-      <div className="auction-grid">
-        {visible.map((a) => {
-          const s = statusAr[a.status] ?? { ar: a.status, tone: 'done' }
-          const live = a.status === 'Live'
-          return (
-            <div className="auction-card static" key={a.id}>
-              <div className="cover">
-                {a.coverImageDocumentId && (
-                  <img
-                    src={documentUrl(a.coverImageDocumentId)}
-                    alt=""
-                    loading="lazy"
-                    // A cover that fails to load leaves the gradient behind it,
-                    // rather than a broken-image icon on a citizen's screen.
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none'
-                    }}
-                  />
-                )}
-                <span className="channel">
-                  {a.plotCount} قطعة · {a.totalAreaSqm} م²
-                </span>
-
-                {/* Where the bidding happens, on the card rather than three
-                    screens in. A hall auction takes the same booklet and the same
-                    deposit as an online one and then needs the bidder in the room,
-                    so it is not a detail to find out after paying. */}
-                <span className="channel at-end">
-                  {a.channel === 'Onsite' ? '📍 حضوري' : '🌐 إلكتروني'}
-                </span>
-
-                {/* The clock, over the cover, as the proposal has it — but only
-                    where there is actually a clock to show.
-                    
-                    A hall auction has none: the auctioneer brings the hammer down,
-                    not a timer (§29), so its endsAt is already in the past while it
-                    is legitimately running. Rendering the countdown regardless put
-                    "انتهى" on a card that said جارٍ الآن beside it, which is not a
-                    cosmetic mismatch — it tells a citizen an open auction is over. */}
-                <CardClock status={a.status} channel={a.channel} startsAt={a.startsAt} endsAt={a.endsAt} />
-              </div>
-
-              <div className="body">
-                <p className="title">{a.nameAr}</p>
-
-                <div>
-                  <span className={`pill ${s.tone}`}>{s.ar}</span>
-                </div>
-
-                <div>
-                  <div className="muted small">
-                    {live ? 'السعر الحالي' : 'سعر الافتتاح'}
-                  </div>
-                  <div className="price num">
-                    {sar(
-                      live
-                        ? a.priceMinorUnits ?? a.openingPriceMinorUnits
-                        : a.openingPriceMinorUnits,
-                      'ar',
-                    )}
-                  </div>
-                </div>
-
-                <div className="facts">
-                  <div>
-                    <span>التأمين</span>
-                    <span className="num">{sar(a.depositMinorUnits, 'ar')}</span>
-                  </div>
-                  <div>
-                    <span>الكراسة</span>
-                    <span className="num">{sar(a.bookletPriceMinorUnits, 'ar')}</span>
-                  </div>
-                </div>
-
-                <button
-                  className="primary"
-                  style={{ marginTop: 'auto' }}
-                  onClick={() => onOpen(a.id)}
-                >
-                  التفاصيل
-                </button>
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      <div className="section-foot">عرض {visible.length} مزاد</div>
     </>
+  )
+}
+
+function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id: string) => void }) {
+  const s = statusAr[a.status] ?? { ar: a.status, tone: 'done' }
+  const live = a.status === 'Live'
+  const bidding = live && a.priceMinorUnits != null
+  return (
+    <article className="lot-card auction-card static">
+      <button className="lot-visual cover" onClick={() => onOpen(a.id)} aria-label={`تفاصيل ${a.nameAr}`}>
+        {a.coverImageDocumentId && (
+          <img
+            src={documentUrl(a.coverImageDocumentId)}
+            alt=""
+            loading="lazy"
+            // A cover that fails to load leaves the gradient behind it, rather than
+            // a broken-image icon on a citizen's screen.
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+        )}
+        <span className={`pill ${s.tone} lot-badge`}>{s.ar}</span>
+        <span className="lot-channel">{a.channel === 'Onsite' ? '📍 حضوري' : '🌐 إلكتروني'}</span>
+        {/* The clock, over the cover — only where there is a clock to show. A hall
+            auction has none: the auctioneer brings the hammer down (§29). */}
+        <CardClock status={a.status} channel={a.channel} startsAt={a.startsAt} endsAt={a.endsAt} />
+      </button>
+
+      <div className="lot-body">
+        <h3>
+          <button className="link" onClick={() => onOpen(a.id)}>
+            {a.nameAr}
+          </button>
+        </h3>
+        {a.nameEn && <p className="lot-subtitle ltr">{a.nameEn}</p>}
+        <div className="lot-specs">
+          <span>
+            <Icon name="area" size={15} />
+            <span className="num">{a.totalAreaSqm}</span> م²
+          </span>
+          <span>
+            <Icon name="grid" size={15} />
+            {a.plotCount} قطعة
+          </span>
+          <span>
+            <Icon name="shield" size={15} />
+            تأمين <span className="num">{sar(a.depositMinorUnits, 'ar')}</span>
+          </span>
+        </div>
+        <div className="price-caption">{bidding ? 'أعلى مزايدة' : 'سعر الافتتاح'}</div>
+        <div className="lot-price num">
+          {sar(bidding ? a.priceMinorUnits! : a.openingPriceMinorUnits, 'ar')}
+        </div>
+        <div className="card-bottom">
+          <span className="muted small">
+            الكراسة {a.bookletPriceMinorUnits === 0 ? 'مجانية' : sar(a.bookletPriceMinorUnits, 'ar')}
+          </span>
+          <button className="small" onClick={() => onOpen(a.id)}>
+            تفاصيل المزاد
+          </button>
+        </div>
+      </div>
+    </article>
   )
 }

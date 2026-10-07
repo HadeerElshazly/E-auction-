@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, timestamp as when, type Session } from '@eauction/shared'
+import { PageHead,ApiError, api, config, timestamp as when, type Session } from '@eauction/shared'
 import { BidHistoryScreen, SystemEvents, WithNames } from './AuditViews'
 
 /**
@@ -108,7 +108,12 @@ export function AuditTrail({ session }: { session: Session }) {
   const [tab, setTab] = useState<Tab>('staff')
   return (
     <>
-      <div className="chips" role="tablist" aria-label="أقسام السجل" style={{ marginBottom: 12 }}>
+      <PageHead
+        eyebrow="مساحة المراجعة"
+        title="سجل المراجعة"
+        sub="تسلسل المزايدات والتغييرات وقرارات الاعتماد: من فعل ماذا، ومتى، وعلى أي مزاد."
+      />
+      <div className="tabs" role="tablist" aria-label="أقسام السجل" style={{ marginBottom: 16 }}>
         {(
           [
             ['staff', 'إجراءات الموظفين'],
@@ -120,7 +125,7 @@ export function AuditTrail({ session }: { session: Session }) {
             key={key}
             role="tab"
             aria-selected={tab === key}
-            className={tab === key ? 'chip on' : 'chip'}
+            className={`tab${tab === key ? ' active' : ''}`}
             data-testid={`audit-tab-${key}`}
             onClick={() => setTab(key)}
           >
@@ -246,7 +251,7 @@ function StaffTrail({ session }: { session: Session }) {
 
   return (
     <div className="card" data-testid="audit">
-      <h2>سجل المراجعة</h2>
+      <h2>إجراءات الموظفين</h2>
       <p className="muted small" style={{ marginTop: -8 }}>
         كل إجراء مؤثّر قام به موظّف، مكتوب في معاملة واحدة مع التغيير نفسه، ومربوط
         بسلسلة تجزئة تجعل أي تعديل قابلاً للكشف.

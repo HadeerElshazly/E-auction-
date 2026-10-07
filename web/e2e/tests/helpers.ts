@@ -493,5 +493,5 @@ export async function openPublicAuctionInPlace(page: Page, nameAr: string): Prom
   // reason.
   const card = page.locator('.auction-card', { hasText: nameAr })
   await expect(card).toBeVisible({ timeout: 90_000 })
-  await card.getByRole('button', { name: 'التفاصيل' }).click()
+  await card.getByRole('button', { name: 'تفاصيل المزاد' }).click()
 }

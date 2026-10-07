@@ -129,7 +129,11 @@ test('a reader with only the reporting role is not shown the auction surface', a
   try {
     await expect(finance.page.getByTestId('nav-audit')).toHaveCount(0)
 
-    await finance.page.getByTestId('nav-auctions').click()
+    // Each role's sidebar holds only its own screens: reporting lands on التقارير
+    // and has no auctions screen to offer. Reached by address anyway, the page
+    // says the account is read-only rather than failing to load.
+    await expect(finance.page.getByTestId('nav-auctions')).toHaveCount(0)
+    await finance.page.goto(`${ADMIN_URL}#auctions`)
     await expect(finance.page.getByText('هذا الحساب للقراءة فقط')).toBeVisible()
 
     expect(finance.problems.all()).toEqual([])

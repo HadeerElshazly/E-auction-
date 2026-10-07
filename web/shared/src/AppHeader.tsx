@@ -83,7 +83,7 @@ export function AppHeader({
               <span className="user-name">{name}</span>
               <span className="user-role">
                 {roles.join(' · ')}
-                {session.nationalId && <span className="ltr"> · {session.nationalId}</span>}
+                {session.nationalId && <>{roles.length > 0 && ' · '}<span className="ltr">{session.nationalId}</span></>}
               </span>
             </span>
           </div>

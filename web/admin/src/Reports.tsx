@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, day, riyals, stageLabel, type Session } from '@eauction/shared'
+import { PageHead,ApiError, api, config, day, riyals, stageLabel, type Session } from '@eauction/shared'
 
 /**
  * التقارير, as a stakeholder reads them.
@@ -253,8 +253,13 @@ export function Reports({ session }: { session: Session }) {
   }, [active, client, query])
 
   return (
+    <>
+    <PageHead
+      eyebrow="مساحة الإدارة"
+      title="التقارير"
+      sub="نتائج المزادات والمراحل والقطع والتأمينات — ملخص تشغيلي قابل للتصدير."
+    />
     <div className="card" data-testid="reports">
-      <h2>التقارير</h2>
 
       <div className="row" style={{ marginBottom: 14 }}>
         {TABS.map((t) => (
@@ -336,6 +341,7 @@ export function Reports({ session }: { session: Session }) {
         </p>
       )}
     </div>
+    </>
   )
 }
 

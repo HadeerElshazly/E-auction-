@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { BellIcon,api, config, type Session } from '@eauction/shared'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { BellIcon, Icon, PageHead, api, config, timestamp, type Session } from '@eauction/shared'
 
-interface Notice {
+export interface Notice {
   id: string
   auctionId: string
   kind: string
@@ -12,14 +12,9 @@ interface Notice {
   readAt: string | null
 }
 
-interface Props {
-  session: Session
-  /** Opens the auction a notice is about. */
-  onOpen: (auctionId: string) => void
-}
-
 /**
- * The bell, and the list behind it.
+ * The bidder's notices, polled — one source for the bell, the sidebar's count and
+ * the page.
  *
  * This is the delivered channel. SMS and push both need contracts that do not
  * exist (P-7), and the notification service says so plainly rather than pretending
@@ -31,144 +26,142 @@ interface Props {
  * and a second connection held open per signed-in bidder for the whole session is a
  * real cost for no benefit.
  */
-export function Notifications({ session, onOpen }: Props) {
+export function useNotices(session: Session | null) {
+  const client = useMemo(
+    () => (session ? api({ baseUrl: config.notificationsApi, session }) : null),
+    [session],
+  )
   const [items, setItems] = useState<Notice[]>([])
   const [unread, setUnread] = useState(0)
-  const [open, setOpen] = useState(false)
-  const panel = useRef<HTMLDivElement>(null)
-
-  const client = api({ baseUrl: config.notificationsApi, session })
 
   const load = useCallback(async () => {
+    if (!client) return
     try {
-      const page = await client.get<{ items: Notice[]; unread: number }>('/notifications?take=30')
+      const page = await client.get<{ items: Notice[]; unread: number }>('/notifications?take=50')
       setItems(page.items)
       setUnread(page.unread)
     } catch {
-      // A bell that cannot load is not worth an error banner over the auction a
-      // bidder is actually looking at. It retries on the next tick.
+      // A bell that cannot reach its service shows what it last knew.
     }
-    // client is rebuilt each render from the same session; depending on it would
-    // reschedule the interval every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session])
+  }, [client])
 
   useEffect(() => {
     void load()
-
-    // Backed off while the tab is hidden, like the catalogue: a phone in a pocket
-    // does not need a request every twenty seconds, and the notice is still there
-    // when it comes back.
     const tick = () => {
       if (!document.hidden) void load()
     }
-
     const timer = window.setInterval(tick, 20_000)
     document.addEventListener('visibilitychange', tick)
-
     return () => {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', tick)
     }
   }, [load])
 
-  // Closing on an outside click, because a panel that only closes by its own
-  // button is a panel that covers the bid box.
-  useEffect(() => {
-    if (!open) return
-
-    const close = (e: MouseEvent) => {
-      if (!panel.current?.contains(e.target as Node)) setOpen(false)
-    }
-
-    // Deferred to the next frame: the click that opened the panel is still
-    // propagating, and without this it closes immediately.
-    const id = window.setTimeout(() => document.addEventListener('click', close), 0)
-
-    return () => {
-      window.clearTimeout(id)
-      document.removeEventListener('click', close)
-    }
-  }, [open])
-
-  const markRead = async (notice: Notice) => {
-    if (notice.readAt === null) {
-      try {
-        await client.post(`/notifications/${notice.id}/read`)
-      } catch {
-        // Marking read is a convenience. Failing it must not stop the bidder
-        // opening the auction the notice is about.
+  const markRead = useCallback(
+    async (notice: Notice) => {
+      if (client && notice.readAt === null) {
+        try {
+          await client.post(`/notifications/${notice.id}/read`)
+        } catch {
+          // Read or not, the bidder has seen it.
+        }
       }
-    }
+      await load()
+    },
+    [client, load],
+  )
 
-    if (notice.actionable) {
-      setOpen(false)
-      onOpen(notice.auctionId)
-    }
-
-    await load()
-  }
-
-  const markAllRead = async () => {
+  const markAllRead = useCallback(async () => {
+    if (!client) return
     try {
       await client.post('/notifications/read-all')
     } catch {
       /* same */
     }
     await load()
-  }
+  }, [client, load])
 
+  return { items, unread, markRead, markAllRead }
+}
+
+/** The bell in the top bar: the unread count, and the way to the page. */
+export function NotificationsBell({ unread }: { unread: number }) {
   return (
-    <div ref={panel} style={{ position: 'relative' }}>
-      <button
-        className={`icon-btn${open ? ' on' : ''}`}
-        aria-label={unread > 0 ? `الإشعارات (${unread} غير مقروء)` : 'الإشعارات'}
-        title="الإشعارات"
-        aria-expanded={open}
-        onClick={() => setOpen((was) => !was)}
-      >
-        <BellIcon />
-        {unread > 0 && (
-          <span className="icon-badge num" aria-hidden="true">
-            {unread > 9 ? '9+' : unread}
-          </span>
-        )}
-      </button>
-
-      {open && (
-        <div className="card notifications-panel">
-          <div className="row" style={{ marginBottom: 8 }}>
-            <strong>الإشعارات</strong>
-            <span className="grow" />
-            {unread > 0 && (
-              <button className="small" onClick={() => void markAllRead()}>
-                تعليم الكل كمقروء
-              </button>
-            )}
-          </div>
-
-          {items.length === 0 ? (
-            <p className="muted small" style={{ margin: 0 }}>
-              لا توجد إشعارات.
-            </p>
-          ) : (
-            <ul className="notifications">
-              {items.map((notice) => (
-                <li key={notice.id} className={notice.readAt === null ? 'unread' : ''}>
-                  <button
-                    className="notice-row"
-                    onClick={() => void markRead(notice)}
-                    aria-label={notice.titleAr}
-                  >
-                    <span className="notice-title">{notice.titleAr}</span>
-                    <span className="notice-body muted small">{notice.bodyAr}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+    <a
+      className="icon-btn"
+      href="#notifications"
+      aria-label={unread > 0 ? `الإشعارات (${unread} غير مقروء)` : 'الإشعارات'}
+      title="الإشعارات"
+    >
+      <BellIcon />
+      {unread > 0 && (
+        <span className="icon-badge num" aria-hidden="true">
+          {unread > 9 ? '9+' : unread}
+        </span>
       )}
-    </div>
+    </a>
+  )
+}
+
+/** الإشعارات — every notice, newest first, each opening its auction. */
+export function NotificationsPage({
+  notices,
+  onOpen,
+}: {
+  notices: ReturnType<typeof useNotices>
+  onOpen: (auctionId: string) => void
+}) {
+  const { items, unread, markRead, markAllRead } = notices
+  return (
+    <>
+      <PageHead
+        eyebrow="مساحة المزايد"
+        title="الإشعارات"
+        sub="إشعارات المشاركة والمزايدات وقرارات الترسية."
+        action={
+          unread > 0 && (
+            <button onClick={() => void markAllRead()}>تعليم الكل كمقروء</button>
+          )
+        }
+      />
+      <div className="card">
+        {items.length === 0 ? (
+          <div className="empty-state">
+            <h3>أنت على اطلاع</h3>
+            <p className="muted">ستظهر هنا إشعارات نشاطك في المزادات.</p>
+          </div>
+        ) : (
+          items.map((n) => (
+            <div key={n.id} className={`notice-item${n.readAt === null ? ' unread' : ''}`}>
+              <div className="notice-icon">
+                <Icon name="bell" size={18} />
+              </div>
+              <div className="grow">
+                <h3>{n.titleAr}</h3>
+                <p>{n.bodyAr}</p>
+                <small className="muted">{timestamp(n.createdAt)}</small>
+              </div>
+              {n.actionable && (
+                <button
+                  className="ghost small"
+                  onClick={() => {
+                    void markRead(n)
+                    onOpen(n.auctionId)
+                  }}
+                >
+                  المزاد
+                </button>
+              )}
+              {!n.actionable && n.readAt === null && (
+                <button className="ghost small" onClick={() => void markRead(n)}>
+                  مقروء
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </>
   )
 }

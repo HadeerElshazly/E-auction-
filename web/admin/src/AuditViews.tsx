@@ -374,7 +374,12 @@ export function BidHistory({
 /** The auditor's tab: pick an auction, read its bids and decisions. */
 export function BidHistoryScreen({ session }: { session: Session }) {
   const { list } = useAuctionNames(session)
-  const opened = list.filter((a) => !['Draft', 'PendingReview', 'Rejected', 'Approved'].includes(a.status))
+  // Where the bids are: running, awaiting the committee, awarded — then the rest.
+  const order = ['Live', 'PendingAward', 'Awarded', 'Settled', 'WinnerDisqualified', 'Unsold']
+  const rank = (s: string) => (order.indexOf(s) === -1 ? order.length : order.indexOf(s))
+  const opened = list
+    .filter((a) => !['Draft', 'PendingReview', 'Rejected', 'Approved'].includes(a.status))
+    .sort((x, y) => rank(x.status) - rank(y.status))
   const [auctionId, setAuctionId] = useState('')
   useEffect(() => {
     if (!auctionId && opened.length > 0) setAuctionId(opened[0]!.id)

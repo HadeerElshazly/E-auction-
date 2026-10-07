@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, timestamp, type Session } from '@eauction/shared'
+import { PageHead,ApiError, api, config, timestamp, type Session } from '@eauction/shared'
 
 interface Inquiry {
   id: string
@@ -74,22 +74,21 @@ export function Inquiries({ session, canAct }: { session: Session; canAct: boole
   ]
 
   return (
+    <>
+    <PageHead
+      eyebrow="مساحة الإدارة"
+      title="الاستفسارات"
+      sub="أسئلة المزايدين عن المزادات. الرد يصل إلى السائل وحده؛ وما يستحق أن يعرفه الجميع يُكتب توضيحاً عاماً بصياغة الأمانة، ويُنشر بعد أن يعتمده زميل غير من صاغه."
+    />
     <div className="card">
-      <div className="section-head">
-        <h2>الاستفسارات</h2>
-      </div>
-      <p className="lede">
-        أسئلة المزايدين عن المزادات. الرد يصل إلى السائل وحده؛ وما يستحق أن يعرفه الجميع يُكتب
-        توضيحاً عاماً بصياغة الأمانة، ويُنشر في صفحة المزاد بعد أن يعتمده زميل غير من صاغه.
-      </p>
 
-      <div className="chips" role="tablist" aria-label="حالة الاستفسار" style={{ marginBottom: 12 }}>
+      <div className="tabs" role="tablist" aria-label="حالة الاستفسار" style={{ marginBottom: 16 }}>
         {chips.map((c) => (
           <button
             key={c.key}
             role="tab"
             aria-selected={filter === c.key}
-            className={filter === c.key ? 'chip on' : 'chip'}
+            className={`tab${filter === c.key ? ' active' : ''}`}
             onClick={() => setFilter(c.key)}
           >
             {c.ar} {c.count !== undefined && <span className="num">({c.count})</span>}
@@ -116,6 +115,7 @@ export function Inquiries({ session, canAct }: { session: Session; canAct: boole
         ))}
       </div>
     </div>
+    </>
   )
 }
 

@@ -151,6 +151,17 @@ export function SubscriptionSteps({
         </div>
       )}
 
+      <StepBar
+        stages={[
+          { label: 'الهوية والملف', done: bidder !== null && bidder.profileComplete === true },
+          {
+            label: 'الكراسة والشروط',
+            done: subscription?.bookletPurchasedAt != null && subscription?.termsAcceptedAt != null,
+          },
+          { label: 'التأمين', done: subscription?.depositPaidAt != null },
+        ]}
+      />
+
       <ol className="steps" style={{ marginBottom: 16 }}>
         <Step done={bidder !== null} text="التسجيل بالهوية الوطنية" />
         <Step done={bidder?.profileComplete === true} text="بيانات التواصل" />
@@ -538,5 +549,26 @@ function Step({ done, text }: { done: boolean; text: string }) {
       <span className={`tick ${done ? 'done' : 'todo'}`}>{done ? '✓' : '○'}</span>
       <span className={done ? '' : 'muted'}>{text}</span>
     </li>
+  )
+}
+
+/**
+ * The three stages of qualifying, as a bar: done, the one in hand, and what comes
+ * after. The detailed checklist below says exactly which step is next.
+ */
+function StepBar({ stages }: { stages: Array<{ label: string; done: boolean }> }) {
+  const current = stages.findIndex((st) => !st.done)
+  return (
+    <div className="stage-bar" aria-label="مراحل التأهّل">
+      {stages.map((st, i) => (
+        <span
+          key={st.label}
+          className={`stage-bar-step${st.done ? ' done' : i === current ? ' active' : ''}`}
+          aria-current={i === current ? 'step' : undefined}
+        >
+          <b className="num">{String(i + 1).padStart(2, '0')}</b> {st.label}
+        </span>
+      ))}
+    </div>
   )
 }

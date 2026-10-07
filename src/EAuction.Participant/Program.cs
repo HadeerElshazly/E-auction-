@@ -647,6 +647,27 @@ app.MapGet("/auctions/{auctionId:guid}/inquiries/mine", async (
     return Results.Ok(new { items = rows.Select(InquiryResponse.Mine) });
 }).RequireAuthorization(Policies.Bidder);
 
+// The bidder's own questions across every auction, newest first, with the auction's
+// name — «الاستفسارات» in the bidder's workspace.
+app.MapGet("/inquiries/mine", async (
+    HttpContext http, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Inquiries.AsNoTracking()
+        .Where(i => i.BidderId == subject)
+        .OrderByDescending(i => i.AskedAt)
+        .Take(200)
+        .ToListAsync(ct);
+    var names = await db.AuctionTerms.AsNoTracking()
+        .Where(t => rows.Select(r => r.AuctionId).Contains(t.AuctionId))
+        .ToDictionaryAsync(t => t.AuctionId, t => t.NameAr, ct);
+    return Results.Ok(new
+    {
+        items = rows.Select(i => new { inquiry = InquiryResponse.Mine(i), auctionNameAr = names.GetValueOrDefault(i.AuctionId) })
+    });
+}).RequireAuthorization(Policies.Bidder);
+
 // Staff: every question, filtered. The inquiries desk works them; administrators and
 // the committee may read them — only the desk replies or publishes.
 app.MapGet("/inquiries", async (

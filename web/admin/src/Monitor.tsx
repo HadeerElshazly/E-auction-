@@ -78,7 +78,8 @@ export function Monitor({ session }: { session: Session }) {
     <>
       <div className="page-head">
         <div className="grow">
-          <h2>المتابعة المباشرة</h2>
+          <div className="eyebrow">مساحة الإدارة</div>
+          <h1>المتابعة المباشرة</h1>
           <p>
             {rows === null
               ? 'جارٍ القراءة…'

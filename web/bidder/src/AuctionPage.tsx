@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, CountdownPanel, api, config, sar, untilText, when, type Session } from '@eauction/shared'
+import { ApiError, CountdownPanel, Icon, PageHead, api, config, sar, when, type Session } from '@eauction/shared'
 import type { AuctionDetail, Bidder, Subscription, WinnerAward } from './types'
 import { WinnerPanel } from './WinnerPanel'
 import { useLivePrice } from './useLivePrice'
@@ -88,210 +88,60 @@ export function AuctionPage({
   const eligible = subscription?.status === 'Eligible'
   const totalArea = auction.plots.reduce((sum, p) => sum + p.areaSqm, 0)
 
-  // What the clock should say, by lifecycle. A hall auction has no clock while it
-  // runs — the auctioneer closes it, not a timer (§29) — so it says so instead of
-  // counting down to an end time that does not bind.
-  const countdown =
-    lifecycle === 'Scheduled'
-      ? { label: 'يبدأ بعد', value: untilText(auction.startsAt) }
-      : live && auction.channel === 'Onsite'
-        ? { label: 'الإغلاق', value: 'بقرار مدير المزاد' }
-        : live
-          ? { label: 'يُغلق بعد', value: untilText(endsAt) }
-          : { label: 'الحالة', value: status.ar }
-
   // A hall auction is bid in the hall: the clerk types what the room calls out and
   // the catcher refuses an online frame for it with NotTheClerk (§29). Qualifying
   // is still done from here — the booklet and the deposit are the same online — so
   // what the channel changes is only the last step.
   const onsite = auction.channel === 'Onsite'
 
+  // Which part of the page is open. «المشاركة» first for a signed-in bidder who has
+  // started but not finished qualifying, since that is the thing they came back for.
+  const [tab, setTab] = useState<'info' | 'participation' | 'plots' | 'inquiries'>('info')
+  const canParticipate = !!session && canBid && !cancelled
+  useEffect(() => {
+    if (canParticipate && subscription && subscription.status !== 'Eligible' && biddingOpen) setTab('participation')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscription?.status])
+
+  const shownPrice = live
+    ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
+    : closingPrice ?? auction.openingPriceMinorUnits
+  const priceLabel = live
+    ? price?.priceMinorUnits != null ? 'أعلى مزايدة حالية' : 'سعر الافتتاح'
+    : closingPrice !== null ? 'أعلى سعر عند الإغلاق' : 'سعر الافتتاح'
+
+  const tabs: Array<{ key: typeof tab; label: string }> = [
+    { key: 'info', label: 'تفاصيل المزاد' },
+    ...(canParticipate ? [{ key: 'participation' as const, label: 'المشاركة' }] : []),
+    { key: 'plots', label: `قطع الأرض (${auction.plots.length})` },
+    { key: 'inquiries', label: 'الاستفسارات' },
+  ]
+
   return (
     <>
-      <button className="back-link" onClick={onBack}>
-        → كل المزادات
-      </button>
+      <PageHead
+        eyebrow={auction.nameEn || 'مزاد أرض'}
+        title={auction.nameAr}
+        sub={
+          <>
+            {auction.plots.length} قطعة · <span className="num">{area(totalArea)}</span> م² ·{' '}
+            {onsite ? 'مزاد حضوري' : 'مزاد إلكتروني'}
+          </>
+        }
+        action={
+          <button onClick={onBack}>
+            جميع المزادات
+          </button>
+        }
+      />
 
       {error && <div className="notice error">{error}</div>}
-
-      <div className="card auction-hero">
-        {auction.coverImageDocumentId && (
-          <img
-            className="hero-cover"
-            src={documentUrl(auction.coverImageDocumentId)}
-            alt={`صورة ${auction.nameAr}`}
-            onError={(e) => {
-              e.currentTarget.style.display = 'none'
-            }}
-          />
-        )}
-
-        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-          <span className={`pill ${status.tone}`}>{status.ar}</span>
-          {/* Said out loud, because the two differ in how stale the price can be
-              and a bidder in a war deserves to know which they are on. */}
-          {live && transport === 'stream' && (
-            <span className="pill teal" title="يُحدَّث السعر فور تغيّره">
-              مباشر
-            </span>
-          )}
-          {live && transport === 'polling' && (
-            <span className="pill wait" title="تعذّر البث المباشر — يُحدَّث السعر كل ثانيتين">
-              تحديث دوري
-            </span>
-          )}
-        </div>
-
-        <h1>{auction.nameAr}</h1>
-        {auction.nameEn && <div className="hero-sub ltr">{auction.nameEn}</div>}
-
-        <div className="hero-meta">
-          <span>{auction.plots.length} قطعة</span>
-          <span>
-            <span className="num">{area(totalArea)}</span> م²
-          </span>
-          <span>{auction.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'}</span>
-          <span>
-            {auction.bidderVisibility === 'Named' ? 'أسماء المزايدين ظاهرة' : 'هوية المزايدين مخفية'}
-          </span>
-        </div>
-
-        <div className="timeline">
-          <div className="timeline-point">
-            <span className="timeline-label">يبدأ</span>
-            <span className="timeline-value">{when(auction.startsAt)}</span>
-          </div>
-          <span className="timeline-arrow" aria-hidden="true">
-            ←
-          </span>
-          <div className="timeline-point">
-            <span className="timeline-label">ينتهي</span>
-            <span className="timeline-value">{when(endsAt)}</span>
-            {price && price.extensionsUsed > 0 && (
-              <span className="timeline-note">
-                مُدّد {price.extensionsUsed} من {price.maxExtensions}
-              </span>
-            )}
-          </div>
-          <div className="timeline-countdown">
-            <span className="timeline-label">{countdown.label}</span>
-            <span className="timeline-value">{countdown.value}</span>
-          </div>
-        </div>
-
-        {/* حتى البدء / حتى الإغلاق — ticking, on the page as on the card. A hall
-            auction has no closing clock (§29). */}
-        {lifecycle === 'Scheduled' || lifecycle === 'Approved' ? (
-          <CountdownPanel target={auction.startsAt} label="حتى البدء" />
-        ) : live && !onsite ? (
-          <CountdownPanel target={endsAt} label="حتى الإغلاق" />
-        ) : null}
-
-        <div className="stat-grid">
-          <div className={`stat${live ? ' highlight' : ''}`}>
-            <div className="stat-label">
-              {live ? 'السعر الحالي' : closingPrice !== null ? 'أعلى سعر عند الإغلاق' : 'سعر الافتتاح'}
-            </div>
-            <div className="stat-value num">
-              {sar(
-                live
-                  ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
-                  : closingPrice ?? auction.openingPriceMinorUnits,
-                'ar',
-              )}
-            </div>
-            {price?.leaderLabel && (
-              <div className="stat-sub">
-                {price.leaderIsYou ? (
-                  <strong style={{ color: 'var(--accent)' }}>
-                    {live ? 'أنت الأعلى حالياً' : 'كنت الأعلى عند الإغلاق'}
-                  </strong>
-                ) : (
-                  // Rendered exactly as sent. The label is a pseudonym on a masked
-                  // auction and a name on a named one (D-22), and the server decides
-                  // which — a portal that assembled it from parts would be a second
-                  // place for that decision to be wrong.
-                  <>المزايد الأعلى: {price.leaderLabel}</>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="stat">
-            {/* The increment, not a "minimum next bid" figure: a bidder reasons from
-                the price they see plus the step, and the bidding screen's buttons
-                do that sum for them. */}
-            <div className="stat-label">الحد الأدنى للزيادة</div>
-            <div className="stat-value num">{sar(auction.minIncrementMinorUnits, 'ar')}</div>
-            <div className="stat-sub">تُضاف إلى السعر الحالي في كل مزايدة</div>
-          </div>
-
-          <div className="stat">
-            <div className="stat-label">مبلغ التأمين</div>
-            <div className="stat-value num">{sar(auction.depositMinorUnits, 'ar')}</div>
-            <div className="stat-sub">يُسدَّد قبل المزايدة</div>
-          </div>
-
-          <div className="stat">
-            <div className="stat-label">قيمة كراسة الشروط</div>
-            <div className="stat-value num">{sar(auction.bookletPriceMinorUnits, 'ar')}</div>
-            <div className="stat-sub">شرط للتسجيل في المزاد</div>
-          </div>
-
-          {/* «عرض التأمين ومبلغ الوساطة» (الخاصية 04): the brokerage is a share of the
-              price won, so its amount is shown at today's price and said to move. */}
-          {auction.brokerageFeePercent > 0 && (
-            <div className="stat">
-              <div className="stat-label">السعي (الوساطة)</div>
-              <div className="stat-value num">
-                {sar(Math.round((currentPrice * auction.brokerageFeePercent) / 100), 'ar')}
-              </div>
-              <div className="stat-sub">
-                <span className="num">{auction.brokerageFeePercent}%</span> من سعر الترسية — يدفعه
-                الفائز، ويتغيّر بتغيّر السعر
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
 
       {cancelled && (
         <div className="notice error" role="status">
           <strong>أُلغي هذا المزاد قبل بدئه.</strong>
           {auction.cancellationReason && <> السبب: {auction.cancellationReason}.</>} لا تُقبل
           اشتراكات أو مزايدات، ويُرد التأمين المدفوع أو يُحرَّر الضمان البنكي.
-        </div>
-      )}
-
-      {onsite && !cancelled && (
-        // Before the deposit, like the visibility notice below: a bidder about to
-        // commit a hundred thousand riyals needs to know they must be in the room
-        // on the day, not discover it once the money is gone.
-        <div className="notice info">
-          مزاد حضوري — تُقدّم المزايدات في قاعة المزاد ويُسجّلها موظف القاعة برقم
-          مجدافك. التأهّل — الكراسة والتأمين — يتم من هنا، أما المزايدة نفسها فلا
-          تُقبل إلا من القاعة.
-        </div>
-      )}
-
-      {auction.bidderVisibility === 'Named' && (
-        // Said before the deposit, not after. The administrator may run an auction
-        // in which bidders are named to each other (D-22), and someone about to
-        // commit a hundred thousand riyals is entitled to know that first.
-        <div className="notice info">
-          في هذا المزاد يظهر اسم المزايد الأعلى لبقية المزايدين وللعامة.
-        </div>
-      )}
-
-      {!session && !cancelled && (
-        <div className="card">
-          <h2>للمزايدة</h2>
-          <p className="muted">
-            يلزم الدخول بنفاذ، ثم شراء كراسة الشروط والموافقة عليها، ثم سداد التأمين.
-          </p>
-          <button className="primary big" onClick={onSignIn}>
-            الدخول بنفاذ
-          </button>
         </div>
       )}
 
@@ -317,130 +167,261 @@ export function AuctionPage({
         </div>
       )}
 
-      {session && canBid && !cancelled && (
-        <SubscriptionSteps
-          auction={auction}
-          session={session}
-          subscription={subscription}
-          bidder={bidder}
-          participant={participant}
-          onChanged={loadParticipant}
-          onError={setError}
-        />
-      )}
+      <div className="split">
+        <section>
+          <div className="detail-photo">
+            {auction.coverImageDocumentId && (
+              <img
+                src={documentUrl(auction.coverImageDocumentId)}
+                alt={`صورة ${auction.nameAr}`}
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none'
+                }}
+              />
+            )}
+            <span className={`pill ${status.tone}`}>{status.ar}</span>
+          </div>
 
-      {session && canBid && eligible && biddingOpen && !onsite && (
-        // The bidding itself has its own screen (شاشة المزايدة): price, standing,
-        // clock and the raise, with nothing to scroll past. Here only the way in.
-        <div className="card room-entry">
-          <div>
-            <h2 style={{ margin: 0 }}>أنت مؤهّل للمزايدة</h2>
-            <p className="muted small" style={{ margin: '4px 0 0' }}>
-              {live
-                ? 'المزاد مفتوح الآن — ادخل شاشة المزايدة لمتابعة السعر والمزايدة بضغطة واحدة.'
-                : 'افتح شاشة المزايدة قبل البدء بقليل؛ تُفتح المزايدة فيها تلقائياً عند بدء المزاد.'}
+          <div className="detail-tabs" role="tablist" aria-label="أقسام المزاد">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                role="tab"
+                aria-selected={tab === t.key}
+                className={`tab${tab === t.key ? ' active' : ''}`}
+                onClick={() => setTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="detail-content">
+            {tab === 'info' && (
+              <>
+                <h2>تفاصيل المزاد</h2>
+                <div className="spec-grid">
+                  <div><small>سعر الافتتاح</small><b className="num">{sar(auction.openingPriceMinorUnits, 'ar')}</b></div>
+                  {/* The increment, not a "minimum next bid" figure: a bidder reasons
+                      from the price they see plus the step. */}
+                  <div><small>الحد الأدنى للزيادة</small><b className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</b></div>
+                  <div><small>مبلغ التأمين</small><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
+                  <div><small>قيمة كراسة الشروط</small><b className="num">{auction.bookletPriceMinorUnits === 0 ? 'مجانية' : sar(auction.bookletPriceMinorUnits, 'ar')}</b></div>
+                  {/* «عرض التأمين ومبلغ الوساطة» (الخاصية 04): a share of the price won,
+                      shown at today's price and said to move. */}
+                  {auction.brokerageFeePercent > 0 && (
+                    <div>
+                      <small>السعي (الوساطة) — {auction.brokerageFeePercent}%</small>
+                      <b className="num">{sar(Math.round((currentPrice * auction.brokerageFeePercent) / 100), 'ar')}</b>
+                    </div>
+                  )}
+                  <div><small>المساحة الإجمالية</small><b><span className="num">{area(totalArea)}</span> م²</b></div>
+                  <div><small>يبدأ</small><b>{when(auction.startsAt)}</b></div>
+                  <div><small>ينتهي</small><b>{when(endsAt)}</b></div>
+                  <div>
+                    <small>التمديد عند المزايدة المتأخرة</small>
+                    <b>{auction.quietPeriodSeconds ? `${auction.quietPeriodSeconds} ثانية، حتى ${auction.maxExtensions} مرات` : 'دون تمديد'}</b>
+                  </div>
+                </div>
+
+                {onsite && !cancelled && (
+                  // Before the deposit: a bidder about to commit a hundred thousand
+                  // riyals needs to know they must be in the room on the day.
+                  <div className="notice info">
+                    مزاد حضوري — تُقدّم المزايدات في قاعة المزاد ويُسجّلها موظف القاعة برقم مجدافك.
+                    التأهّل — الكراسة والتأمين — يتم من هنا، أما المزايدة نفسها فلا تُقبل إلا من القاعة.
+                  </div>
+                )}
+                {auction.bidderVisibility === 'Named' && (
+                  // Said before the deposit, not after (D-22).
+                  <div className="notice info">في هذا المزاد يظهر اسم المزايد الأعلى لبقية المزايدين وللعامة.</div>
+                )}
+
+                {auction.attachments.length > 0 && (
+                  <>
+                    <h3>المستندات العامة</h3>
+                    {auction.attachments.map((d) => (
+                      // Public: no token or grant, and the service answers with
+                      // Content-Disposition: attachment.
+                      <div key={d.documentId} className="document-row">
+                        <span className="doc-icon"><Icon name="file" /></span>
+                        <div className="grow">
+                          <strong>{d.titleAr}</strong>
+                          <small>مستند عام متاح للجميع</small>
+                        </div>
+                        <a className="button small" href={documentUrl(d.documentId)} rel="noreferrer noopener">
+                          <Icon name="download" size={16} /> تنزيل
+                        </a>
+                      </div>
+                    ))}
+                  </>
+                )}
+                <div className="document-row">
+                  <span className="doc-icon"><Icon name="file" /></span>
+                  <div className="grow">
+                    <strong>كراسة الشروط</strong>
+                    <small>تُتاح للتنزيل بعد شرائها من قسم «المشاركة».</small>
+                  </div>
+                  {canParticipate && (
+                    <button className="small" onClick={() => setTab('participation')}>المشاركة</button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {tab === 'participation' && canParticipate && session && (
+              <SubscriptionSteps
+                auction={auction}
+                session={session}
+                subscription={subscription}
+                bidder={bidder}
+                participant={participant}
+                onChanged={loadParticipant}
+                onError={setError}
+              />
+            )}
+
+            {tab === 'plots' && (
+              <>
+                <h2>قطع الأرض</h2>
+                <p className="lede">تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.</p>
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>رقم الصك</th>
+                        <th>المساحة</th>
+                        <th>الموقع</th>
+                        <th>الوصف</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auction.plots.map((p) => (
+                        <tr key={p.id}>
+                          <td><span className="num strong">{p.deedNumber}</span></td>
+                          <td><span className="num">{area(p.areaSqm)}</span> م²</td>
+                          <td>
+                            {p.latitude && p.longitude ? (
+                              <a
+                                href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                title={`${p.latitude}, ${p.longitude}`}
+                              >
+                                عرض على الخريطة ↗
+                              </a>
+                            ) : (
+                              <span className="muted">غير محدد</span>
+                            )}
+                          </td>
+                          <td>{p.descriptionAr ?? <span className="muted">لا يوجد وصف</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {tab === 'inquiries' && (
+              <>
+                <AuctionInquiries
+                  auctionId={auction.id}
+                  participant={session ? participant : null}
+                  canAsk={!!session && canBid}
+                  open={biddingOpen}
+                />
+                {!session && (
+                  <p className="muted">
+                    تظهر هنا التوضيحات التي تنشرها الأمانة. لطرح سؤال، سجّل الدخول بنفاذ.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </section>
+
+        <aside>
+          <div className="card auction-box" data-testid="auction-box">
+            <div className="kv">
+              <span>{priceLabel}</span>
+              <span className={`pill ${status.tone}`}>{status.ar}</span>
+            </div>
+            <div className="box-price num">{sar(shownPrice, 'ar')}</div>
+            {price?.leaderLabel && (
+              <div className="small">
+                {price.leaderIsYou ? (
+                  <strong style={{ color: 'var(--accent)' }}>
+                    {live ? 'أنت صاحب أعلى مزايدة حالياً' : 'كنت الأعلى عند الإغلاق'}
+                  </strong>
+                ) : (
+                  // Rendered exactly as sent: a pseudonym on a masked auction, a name
+                  // on a named one (D-22) — the server decides which.
+                  <span className="muted">المزايد الأعلى: {price.leaderLabel}</span>
+                )}
+              </div>
+            )}
+            {live && transport === 'polling' && (
+              <span className="pill wait" title="تعذّر البث المباشر — يُحدَّث السعر كل ثانيتين">تحديث دوري</span>
+            )}
+
+            {/* حتى البدء / حتى الإغلاق — ticking. A hall auction has no closing clock (§29). */}
+            {lifecycle === 'Scheduled' || lifecycle === 'Approved' ? (
+              <CountdownPanel target={auction.startsAt} label="حتى البدء" />
+            ) : live && !onsite ? (
+              <CountdownPanel target={endsAt} label="حتى الإغلاق" />
+            ) : live && onsite ? (
+              <div className="notice info small">جارٍ في القاعة — يُغلق بقرار مدير المزاد.</div>
+            ) : null}
+
+            <div className="kv"><span>تأمين المشاركة</span><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
+            <div className="kv"><span>الحد الأدنى للزيادة</span><b className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</b></div>
+            {price && price.extensionsUsed > 0 && (
+              <div className="kv"><span>التمديد</span><b className="num">{price.extensionsUsed} من {price.maxExtensions}</b></div>
+            )}
+            <hr className="divider" />
+
+            {/* The one thing to do next, by where this person stands. */}
+            {!session && !cancelled && biddingOpen ? (
+              <>
+                <button className="primary wide" onClick={onSignIn}>الدخول بنفاذ للمشاركة</button>
+                <p className="box-help">يلزم الدخول بنفاذ، ثم شراء كراسة الشروط والموافقة عليها، ثم سداد التأمين.</p>
+              </>
+            ) : canParticipate && eligible && biddingOpen && !onsite ? (
+              // The bidding itself has its own screen (شاشة المزايدة); here the way in.
+              <>
+                <div className="bid-status">أهليتك معتمدة والتأمين مؤكد</div>
+                <button className="primary wide" onClick={onEnterRoom}>
+                  <Icon name="gavel" size={18} /> شاشة المزايدة
+                </button>
+                <p className="box-help">
+                  {live
+                    ? 'المزاد مفتوح الآن — زايد بضغطة واحدة من شاشة المزايدة.'
+                    : 'تُفتح المزايدة في الشاشة تلقائياً عند بدء المزاد.'}
+                </p>
+              </>
+            ) : canParticipate && eligible && biddingOpen && onsite ? (
+              <div className="notice info small">
+                المزايدة تجري في القاعة: ارفع مجدافك ويُسجّل موظف القاعة المبلغ باسمك فور إعلانه.
+              </div>
+            ) : canParticipate && biddingOpen ? (
+              <>
+                <button className="primary wide" onClick={() => setTab('participation')}>
+                  {subscription ? 'استكمال المشاركة' : 'اشترك في المزاد'}
+                </button>
+                <p className="box-help">الكراسة، ثم الموافقة على الشروط، ثم التأمين.</p>
+              </>
+            ) : (
+              <p className="box-help">
+                {cancelled ? 'أُلغي هذا المزاد.' : 'انتهت المزايدة في هذا المزاد.'}
+              </p>
+            )}
+            <p className="box-help">
+              <Icon name="shield" size={16} /> تُسجَّل كل مزايدة موقّعة ولا يمكن تعديلها.
             </p>
           </div>
-          <button className="primary big" onClick={onEnterRoom}>
-            شاشة المزايدة
-          </button>
-        </div>
-      )}
-
-      {session && canBid && eligible && biddingOpen && onsite && (
-        // Said rather than left blank. A qualified bidder who paid the deposit and
-        // then finds nothing to press would reasonably conclude the portal is
-        // broken, and the cost of that conclusion is a citizen who does not turn
-        // up to the hall.
-        <div className="card">
-          <h2>المزايدة</h2>
-          <div className="notice info">
-            المزايدة تجري في القاعة: ارفع مجدافك ويُسجّل موظف القاعة المبلغ باسمك فور
-            إعلانه. لا يوجد صندوق مزايدة هنا لأن مزايدة من هاتفك لا تعلم بها القاعة.
-          </div>
-        </div>
-      )}
-
-      <div className="card">
-        <div className="section-head">
-          <h2>قطع الأرض</h2>
-          <span className="pill teal plain">
-            {auction.plots.length} قطعة · <span className="num">{area(totalArea)}</span> م²
-          </span>
-        </div>
-        <p className="lede">تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.</p>
-
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>رقم الصك</th>
-                <th>المساحة</th>
-                <th>الموقع</th>
-                <th>الوصف</th>
-              </tr>
-            </thead>
-            <tbody>
-              {auction.plots.map((p) => (
-                <tr key={p.id}>
-                  {/* .num on a span, not the cell: on the cell it makes the cell
-                      left-to-right, which pushes the value to the far side of its
-                      column, away from the heading above it. */}
-                  <td>
-                    <span className="num strong">{p.deedNumber}</span>
-                  </td>
-                  <td>
-                    <span className="num">{area(p.areaSqm)}</span> م²
-                  </td>
-                  <td>
-                    {p.latitude && p.longitude ? (
-                      <a
-                        href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        title={`${p.latitude}, ${p.longitude}`}
-                      >
-                        عرض على الخريطة ↗
-                      </a>
-                    ) : (
-                      <span className="muted">غير محدد</span>
-                    )}
-                  </td>
-                  <td>{p.descriptionAr ?? <span className="muted">لا يوجد وصف</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        </aside>
       </div>
-
-      {auction.attachments.length > 0 && (
-        <div className="card">
-          <h2>المستندات العامة</h2>
-          <p className="lede">
-            مستندات متاحة للجميع دون تسجيل. كراسة الشروط ليست منها — تُتاح بعد شرائها.
-          </p>
-          <ul className="doc-list">
-            {auction.attachments.map((d) => (
-              <li key={d.documentId}>
-                {/* A plain link: these are Public, so no token or grant is needed,
-                    and the service answers with Content-Disposition: attachment. */}
-                <a href={documentUrl(d.documentId)} rel="noreferrer noopener">
-                  📄 {d.titleAr}
-                </a>
-                <span className="muted small">تنزيل</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <AuctionInquiries
-        auctionId={auction.id}
-        participant={session ? participant : null}
-        canAsk={!!session && canBid}
-        open={biddingOpen}
-      />
     </>
   )
 }

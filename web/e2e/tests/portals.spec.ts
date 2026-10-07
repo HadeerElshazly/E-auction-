@@ -144,7 +144,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
       const card = anon.locator('.auction-card', { hasText: nameAr })
       await expect(card).toBeVisible({ timeout: 90_000 })
       await expect(card).toContainText('3 قطعة')
-      await card.getByRole('button', { name: 'التفاصيل' }).click()
+      await card.getByRole('button', { name: 'تفاصيل المزاد' }).click()
 
       // The plots a bidder needs in order to decide.
       await expect(anon.getByRole('cell', { name: '1010/6' })).toBeVisible()
@@ -285,7 +285,8 @@ test('an auction runs from draft to award through the portals', async ({ browser
       // the notification service exists.
       const page = sara.page
 
-      const bell = page.getByRole('button', { name: /الإشعارات/ })
+      // The bell in the top bar opens الإشعارات, a page of its own.
+      const bell = page.getByRole('link', { name: /الإشعارات/ }).first()
       await expect(bell).toBeVisible()
 
       // Every assertion below names this auction.
@@ -296,15 +297,15 @@ test('an auction runs from draft to award through the portals', async ({ browser
       // getByText('بدأ المزاد') matched four notices and failed strict mode, which
       // is the test being wrong about its subject rather than the product.
       const notice = (title: string) =>
-        page.locator('ul.notifications li').filter({ hasText: title }).filter({ hasText: nameAr })
+        page.locator('.notice-item').filter({ hasText: title }).filter({ hasText: nameAr })
 
-      // The panel polls every twenty seconds, so the notice may not be there the
-      // instant the bid lands. Waited for by reopening rather than by one long
-      // expect: the panel closes on an outside click and a stale open panel would
-      // be asserted against for ever.
+      // The page polls every twenty seconds, so the notice may not be there the
+      // instant the bid lands. Waited for by reloading the page rather than by one
+      // long expect on a list that may not have asked again yet.
+      await bell.click()
       await expect(async () => {
-        await bell.click()
-        await expect(notice('تمت المزايدة عليك')).toBeVisible({ timeout: 2_000 })
+        await page.reload()
+        await expect(notice('تمت المزايدة عليك')).toBeVisible({ timeout: 3_000 })
       }).toPass({ timeout: 90_000 })
 
       // Registered and qualified earlier in this walk-through, so both are here too.
@@ -313,13 +314,13 @@ test('an auction runs from draft to award through the portals', async ({ browser
 
       // D-22 holds in the inbox as well: she is told she is behind, not who is
       // ahead, and nothing here names the other bidder.
-      const panel = await page.locator('.notifications-panel').innerText()
+      const panel = await page.locator('main.page').innerText()
       expect(panel, "the leading bidder's name leaked into the inbox").not.toContain('خالد')
 
       // Reading them clears the unread count they were contributing to.
       await page.getByRole('button', { name: 'تعليم الكل كمقروء' }).click()
-      await expect(page.getByRole('button', { name: 'الإشعارات' })).toBeVisible()
-      await expect(page.locator('ul.notifications li.unread')).toHaveCount(0)
+      await expect(page.getByRole('link', { name: 'الإشعارات', exact: true }).first()).toBeVisible()
+      await expect(page.locator('.notice-item.unread')).toHaveCount(0)
     })
 
     await test.step('an onlooker sees the price but not who is leading', async () => {
@@ -336,6 +337,8 @@ test('an auction runs from draft to award through the portals', async ({ browser
     await test.step('the committee awards to the winning bidder', async () => {
       const page = committee.page
       await openAuction(page, auctionId)
+      // The auction page is tabbed; the result is under «النتيجة والترسية».
+      await page.getByTestId('auction-tab-award').click()
 
       // The processor closes the auction and offers a candidate over
       // auctions.lifecycle. Nothing in the portal asked for this.
