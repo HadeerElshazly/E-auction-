@@ -594,8 +594,10 @@ function Plots({
   canEdit,
   onAct,
 }: Omit<Props, 'canApprove'> & { canEdit: boolean }) {
-  const [deed, setDeed] = useState('')
+  const [number, setNumber] = useState('')
   const [area, setArea] = useState('')
+  const [streetWidth, setStreetWidth] = useState('')
+  const [frontage, setFrontage] = useState('')
   const [lat, setLat] = useState('')
   const [lng, setLng] = useState('')
 
@@ -611,8 +613,8 @@ function Plots({
       {canEdit && (
         <div className="grid">
           <label>
-            <span>رقم الصك</span>
-            <input className="ltr" value={deed} onChange={(e) => setDeed(e.target.value)} />
+            <span>رقم القطعة</span>
+            <input className="ltr" value={number} onChange={(e) => setNumber(e.target.value)} />
           </label>
           <label>
             <span>المساحة (م²)</span>
@@ -621,6 +623,24 @@ function Plots({
               inputMode="decimal"
               value={area}
               onChange={(e) => setArea(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>عرض الشارع (م)</span>
+            <input
+              className="ltr num"
+              inputMode="decimal"
+              value={streetWidth}
+              onChange={(e) => setStreetWidth(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>الواجهة (م)</span>
+            <input
+              className="ltr num"
+              inputMode="decimal"
+              value={frontage}
+              onChange={(e) => setFrontage(e.target.value)}
             />
           </label>
           <label>
@@ -633,19 +653,26 @@ function Plots({
           </label>
           <div style={{ alignSelf: 'end' }}>
             <button
-              disabled={busy || deed.trim() === '' || Number(area) <= 0}
+              disabled={busy || number.trim() === '' || Number(area) <= 0}
               onClick={() =>
                 onAct(async () => {
                   await client.post(`/auctions/${auction.id}/plots`, {
-                    deedNumber: deed.trim(),
+                    plotNumber: number.trim(),
                     areaSqm: Number(area),
                     latitude: lat || null,
                     longitude: lng || null,
                     descriptionAr: null,
                     descriptionEn: null,
+                    // Left out rather than sent as 0: the domain refuses a
+                    // non-positive measurement, and an empty box means "not
+                    // surveyed yet", not "zero metres".
+                    streetWidthMeters: streetWidth.trim() === '' ? null : Number(streetWidth),
+                    frontageMeters: frontage.trim() === '' ? null : Number(frontage),
                   })
-                  setDeed('')
+                  setNumber('')
                   setArea('')
+                  setStreetWidth('')
+                  setFrontage('')
                 })
               }
             >

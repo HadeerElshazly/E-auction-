@@ -223,8 +223,9 @@ app.MapPost("/auctions/{id:guid}/plots", (
     Guid id, AddPlotRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "AddPlot", a => a.AddPlot(new Plot(
-        id, r.DeedNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn)),
-        details: $"Deed {r.DeedNumber}, {r.AreaSqm} m²."))
+        id, r.PlotNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn,
+        r.StreetWidthMeters, r.FrontageMeters)),
+        details: $"Plot {r.PlotNumber}, {r.AreaSqm} m²."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapDelete("/auctions/{id:guid}/plots/{plotId:guid}", (
@@ -706,8 +707,9 @@ public sealed record SigningKeyResponse(string SecretHex, int KeyEpoch);
 public sealed record AttachmentRequest(Guid DocumentId, string TitleAr);
 
 public sealed record AddPlotRequest(
-    string DeedNumber, decimal AreaSqm, string? Latitude, string? Longitude,
-    string? DescriptionAr, string? DescriptionEn);
+    string PlotNumber, decimal AreaSqm, string? Latitude, string? Longitude,
+    string? DescriptionAr, string? DescriptionEn,
+    decimal? StreetWidthMeters, decimal? FrontageMeters);
 
 public sealed record DocumentRequest(Guid DocumentId);
 

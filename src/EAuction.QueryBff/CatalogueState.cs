@@ -232,6 +232,7 @@ public sealed record AuctionEntry
 public sealed record PublicDocumentEntry(Guid DocumentId, string TitleAr);
 
 public sealed record PlotEntry(
-    Guid Id, string DeedNumber, decimal AreaSqm,
+    Guid Id, string PlotNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
-    string? DescriptionAr, string? DescriptionEn);
+    string? DescriptionAr, string? DescriptionEn,
+    decimal? StreetWidthMeters, decimal? FrontageMeters);

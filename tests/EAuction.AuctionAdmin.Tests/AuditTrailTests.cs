@@ -176,7 +176,7 @@ public class AuditTrailTests : IDisposable
         await admin.PutAsJsonAsync($"/auctions/{id}", Edit(reserve: 1_500_000_00));
         await admin.PostAsJsonAsync($"/auctions/{id}/plots", new
         {
-            deedNumber = "4/س/1200", areaSqm = 950.5m,
+            plotNumber = "1200", areaSqm = 950.5m,
             latitude = "21.5", longitude = "39.2",
             descriptionAr = "قطعة", descriptionEn = "Plot",
         });

@@ -82,7 +82,9 @@ interface ParticipationRow {
 
 interface PlotRow {
   plotId: string
-  deedNumber: string
+  plotNumber: string
+  streetWidthMeters: number | null
+  frontageMeters: number | null
   areaSqm: number
   phase: string | null
   auctionNameAr: string
@@ -485,8 +487,10 @@ function Table({ tab, rows }: { tab: Tab; rows: unknown[] }) {
           <table data-testid="report-table">
             <thead>
               <tr>
-                <th>الصك</th>
+                <th>رقم القطعة</th>
                 <th>المساحة م²</th>
+                <th>عرض الشارع</th>
+                <th>الواجهة</th>
                 <th>المخطط</th>
                 <th>المزاد</th>
                 <th>الحالة</th>
@@ -497,8 +501,10 @@ function Table({ tab, rows }: { tab: Tab; rows: unknown[] }) {
             <tbody>
               {(rows as PlotRow[]).map((r) => (
                 <tr key={r.plotId}>
-                  <td className="ltr mono">{r.deedNumber}</td>
+                  <td className="ltr mono">{r.plotNumber}</td>
                   <td className="num">{r.areaSqm}</td>
+                  <td className="num">{r.streetWidthMeters ?? '—'}</td>
+                  <td className="num">{r.frontageMeters ?? '—'}</td>
                   <td className="small muted">{r.phase ?? '—'}</td>
                   <td className="small">{r.auctionNameAr}</td>
                   <td>

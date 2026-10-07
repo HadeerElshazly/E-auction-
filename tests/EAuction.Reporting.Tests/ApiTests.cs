@@ -531,7 +531,7 @@ public class ApiTests : IAsyncLifetime
 
         object[] Plots() =>
         [
-            new { id = Guid.NewGuid(), deedNumber = deed, areaSqm = 500.00m,
+            new { id = Guid.NewGuid(), plotNumber = deed, areaSqm = 500.00m,
                   latitude = "21.5", longitude = "39.2", descriptionAr = "قطعة" },
         ];
 
@@ -542,21 +542,21 @@ public class ApiTests : IAsyncLifetime
         while (true)
         {
             await using var db = await _db.Factory.CreateDbContextAsync(cts.Token);
-            if (await db.Plots.CountAsync(p => p.DeedNumber == deed, cts.Token) == 2) break;
+            if (await db.Plots.CountAsync(p => p.PlotNumber == deed, cts.Token) == 2) break;
             await Task.Delay(25, cts.Token);
         }
 
         var body = await Reader().GetFromJsonAsync<JsonElement>("/reports/plots?take=500");
 
         var shared = body.GetProperty("items").EnumerateArray()
-            .Where(p => p.GetProperty("deedNumber").GetString() == deed)
+            .Where(p => p.GetProperty("plotNumber").GetString() == deed)
             .ToList();
 
         Assert.Equal(2, shared.Count);
 
         // The key the portal used to build: identical for both rows.
         Assert.Single(shared
-            .Select(p => $"{p.GetProperty("auctionNameAr").GetString()}:{p.GetProperty("deedNumber").GetString()}")
+            .Select(p => $"{p.GetProperty("auctionNameAr").GetString()}:{p.GetProperty("plotNumber").GetString()}")
             .Distinct());
 
         // The key it builds now: distinct.

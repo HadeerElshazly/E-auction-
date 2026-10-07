@@ -346,9 +346,9 @@ public class ContractDriftTests
             Plots =
             [
                 new AuctionAdmin.Domain.PublicPlot(
-                    Guid.NewGuid(), "1010/5", 600.25m, "21.5433", "39.1728", "قطعة", "Plot"),
+                    Guid.NewGuid(), "1010/5", 600.25m, "21.5433", "39.1728", "قطعة", "Plot", 20m, 25.5m),
                 new AuctionAdmin.Domain.PublicPlot(
-                    Guid.NewGuid(), "1010/6", 750.25m, null, null, null, null)
+                    Guid.NewGuid(), "1010/6", 750.25m, null, null, null, null, null, null)
             ]
         };
 
@@ -382,13 +382,13 @@ public class ContractDriftTests
             MaxExtensions = 0, Channel = "Online", BidderVisibility = "Masked",
             PlotCount = 1, TotalAreaSqm = 600.25m,
             Plots = [new AuctionAdmin.Domain.PublicPlot(
-                Guid.NewGuid(), "1010/5", 600.25m, "21.5433", "39.1728", "قطعة", "Plot")]
+                Guid.NewGuid(), "1010/5", 600.25m, "21.5433", "39.1728", "قطعة", "Plot", 20m, 25.5m)]
         };
 
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(produced, Json));
         var plot = doc.RootElement.GetProperty("plots")[0];
 
-        Assert.Equal("1010/5", plot.GetProperty("deedNumber").GetString());
+        Assert.Equal("1010/5", plot.GetProperty("plotNumber").GetString());
         Assert.Equal(600.25m, plot.GetProperty("areaSqm").GetDecimal());
         Assert.Equal("21.5433", plot.GetProperty("latitude").GetString());
         Assert.Equal("قطعة", plot.GetProperty("descriptionAr").GetString());

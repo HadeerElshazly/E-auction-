@@ -40,9 +40,10 @@ public abstract record DomainEvent : IDomainEvent
 public sealed record PublicDocument(Guid DocumentId, string TitleAr);
 
 public sealed record PublicPlot(
-    Guid Id, string DeedNumber, decimal AreaSqm,
+    Guid Id, string PlotNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
-    string? DescriptionAr, string? DescriptionEn);
+    string? DescriptionAr, string? DescriptionEn,
+    decimal? StreetWidthMeters, decimal? FrontageMeters);
 
 public sealed record AuctionApproved : DomainEvent
 {

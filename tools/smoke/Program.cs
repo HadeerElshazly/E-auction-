@@ -123,12 +123,13 @@ try
 
     // Three plots sold as one indivisible package: bidding is on the auction, not
     // on any plot in it.
-    foreach (var (deed, area) in new[] { ("1010/5", 812.5m), ("1010/6", 940.0m), ("1010/7", 756.25m) })
+    foreach (var (number, area) in new[] { ("1005", 812.5m), ("1006", 940.0m), ("1007", 756.25m) })
         await admin.PostAsync($"/auctions/{auctionId}/plots", new
         {
-            deedNumber = deed, areaSqm = area,
+            plotNumber = number, areaSqm = area,
             latitude = "21.5433", longitude = "39.1728",
-            descriptionAr = $"قطعة رقم {deed}", descriptionEn = $"Plot {deed}"
+            descriptionAr = $"قطعة رقم {number}", descriptionEn = $"Plot {number}",
+            streetWidthMeters = 20.0m, frontageMeters = 25.5m
         });
     n.Step("three plots added", "one indivisible package, priced as a whole");
 
@@ -381,12 +382,12 @@ try
         n.Fail("the catalogue says whether bidders are named", listed.ToString());
 
     var detail = await anon.GetAsync($"/auctions/{auctionId}");
-    var deeds = detail.GetProperty("plots").EnumerateArray()
-        .Select(x => x.GetProperty("deedNumber").GetString()).ToArray();
-    if (deeds.Length == 3 && deeds.Contains("1010/6"))
-        n.Step("the plots are visible to a bidder", string.Join(", ", deeds));
+    var numbers = detail.GetProperty("plots").EnumerateArray()
+        .Select(x => x.GetProperty("plotNumber").GetString()).ToArray();
+    if (numbers.Length == 3 && numbers.Contains("1006"))
+        n.Step("the plots are visible to a bidder", string.Join(", ", numbers));
     else
-        n.Fail("the plots are visible to a bidder", $"got [{string.Join(", ", deeds)}]");
+        n.Fail("the plots are visible to a bidder", $"got [{string.Join(", ", numbers)}]");
 
     // D-23 at the HTTP boundary, not just on the topic.
     var detailRaw = detail.ToString();
@@ -970,7 +971,7 @@ try
         phase = "Hall"
     });
     await admin.PostAsync($"/auctions/{hallId}/plots",
-        new { deedNumber = "2020/1", areaSqm = 900.0m });
+        new { plotNumber = "2001", areaSqm = 900.0m, streetWidthMeters = 18.0m, frontageMeters = 30.0m });
     var hallBooklet = await adminDocs.UploadAsync(
         "/documents", "كراسة القاعة.pdf", BookletPdf(), "application/pdf", "Restricted");
 

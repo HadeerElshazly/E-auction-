@@ -313,8 +313,10 @@ public sealed class PlotRecord
     public Guid PlotId { get; private set; }
     public Guid AuctionId { get; private set; }
 
-    public string DeedNumber { get; private set; } = "";
+    public string PlotNumber { get; private set; } = "";
     public decimal AreaSqm { get; private set; }
+    public decimal? StreetWidthMeters { get; private set; }
+    public decimal? FrontageMeters { get; private set; }
     public string? Latitude { get; private set; }
     public string? Longitude { get; private set; }
     public string? DescriptionAr { get; private set; }
@@ -325,8 +327,10 @@ public sealed class PlotRecord
     {
         PlotId = p.Id,
         AuctionId = auctionId,
-        DeedNumber = p.DeedNumber,
+        PlotNumber = p.PlotNumber,
         AreaSqm = p.AreaSqm,
+        StreetWidthMeters = p.StreetWidthMeters,
+        FrontageMeters = p.FrontageMeters,
         Latitude = p.Latitude,
         Longitude = p.Longitude,
         DescriptionAr = p.DescriptionAr,
@@ -334,8 +338,10 @@ public sealed class PlotRecord
 
     public void Redefine(Integration.PlotPayload p)
     {
-        DeedNumber = p.DeedNumber;
+        PlotNumber = p.PlotNumber;
         AreaSqm = p.AreaSqm;
+        StreetWidthMeters = p.StreetWidthMeters;
+        FrontageMeters = p.FrontageMeters;
         Latitude = p.Latitude;
         Longitude = p.Longitude;
         DescriptionAr = p.DescriptionAr;

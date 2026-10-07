@@ -56,18 +56,20 @@ public sealed class ReportingDbContext(DbContextOptions<ReportingDbContext> opti
             e.ToTable("plot");
             e.HasKey(x => x.PlotId);
             e.Property(x => x.PlotId).ValueGeneratedNever();
-            e.Property(x => x.DeedNumber).HasColumnType("text").IsRequired();
+            e.Property(x => x.PlotNumber).HasColumnType("text").IsRequired();
             e.Property(x => x.AreaSqm).HasPrecision(18, 2);
+            e.Property(x => x.StreetWidthMeters).HasPrecision(8, 2);
+            e.Property(x => x.FrontageMeters).HasPrecision(8, 2);
             e.Property(x => x.Latitude).HasMaxLength(50);
             e.Property(x => x.Longitude).HasMaxLength(50);
             e.Property(x => x.DescriptionAr).HasColumnType("text");
 
             e.HasIndex(x => x.AuctionId);
 
-            // A deed number is unique within an auction in the auction service, and
+            // A plot number is unique within an auction in the auction service, and
             // across the inventory it had better be too — two auctions selling the
-            // same deed is a data problem a report should surface rather than sum.
-            e.HasIndex(x => x.DeedNumber);
+            // same parcel is a data problem a report should surface rather than sum.
+            e.HasIndex(x => x.PlotNumber);
         });
 
         b.Entity<BidderRecord>(e =>

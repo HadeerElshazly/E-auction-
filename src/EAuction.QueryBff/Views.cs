@@ -128,11 +128,28 @@ public static class LiveViews
         label, LeaderIsYou: true, a.LeaderClientBidId,
         a.EffectiveEndsAt ?? a.EndsAt, a.ExtensionsUsed, a.MaxExtensions, now);
 
+    /// <summary>
+    /// The view for somebody who has not signed in: the price and the clock, and
+    /// nothing whatever about who is bidding.
+    ///
+    /// Not even the pseudonym. A masked label («مزايد #2») is already an
+    /// anonymising device, but it still tells a passer-by how many distinct people
+    /// are in the room and when a new one arrives, and on a Named auction the same
+    /// field is a citizen's actual name. A visitor browsing public land listings has
+    /// no business with either, so the field is dropped rather than softened.
+    /// </summary>
+    public static LivePrice ForAnonymous(AuctionEntry a, DateTimeOffset now) => new(
+        a.AuctionId, a.Status, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
+        LeaderLabel: null, LeaderIsYou: false, YourWinningBidId: null,
+        a.EffectiveEndsAt ?? a.EndsAt, a.ExtensionsUsed, a.MaxExtensions, now);
+
     /// <summary>The view for one specific caller, for the request/response endpoint.</summary>
     public static LivePrice For(AuctionEntry a, Guid? caller, string? label, DateTimeOffset now) =>
-        caller is not null && a.LeaderBidderId == caller
-            ? ForLeader(a, label, now)
-            : ForOthers(a, label, now);
+        caller is null
+            ? ForAnonymous(a, now)
+            : a.LeaderBidderId == caller
+                ? ForLeader(a, label, now)
+                : ForOthers(a, label, now);
 
     public static string Serialise<T>(T view) => JsonSerializer.Serialize(view, Json);
 }

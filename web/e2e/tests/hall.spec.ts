@@ -60,7 +60,7 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
       auctionId = await page.locator('code.muted.small').first().innerText()
       expect(auctionId).toMatch(/^[0-9a-f-]{36}$/)
 
-      await page.getByLabel('رقم الصك').fill('2020/1')
+      await page.getByLabel('رقم القطعة').fill('2001')
       await page.getByLabel(/المساحة/).fill('900')
       await page.getByRole('button', { name: 'إضافة قطعة' }).click()
       await expect(

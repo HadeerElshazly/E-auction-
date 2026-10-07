@@ -48,15 +48,21 @@ public sealed class FanOut
     /// <summary>
     /// A price change, for everyone watching.
     ///
-    /// Serialised twice rather than once per subscriber: the payload differs only in
-    /// whether the recipient is the leader, so one body serves everyone who is not
-    /// and one serves the one who is. At ten thousand subscribers that is the
-    /// difference between two serialisations per change and ten thousand.
+    /// Serialised three times rather than once per subscriber: the payload varies
+    /// only by what the recipient is entitled to know about identity — one body for
+    /// the leader, one for the other signed-in bidders, one for a visitor who gets
+    /// no bidder label at all. At ten thousand subscribers that is the difference
+    /// between three serialisations per change and ten thousand.
+    ///
+    /// The anonymous body is a third variant rather than a filter applied per
+    /// connection, for the same reason: a per-subscriber rewrite would put the
+    /// serialiser back on the hot path.
     /// </summary>
-    public void PublishPrice(Guid auctionId, string forOthers, string forLeader, Guid? leader)
+    public void PublishPrice(
+        Guid auctionId, string forOthers, string forLeader, string forAnonymous, Guid? leader)
     {
         if (!_auctions.TryGetValue(auctionId, out var channel)) return;
-        channel.Broadcast(forOthers, forLeader, leader);
+        channel.Broadcast(forOthers, forLeader, forAnonymous, leader);
     }
 
     /// <summary>One bidder's own verdict. Buffered, then sent to their streams only.</summary>
@@ -105,11 +111,16 @@ public sealed class FanOut
         public bool Remove(Subscription subscription) =>
             _subscribers.TryRemove(subscription, out _) && _subscribers.IsEmpty;
 
-        public void Broadcast(string forOthers, string forLeader, Guid? leader)
+        public void Broadcast(
+            string forOthers, string forLeader, string forAnonymous, Guid? leader)
         {
             foreach (var subscriber in _subscribers.Keys)
-                subscriber.Offer(subscriber.Viewer is not null && subscriber.Viewer == leader
-                    ? forLeader
+                subscriber.Offer(
+                    // A null viewer is a visitor who never signed in, and the first
+                    // branch has to be theirs: they are also "not the leader", so
+                    // testing for the leader first would hand them the labelled body.
+                    subscriber.Viewer is null ? forAnonymous
+                    : subscriber.Viewer == leader ? forLeader
                     : forOthers);
         }
 

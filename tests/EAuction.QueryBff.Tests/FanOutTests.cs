@@ -41,9 +41,9 @@ public class FanOutTests
         using var anonymous = fanOut.Subscribe(Auction, null);
         using var bidder = fanOut.Subscribe(Auction, Guid.NewGuid());
 
-        fanOut.PublishPrice(Auction, "others", "leader", leader: null);
+        fanOut.PublishPrice(Auction, "others", "leader", "anonymous", leader: null);
 
-        Assert.Equal(["others"], await DrainAsync(anonymous, 1));
+        Assert.Equal(["anonymous"], await DrainAsync(anonymous, 1));
         Assert.Equal(["others"], await DrainAsync(bidder, 1));
     }
 
@@ -60,11 +60,14 @@ public class FanOutTests
         using var khalidStream = fanOut.Subscribe(Auction, khalid);
         using var anonymous = fanOut.Subscribe(Auction, null);
 
-        fanOut.PublishPrice(Auction, "masked", "you-lead", leader: sara);
+        fanOut.PublishPrice(Auction, "masked", "you-lead", "anonymous", leader: sara);
 
         Assert.Equal(["you-lead"], await DrainAsync(saraStream, 1));
         Assert.Equal(["masked"], await DrainAsync(khalidStream, 1));
-        Assert.Equal(["masked"], await DrainAsync(anonymous, 1));
+
+        // Not the masked body either: a visitor who never signed in is told the
+        // price and nothing about who is bidding for it.
+        Assert.Equal(["anonymous"], await DrainAsync(anonymous, 1));
     }
 
     [Fact]
@@ -75,9 +78,9 @@ public class FanOutTests
         var fanOut = new FanOut();
         using var anonymous = fanOut.Subscribe(Auction, null);
 
-        fanOut.PublishPrice(Auction, "masked", "you-lead", leader: null);
+        fanOut.PublishPrice(Auction, "masked", "you-lead", "anonymous", leader: null);
 
-        Assert.Equal(["masked"], await DrainAsync(anonymous, 1));
+        Assert.Equal(["anonymous"], await DrainAsync(anonymous, 1));
     }
 
     [Fact]
@@ -153,7 +156,7 @@ public class FanOutTests
         using var stalled = fanOut.Subscribe(Auction, null);
 
         for (var i = 0; i < 500; i++)
-            fanOut.PublishPrice(Auction, $"price-{i}", "leader", leader: null);
+            fanOut.PublishPrice(Auction, $"other-{i}", "leader", $"price-{i}", leader: null);
 
         var received = await DrainAsync(stalled, 32);
 

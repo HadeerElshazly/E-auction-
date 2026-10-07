@@ -60,13 +60,15 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             e.ToTable("plot");
             e.HasKey(x => x.Id);
             e.Property(x => x.Id).ValueGeneratedNever();
-            e.Property(x => x.DeedNumber).HasMaxLength(100).IsRequired();
+            e.Property(x => x.PlotNumber).HasMaxLength(100).IsRequired();
+            e.Property(x => x.StreetWidthMeters).HasPrecision(8, 2);
+            e.Property(x => x.FrontageMeters).HasPrecision(8, 2);
             e.Property(x => x.AreaSqm).HasPrecision(18, 2);
             e.Property(x => x.Latitude).HasMaxLength(50);
             e.Property(x => x.Longitude).HasMaxLength(50);
             e.Property(x => x.DescriptionAr).HasMaxLength(2000);
             e.Property(x => x.DescriptionEn).HasMaxLength(2000);
-            e.HasIndex(x => new { x.AuctionId, x.DeedNumber }).IsUnique();
+            e.HasIndex(x => new { x.AuctionId, x.PlotNumber }).IsUnique();
         });
 
         b.Entity<Award>(e =>

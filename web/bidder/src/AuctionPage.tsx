@@ -234,7 +234,13 @@ export function AuctionPage({
                 )}
                 {auction.bidderVisibility === 'Named' && (
                   // Said before the deposit, not after (D-22).
-                  <div className="notice info">في هذا المزاد يظهر اسم المزايد الأعلى لبقية المزايدين وللعامة.</div>
+                  //
+                  // «وللعامة» was dropped from this sentence when anonymous
+                  // visitors stopped receiving any bidder label: it promised the
+                  // public would see the name, and the public no longer does. The
+                  // notice has to describe what the system actually does — a
+                  // citizen reads it before committing a deposit.
+                  <div className="notice info">في هذا المزاد يظهر اسم المزايد الأعلى لبقية المزايدين المشاركين في المزاد.</div>
                 )}
 
                 {auction.attachments.length > 0 && (
@@ -289,8 +295,10 @@ export function AuctionPage({
                   <table>
                     <thead>
                       <tr>
-                        <th>رقم الصك</th>
+                        <th>رقم القطعة</th>
                         <th>المساحة</th>
+                        <th>عرض الشارع</th>
+                        <th>الواجهة</th>
                         <th>الموقع</th>
                         <th>الوصف</th>
                       </tr>
@@ -298,8 +306,22 @@ export function AuctionPage({
                     <tbody>
                       {auction.plots.map((p) => (
                         <tr key={p.id}>
-                          <td><span className="num strong">{p.deedNumber}</span></td>
+                          <td><span className="num strong">{p.plotNumber}</span></td>
                           <td><span className="num">{area(p.areaSqm)}</span> م²</td>
+                          <td>
+                            {p.streetWidthMeters === null ? (
+                              <span className="muted">غير محدد</span>
+                            ) : (
+                              <><span className="num">{area(p.streetWidthMeters)}</span> م</>
+                            )}
+                          </td>
+                          <td>
+                            {p.frontageMeters === null ? (
+                              <span className="muted">غير محدد</span>
+                            ) : (
+                              <><span className="num">{area(p.frontageMeters)}</span> م</>
+                            )}
+                          </td>
                           <td>
                             {p.latitude && p.longitude ? (
                               <a

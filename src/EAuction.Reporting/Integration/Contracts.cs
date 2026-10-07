@@ -46,12 +46,14 @@ public static class InboundEvents
 public sealed record PlotPayload
 {
     public Guid Id { get; init; }
-    public string DeedNumber { get; init; } = "";
+    public string PlotNumber { get; init; } = "";
     public decimal AreaSqm { get; init; }
     public string? Latitude { get; init; }
     public string? Longitude { get; init; }
     public string? DescriptionAr { get; init; }
     public string? DescriptionEn { get; init; }
+    public decimal? StreetWidthMeters { get; init; }
+    public decimal? FrontageMeters { get; init; }
 }
 
 public sealed record AuctionApprovedPayload

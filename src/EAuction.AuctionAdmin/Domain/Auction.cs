@@ -160,9 +160,9 @@ public sealed class Auction
     public void AddPlot(Plot plot)
     {
         RequireDraft("add a plot to");
-        if (_plots.Any(p => p.DeedNumber == plot.DeedNumber))
+        if (_plots.Any(p => p.PlotNumber == plot.PlotNumber))
             throw new AuctionValidationException(
-                new[] { $"Plot with deed number {plot.DeedNumber} is already in this auction." });
+                new[] { $"القطعة رقم {plot.PlotNumber} مضافة مسبقاً إلى هذا المزاد." });
         _plots.Add(plot);
     }
 
@@ -309,10 +309,11 @@ public sealed class Auction
             PlotCount = _plots.Count,
             TotalAreaSqm = TotalAreaSqm,
             Plots = _plots
-                .OrderBy(p => p.DeedNumber, StringComparer.Ordinal)
+                .OrderBy(p => p.PlotNumber, StringComparer.Ordinal)
                 .Select(p => new PublicPlot(
-                    p.Id, p.DeedNumber, p.AreaSqm,
-                    p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn))
+                    p.Id, p.PlotNumber, p.AreaSqm,
+                    p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn,
+                    p.StreetWidthMeters, p.FrontageMeters))
                 .ToArray(),
             Attachments = _attachments
                 .Select(a => new PublicDocument(a.DocumentId, a.TitleAr))

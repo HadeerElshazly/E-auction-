@@ -64,14 +64,19 @@ test('an auction runs from draft to award through the portals', async ({ browser
       // Each iteration waits for the count in the heading to reach its own number
       // before the next one types: the form clears itself once the POST returns, so
       // typing straight into the next plot races that reset and loses the input.
-      const plots: Array<[string, string]> = [
-        ['1010/5', '812.5'],
-        ['1010/6', '940'],
-        ['1010/7', '756.25'],
+      // Plot number, street width and frontage — the three a bidder values the
+      // land on. The last plot leaves the two measurements empty, which is the
+      // case that must not reach the domain as a zero.
+      const plots: Array<[string, string, string, string]> = [
+        ['1005', '812.5', '20', '25.5'],
+        ['1006', '940', '25', '30'],
+        ['1007', '756.25', '', ''],
       ]
-      for (const [index, [deed, area]] of plots.entries()) {
-        await page.getByLabel('رقم الصك').fill(deed)
+      for (const [index, [number, area, streetWidth, frontage]] of plots.entries()) {
+        await page.getByLabel('رقم القطعة').fill(number)
         await page.getByLabel('المساحة (م²)').fill(area)
+        await page.getByLabel('عرض الشارع (م)').fill(streetWidth)
+        await page.getByLabel('الواجهة (م)').fill(frontage)
         const add = page.getByRole('button', { name: '+ إضافة قطعة' })
         await expect(add).toBeEnabled()
         await add.click()

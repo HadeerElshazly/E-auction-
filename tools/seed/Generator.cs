@@ -90,11 +90,16 @@ public static class Generator
                 .Select(p =>
                 {
                     var area = 600 + random.Next(0, 24) * 100;
+
+                    // A plan number, not a deed number: short, numeric, and what the
+                    // plan itself prints beside the parcel.
                     return new Plot(
                         Id($"plot:{name}:{p}"),
-                        $"{430000 + i * 7 + p}/{2 + (i % 8)}",
+                        $"{1200 + i * 7 + p}",
                         area,
-                        $"{district.Ar} — قطعة رقم {p + 1}");
+                        $"{district.Ar} — قطعة رقم {p + 1}",
+                        StreetWidthMeters: 15 + random.Next(0, 4) * 5,
+                        FrontageMeters: 20 + random.Next(0, 5) * 2.5m);
                 })
                 .ToArray();
 

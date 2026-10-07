@@ -22,8 +22,12 @@ export interface AuctionSummary {
 
 export interface Plot {
   id: string
-  deedNumber: string
+  /** رقم القطعة on the approved plan — not a title deed number. */
+  plotNumber: string
   areaSqm: number
+  /** Metres. Null while the plot is listed but not yet surveyed. */
+  streetWidthMeters: number | null
+  frontageMeters: number | null
   latitude: string | null
   longitude: string | null
   descriptionAr: string | null

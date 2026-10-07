@@ -130,8 +130,9 @@ public sealed class CatalogueConsumer(
             TotalAreaSqm = p.TotalAreaSqm,
             Plots = (p.Plots ?? [])
                 .Select(x => new PlotEntry(
-                    x.Id, x.DeedNumber, x.AreaSqm,
-                    x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn))
+                    x.Id, x.PlotNumber, x.AreaSqm,
+                    x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn,
+                    x.StreetWidthMeters, x.FrontageMeters))
                 .ToArray(),
             CoverImageDocumentId = p.CoverImageDocumentId,
             Attachments = (p.Attachments ?? [])
@@ -194,7 +195,7 @@ public sealed class CatalogueConsumer(
     }
 
     /// <summary>
-    /// Sends a price change to everyone watching, in the two variants that exist.
+    /// Sends a price change to everyone watching, in the three variants that exist.
     ///
     /// Pushed from here rather than from the endpoint, so a price reaches a watcher
     /// because the processor published it and not because the watcher asked.
@@ -208,6 +209,7 @@ public sealed class CatalogueConsumer(
             entry.AuctionId,
             LiveViews.Serialise(LiveViews.ForOthers(entry, label, now)),
             LiveViews.Serialise(LiveViews.ForLeader(entry, label, now)),
+            LiveViews.Serialise(LiveViews.ForAnonymous(entry, now)),
             entry.LeaderBidderId);
     }
 
@@ -290,12 +292,14 @@ public sealed class CatalogueConsumer(
     private sealed record PlotPayload
     {
         public Guid Id { get; init; }
-        public string DeedNumber { get; init; } = "";
+        public string PlotNumber { get; init; } = "";
         public decimal AreaSqm { get; init; }
         public string? Latitude { get; init; }
         public string? Longitude { get; init; }
         public string? DescriptionAr { get; init; }
         public string? DescriptionEn { get; init; }
+        public decimal? StreetWidthMeters { get; init; }
+        public decimal? FrontageMeters { get; init; }
     }
 
     private sealed record CurrentWinnerPayload

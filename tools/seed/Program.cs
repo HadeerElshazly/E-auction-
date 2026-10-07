@@ -115,8 +115,10 @@ foreach (var a in plan)
         Plots = a.Plots.Select(p => new
         {
             p.Id,
-            p.DeedNumber,
+            p.PlotNumber,
             p.AreaSqm,
+            p.StreetWidthMeters,
+            p.FrontageMeters,
             Latitude = (string?)null,
             Longitude = (string?)null,
             DescriptionAr = p.DescriptionAr,

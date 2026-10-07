@@ -24,7 +24,9 @@ public sealed record SeededAuction
     public decimal TotalAreaSqm => Plots.Sum(p => p.AreaSqm);
 }
 
-public sealed record Plot(Guid Id, string DeedNumber, decimal AreaSqm, string DescriptionAr);
+public sealed record Plot(
+    Guid Id, string PlotNumber, decimal AreaSqm, string DescriptionAr,
+    decimal StreetWidthMeters, decimal FrontageMeters);
 
 /// <summary>A bidder's involvement in one auction.</summary>
 public sealed record Participant(

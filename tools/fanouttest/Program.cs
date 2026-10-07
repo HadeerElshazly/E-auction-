@@ -74,9 +74,10 @@ await Publish(Topics.Upcoming, "AuctionApproved", new
     totalAreaSqm = 600m,
     plots = new[]
     {
-        new { id = Guid.NewGuid(), deedNumber = "LOAD/1", areaSqm = 600m,
+        new { id = Guid.NewGuid(), plotNumber = "9001", areaSqm = 600m,
               latitude = (string?)null, longitude = (string?)null,
-              descriptionAr = (string?)null, descriptionEn = (string?)null }
+              descriptionAr = (string?)null, descriptionEn = (string?)null,
+              streetWidthMeters = (decimal?)null, frontageMeters = (decimal?)null }
     }
 });
 

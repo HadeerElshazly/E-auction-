@@ -112,8 +112,12 @@ app.MapGet("/reports/auctions/{id:guid}", async (
     // opens to see what was actually in the package.
     var plots = await db.Plots.AsNoTracking()
         .Where(p => p.AuctionId == id)
-        .OrderBy(p => p.DeedNumber)
-        .Select(p => new { p.DeedNumber, p.AreaSqm, p.Latitude, p.Longitude, p.DescriptionAr })
+        .OrderBy(p => p.PlotNumber)
+        .Select(p => new
+        {
+            p.PlotNumber, p.AreaSqm, p.StreetWidthMeters, p.FrontageMeters,
+            p.Latitude, p.Longitude, p.DescriptionAr
+        })
         .ToListAsync(ct);
 
     return Results.Ok(new { auction = row, plots });
@@ -185,13 +189,15 @@ app.MapGet("/reports/plots", async (
 
     return Render(http, "plots", rows,
     [
-        "plot_id", "deed_number", "area_sqm", "phase", "auction_id", "auction_name_ar",
+        "plot_id", "plot_number", "area_sqm", "street_width_m", "frontage_m",
+        "phase", "auction_id", "auction_name_ar",
         "outcome", "sold", "package_price", "package_area_sqm", "price_per_sqm",
         "latitude", "longitude",
     ],
     r =>
     [
-        r.PlotId, r.DeedNumber, r.AreaSqm, r.Phase, r.AuctionId, r.AuctionNameAr,
+        r.PlotId, r.PlotNumber, r.AreaSqm, r.StreetWidthMeters, r.FrontageMeters,
+        r.Phase, r.AuctionId, r.AuctionNameAr,
         r.Outcome, r.Sold, r.PackagePriceMinorUnits, r.PackageAreaSqm, r.PricePerSqmMinorUnits,
         r.Latitude, r.Longitude,
     ]);

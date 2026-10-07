@@ -453,4 +453,74 @@ public class BidderVisibilityTests
         Assert.Null(labels.For(named));
         Assert.Null(labels.For(Entry("Masked") with { LeaderBidderId = null }));
     }
+
+    // --- what a visitor who never signed in is told -------------------------
+    //
+    // A citizen browsing public land listings sees the land: the plots, their
+    // numbers and measurements, the description, the location, the documents. They
+    // do not see who is bidding on it, in either visibility mode.
+
+    [Fact]
+    public void An_anonymous_caller_is_given_no_bidder_label_on_a_masked_auction()
+    {
+        var labels = Labels(out _);
+        var masked = Entry("Masked", Sara);
+
+        var view = LiveViews.For(masked, caller: null, labels.For(masked), DateTimeOffset.UtcNow);
+
+        // Not even the pseudonym. «مزايد #2» names nobody, but it still counts
+        // the distinct people in the room and announces each new arrival.
+        Assert.Null(view.LeaderLabel);
+        Assert.False(view.LeaderIsYou);
+        Assert.Null(view.YourWinningBidId);
+    }
+
+    [Fact]
+    public void An_anonymous_caller_is_given_no_bidder_name_on_a_named_auction()
+    {
+        var labels = Labels(out var names);
+        var named = Entry("Named", Sara);
+        names.Remember(named, Sara, "سارة الحربي");
+
+        // The label the server computed is a real citizen's name — proof this test
+        // is not passing because the auction happens to have no label to give.
+        Assert.Equal("سارة الحربي", labels.For(named));
+
+        var view = LiveViews.For(named, caller: null, labels.For(named), DateTimeOffset.UtcNow);
+
+        Assert.Null(view.LeaderLabel);
+        Assert.DoesNotContain(Sara.ToString(), LiveViews.Serialise(view));
+    }
+
+    [Fact]
+    public void A_signed_in_bidder_still_sees_the_label_the_auction_allows()
+    {
+        // The rule is about being anonymous, not about hiding the leader from the
+        // people bidding: D-22 still names bidders to each other on a Named auction
+        // and pseudonymises them on a masked one.
+        var labels = Labels(out var names);
+        var named = Entry("Named", Sara);
+        names.Remember(named, Sara, "سارة الحربي");
+
+        var khalid = Guid.NewGuid();
+        var view = LiveViews.For(named, khalid, labels.For(named), DateTimeOffset.UtcNow);
+
+        Assert.Equal("سارة الحربي", view.LeaderLabel);
+    }
+
+    [Fact]
+    public void The_price_and_the_clock_still_reach_an_anonymous_caller()
+    {
+        // The other half of the requirement: a visitor is denied the bidders, not
+        // the auction. A rule enforced by returning nothing would pass the test
+        // above and break the catalogue.
+        var labels = Labels(out _);
+        var masked = Entry("Masked", Sara) with { PriceMinorUnits = 1_200_000_00 };
+
+        var view = LiveViews.For(masked, caller: null, labels.For(masked), DateTimeOffset.UtcNow);
+
+        Assert.Equal(1_200_000_00, view.PriceMinorUnits);
+        Assert.Equal(masked.Status, view.Status);
+        Assert.Equal(masked.MinimumNextBidMinorUnits, view.MinimumNextBidMinorUnits);
+    }
 }

@@ -90,9 +90,9 @@ public class ConsumerTests : IAsyncLifetime
         Assert.Equal(2, auction.PlotCount);
 
         await using var db = await _db.Factory.CreateDbContextAsync();
-        var deeds = await db.Plots.AsNoTracking().OrderBy(p => p.DeedNumber)
-            .Select(p => p.DeedNumber).ToListAsync();
-        Assert.Equal(["4/س/1200", "4/س/1201"], deeds);
+        var numbers = await db.Plots.AsNoTracking().OrderBy(p => p.PlotNumber)
+            .Select(p => p.PlotNumber).ToListAsync();
+        Assert.Equal(["1200", "1201"], numbers);
     }
 
     [Fact]

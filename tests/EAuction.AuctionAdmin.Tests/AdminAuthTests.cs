@@ -94,7 +94,7 @@ public class AdminAuthTests : IDisposable
 
         var plots = await As(Roles.AwardCommittee)
             .PostAsJsonAsync($"/auctions/{auctionId}/plots",
-                new { deedNumber = "X", areaSqm = 1.0m });
+                new { plotNumber = "X", areaSqm = 1.0m });
         Assert.Equal(HttpStatusCode.Forbidden, plots.StatusCode);
     }
 

@@ -111,9 +111,9 @@ public static class Publish
 
     public static object[] DefaultPlots() =>
     [
-        new { id = Guid.NewGuid(), deedNumber = "4/س/1200", areaSqm = 600.00m,
+        new { id = Guid.NewGuid(), plotNumber = "1200", areaSqm = 600.00m,
               latitude = "21.5", longitude = "39.2", descriptionAr = "قطعة أ" },
-        new { id = Guid.NewGuid(), deedNumber = "4/س/1201", areaSqm = 400.00m,
+        new { id = Guid.NewGuid(), plotNumber = "1201", areaSqm = 400.00m,
               latitude = "21.6", longitude = "39.3", descriptionAr = "قطعة ب" },
     ];
 
