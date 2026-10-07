@@ -1066,3 +1066,22 @@ tr.row-lead td { background: var(--accent-soft, rgba(13, 148, 136, 0.08)); font-
 .decision-list { padding-inline-start: 20px; display: grid; gap: 10px; }
 .bid-history-card summary { cursor: pointer; list-style: none; }
 .bid-history-card[open] summary { margin-bottom: 12px; }
+
+/* متابعة الترسية — the committee's decision cell. */
+.decision-cell { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.decision-cell input { flex: 1 1 160px; min-width: 140px; }
+
+/* حتى البدء / حتى الإغلاق on the auction page. */
+.countdown-panel {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin: 14px 0; padding: 12px 16px; border-radius: 12px;
+  background: var(--accent-soft, rgba(13, 148, 136, 0.08));
+}
+.countdown-panel-label { font-weight: 600; }
+.countdown-panel-units { display: flex; gap: 8px; direction: rtl; }
+.countdown-panel-unit {
+  display: grid; justify-items: center; min-width: 58px; padding: 6px 8px;
+  border-radius: 10px; background: var(--surface, #fff); border: 1px solid var(--border, #e5e7eb);
+}
+.countdown-panel-unit b { font-size: 1.4rem; line-height: 1.2; }
+.countdown-panel-unit span { font-size: 0.75rem; color: var(--muted, #64748b); }

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { api, config, sar, untilText, when, type Session } from '@eauction/shared'
+import { useEffect, useMemo, useState } from 'react'
+import { CardClock, api, config, sar, when, type Session } from '@eauction/shared'
 import type { AuctionListItem } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
@@ -22,12 +22,53 @@ interface Props {
  * — an auction is a thing with a place and a clock, and the card is what makes the
  * clock the most prominent thing on it.
  */
+/**
+ * The bidder catalogue's chips, in the same order and with the same grouping
+ * (EAuction.Core.StageGroups, applied by the server), plus «قيد الإعداد» — drafts
+ * and auctions under review, which the public never sees.
+ */
+const filters = [
+  { key: 'all', ar: 'الكل' },
+  { key: 'preparing', ar: 'قيد الإعداد' },
+  { key: 'upcoming', ar: 'القادمة' },
+  { key: 'live', ar: 'الجارية' },
+  { key: 'closed', ar: 'المنتهية' },
+] as const
+
+type FilterKey = (typeof filters)[number]['key']
+
 export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCreate }: Props) {
   const live = useLiveFigures()
   const leaders = useLeaders(session)
   const [nameAr, setNameAr] = useState('')
   const [nameEn, setNameEn] = useState('')
   const [creating, setCreating] = useState(false)
+
+  // Filtered and searched on the server, like the catalogue: every client gets the
+  // same list and the chips' counts are real. Re-asked whenever the app reloads its
+  // own list, so an approval or a new draft shows up here at once.
+  const client = useMemo(() => api({ baseUrl: config.adminApi, session }), [session])
+  const [query, setQuery] = useState('')
+  const [debounced, setDebounced] = useState('')
+  const [filter, setFilter] = useState<FilterKey>('all')
+  const [page, setPage] = useState<{ items: AuctionListItem[]; counts: Record<FilterKey, number> } | null>(null)
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(query.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [query])
+
+  useEffect(() => {
+    const params = new URLSearchParams({ take: '200' })
+    if (filter !== 'all') params.set('state', filter)
+    if (debounced) params.set('q', debounced)
+    client
+      .get<{ items: AuctionListItem[]; counts: Record<FilterKey, number> }>(`/auctions?${params}`)
+      .then(setPage)
+      .catch(() => undefined)
+  }, [client, filter, debounced, auctions])
+
+  const visible = page?.items ?? auctions
 
   return (
     <>
@@ -114,13 +155,42 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
         </div>
       )}
 
+      {auctions.length > 0 && (
+        <div className="catalogue-tools">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="ابحث باسم المزاد أو المخطط…"
+            aria-label="البحث في المزادات"
+          />
+          <div className="chips" role="tablist" aria-label="تصفية حسب الحالة">
+            {filters.map((f) => (
+              <button
+                key={f.key}
+                role="tab"
+                aria-selected={filter === f.key}
+                className={filter === f.key ? 'chip on' : 'chip'}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.ar} <span className="num">({page?.counts[f.key] ?? 0})</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {auctions.length === 0 ? (
         <div className="card">
           <p className="muted small" style={{ margin: 0 }}>لا توجد مزادات بعد.</p>
         </div>
+      ) : visible.length === 0 ? (
+        <div className="card">
+          <p className="muted" style={{ margin: 0 }}>لا توجد مزادات مطابقة للبحث أو التصفية.</p>
+        </div>
       ) : (
         <div className="auction-grid">
-          {auctions.map((a) => (
+          {visible.map((a) => (
             <AuctionCard
               key={a.id}
               session={session}
@@ -228,7 +298,12 @@ function AuctionCard({
           {auction.plotCount} قطعة · <span className="num">{auction.totalAreaSqm}</span> م²
         </span>
         <span className="channel at-end">{onsite ? '📍 حضوري' : '🌐 إلكتروني'}</span>
-        <Clock auction={auction} endsAt={figures?.effectiveEndsAt ?? auction.endsAt} />
+        <CardClock
+          status={auction.status}
+          channel={auction.channel}
+          startsAt={auction.startsAt}
+          endsAt={figures?.effectiveEndsAt ?? auction.endsAt}
+        />
       </div>
 
       <div className="body">
@@ -272,50 +347,3 @@ function AuctionCard({
   )
 }
 
-/**
- * The strip over the cover: the one time that matters for the auction's state, as
- * on the citizen's card — to the start while it is upcoming, to the close while it
- * runs. Nothing once it is over: a countdown on a cancelled or awarded auction read
- * as if it were still to happen.
- *
- * Ticks on its own rather than from a prop, because the list around it refreshes on
- * a five-second poll and a countdown that only moved with the list would stutter.
- */
-function Clock({ auction, endsAt }: { auction: AuctionListItem; endsAt: string | null }) {
-  const [, setNow] = useState(() => Date.now())
-
-  const upcoming = ['Approved', 'Scheduled'].includes(auction.status)
-  const live = auction.status === 'Live'
-  const ticking = (upcoming && auction.startsAt) || (live && endsAt)
-
-  useEffect(() => {
-    if (!ticking) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [ticking])
-
-  if (live && auction.channel === 'Onsite') {
-    // A hall auction is closed by the hammer, not a clock (§29).
-    return (
-      <div className="countdown wide" aria-hidden="true">
-        <div>
-          <b>جارٍ في القاعة</b>
-          <span>يُغلق بقرار مدير المزاد</span>
-        </div>
-      </div>
-    )
-  }
-
-  if (!ticking) return null
-  const target = upcoming ? auction.startsAt! : endsAt!
-  if (new Date(target).getTime() <= Date.now()) return null
-
-  return (
-    <div className="countdown wide" aria-hidden="true">
-      <div>
-        <b>{untilText(target)}</b>
-        <span>{upcoming ? 'حتى البدء' : 'حتى الإغلاق'}</span>
-      </div>
-    </div>
-  )
-}

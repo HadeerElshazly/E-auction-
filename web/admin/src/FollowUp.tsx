@@ -39,6 +39,7 @@ interface Award {
   amountMinorUnits: number
   complianceDeadline: string
   settledAt: string | null
+  winnerNotifiedAt: string | null
   paidMinorUnits: number
   remainingMinorUnits: number
   overdue: boolean
@@ -82,14 +83,40 @@ interface Props {
   session: Session
   /** Only administrators record; the committee and finance read. */
   canRecord: boolean
+  /** The committee decides here too: confirm or refuse a result, approve a settlement. */
+  canDecide: boolean
+  committeeUserId: string
+  /**
+   * Runs a committee decision through the portal's step-up: confirming an award
+   * asks for a fresh second factor, exactly as it does on the auction page.
+   */
+  runDecision: (work: () => Promise<unknown>) => Promise<unknown>
+  onOpenAuction?: (id: string) => void
 }
 
-export function FollowUp({ session, canRecord }: Props) {
+/** A result waiting for the committee: who the processor put forward, at what price. */
+interface PendingResult {
+  id: string
+  nameAr: string
+  candidateId: string | null
+  amountMinorUnits: number | null
+}
+
+export function FollowUp({
+  session,
+  canRecord,
+  canDecide,
+  committeeUserId,
+  runDecision,
+  onOpenAuction,
+}: Props) {
   const admin = useMemo(() => api({ baseUrl: config.adminApi, session }), [session])
   const participant = useMemo(() => api({ baseUrl: config.participantApi, session }), [session])
   const documents = useMemo(() => api({ baseUrl: config.documentsApi, session }), [session])
 
   const [awards, setAwards] = useState<FollowUpEntry[] | null>(null)
+  const [pending, setPending] = useState<PendingResult[]>([])
+  const [reasons, setReasons] = useState<Record<string, string>>({})
   const [deposits, setDeposits] = useState<Deposit[] | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -104,6 +131,28 @@ export function FollowUp({ session, canRecord }: Props) {
       setAwards(a.items)
       setDeposits(d.items)
       setError(null)
+
+      // Results awaiting the committee. The list gives the auctions; each one's
+      // candidate and amount come from the auction itself.
+      const waiting = await admin.get<{ items: Array<{ id: string; nameAr: string }> }>(
+        '/auctions?status=PendingAward&take=50',
+      )
+      setPending(
+        await Promise.all(
+          waiting.items.map(async (x) => {
+            const full = await admin.get<{
+              pendingCandidateBidderId: string | null
+              pendingCandidateAmountMinorUnits: number | null
+            }>(`/auctions/${x.id}`)
+            return {
+              id: x.id,
+              nameAr: x.nameAr,
+              candidateId: full.pendingCandidateBidderId,
+              amountMinorUnits: full.pendingCandidateAmountMinorUnits,
+            }
+          }),
+        ),
+      )
     } catch (e) {
       setError(describe(e))
     }
@@ -126,9 +175,15 @@ export function FollowUp({ session, canRecord }: Props) {
     }
   }
 
+  // The committee's decisions go through the step-up runner, not straight to the API.
+  const decide = (work: () => Promise<unknown>) => act(() => runDecision(work))
+
   // The award carries the winner's id; the name is the participant service's,
   // through its staff lookup — the committee and operators read this page too.
-  const bidder = useBidders(session, awards?.map((a) => a.award.bidderId) ?? [])
+  const bidder = useBidders(session, [
+    ...(awards?.map((a) => a.award.bidderId) ?? []),
+    ...pending.map((p) => p.candidateId),
+  ])
 
   const auctionName = (id: string) =>
     awards?.find((a) => a.auctionId === id)?.nameAr ?? id.slice(0, 8)
@@ -157,6 +212,87 @@ export function FollowUp({ session, canRecord }: Props) {
         <div className="notice error">
           {overdue === 1 ? 'ترسية واحدة متعثرة' : `${overdue} ترسيات متعثرة`} — تجاوزت مهلة السداد
           دون سداد كامل، وتنتظر مراجعة يدوية.
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <div className="card" data-testid="pending-decisions">
+          <div className="section-head">
+            <h2>بانتظار قرار لجنة الترسية</h2>
+            <span className="pill wait">{pending.length}</span>
+          </div>
+          <p className="lede">
+            نتائج أُغلقت ورشّح المعالج أعلى مزايد فيها. تأكيد الترسية يطلب التحقق بالرمز؛ رفض النتيجة
+            يتطلب سبباً ولا ينقلها إلى المزايد التالي.
+          </p>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>المزاد</th>
+                  <th>المرشّح</th>
+                  <th>المبلغ</th>
+                  <th>{canDecide ? 'القرار' : ''}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pending.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      <div className="strong">{p.nameAr}</div>
+                      {onOpenAuction && (
+                        <button className="ghost small" onClick={() => onOpenAuction(p.id)}>
+                          فتح المزاد
+                        </button>
+                      )}
+                    </td>
+                    <td>{p.candidateId ? bidder(p.candidateId)?.nameAr ?? '…' : '—'}</td>
+                    <td className="num">{p.amountMinorUnits != null ? sar(p.amountMinorUnits, 'ar') : '—'}</td>
+                    <td>
+                      {canDecide ? (
+                        <div className="decision-cell">
+                          <button
+                            className="primary"
+                            disabled={busy || !p.candidateId}
+                            onClick={() =>
+                              void decide(() =>
+                                admin.post(`/auctions/${p.id}/award`, { committeeUserId }),
+                              )
+                            }
+                          >
+                            تأكيد الترسية
+                          </button>
+                          <input
+                            placeholder="سبب رفض النتيجة"
+                            aria-label={`سبب رفض نتيجة ${p.nameAr}`}
+                            value={reasons[p.id] ?? ''}
+                            onChange={(e) => setReasons({ ...reasons, [p.id]: e.target.value })}
+                          />
+                          <button
+                            className="danger"
+                            disabled={busy || !(reasons[p.id] ?? '').trim()}
+                            onClick={() => {
+                              if (!window.confirm('رفض النتيجة يجعل المزاد غير مُرسى ولا ينتقل للمزايد التالي. متابعة؟'))
+                                return
+                              void decide(() =>
+                                admin.post(`/auctions/${p.id}/result/reject`, {
+                                  reason: (reasons[p.id] ?? '').trim(),
+                                }),
+                              )
+                            }}
+                          >
+                            رفض النتيجة
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="muted small">قرار لجنة الترسية</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -198,8 +334,10 @@ export function FollowUp({ session, canRecord }: Props) {
                       expanded={isOpen}
                       onToggle={() => setOpen(isOpen ? null : e.auctionId)}
                       canRecord={canRecord}
+                      canDecide={canDecide}
                       busy={busy}
                       onAct={act}
+                      onDecide={decide}
                       admin={admin}
                       documents={documents}
                     />
@@ -269,8 +407,10 @@ function FollowUpRows({
   expanded,
   onToggle,
   canRecord,
+  canDecide,
   busy,
   onAct,
+  onDecide,
   admin,
   documents,
 }: {
@@ -280,8 +420,10 @@ function FollowUpRows({
   expanded: boolean
   onToggle: () => void
   canRecord: boolean
+  canDecide: boolean
   busy: boolean
   onAct: (work: () => Promise<unknown>) => Promise<void>
+  onDecide: (work: () => Promise<unknown>) => Promise<void>
   admin: ReturnType<typeof api>
   documents: ReturnType<typeof api>
 }) {
@@ -343,9 +485,29 @@ function FollowUpRows({
         </td>
         <td><span className={`pill ${transfer.tone}`}>{transfer.ar}</span></td>
         <td>
-          <button className="ghost" onClick={onToggle} aria-expanded={expanded}>
-            {expanded ? 'إخفاء' : 'التفاصيل'}
-          </button>
+          <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            {/* «اعتماد التسوية»: the committee's, once the price is paid in full
+                and the winner notified — the same rule as on the auction page. */}
+            {canDecide && entry.status === 'Awarded' && (
+              <button
+                className="primary"
+                disabled={busy || a.remainingMinorUnits > 0 || !a.winnerNotifiedAt}
+                title={
+                  a.remainingMinorUnits > 0
+                    ? `المتبقي ${sar(a.remainingMinorUnits, 'ar')}`
+                    : !a.winnerNotifiedAt
+                      ? 'لم يُشعَر الفائز بعد'
+                      : undefined
+                }
+                onClick={() => void onDecide(() => admin.post(`/auctions/${entry.auctionId}/settle`))}
+              >
+                اعتماد التسوية
+              </button>
+            )}
+            <button className="ghost" onClick={onToggle} aria-expanded={expanded}>
+              {expanded ? 'إخفاء' : 'التفاصيل'}
+            </button>
+          </div>
         </td>
       </tr>
 

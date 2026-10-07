@@ -80,19 +80,9 @@ app.MapGet("/health/ready", (CatalogueConsumer c) =>
 
 app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
 {
-    var now = DateTimeOffset.UtcNow;
-
-    // The status groups the catalogue's chips offer, decided here so every client
-    // groups the same way.
-    bool InState(AuctionEntry a, string? s) => s?.ToLowerInvariant() switch
-    {
-        null or "" or "all" => true,
-        "upcoming" => a.Status == "Scheduled" && a.StartsAt > now,
-        "live" => a.Status == "Live",
-        "closed" => a.Status is "Closed" or "PendingAward" or "Unsold" or "Cancelled"
-            or "Awarded" or "WinnerDisqualified" or "Settled",
-        _ => true
-    };
+    // The chips' grouping is shared with the administrators' list (StageGroups), so
+    // an auction is "upcoming" or "finished" on both portals alike.
+    bool InState(AuctionEntry a, string? s) => StageGroups.In(a.Status, s);
 
     // Searched on the server, Arabic- and English-name, with the same folding of
     // أ/إ/آ, ة and ى that «طلباتي» uses (EAuction.Core.ArabicText).
@@ -110,7 +100,7 @@ app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
         .ToArray();
 
     // Each status chip's count under the current search.
-    var counts = new[] { "all", "upcoming", "live", "closed" }
+    var counts = StageGroups.Public
         .ToDictionary(k => k, k => all.Count(a => InState(a, k) && Found(a)));
 
     return Results.Ok(new { count = items.Length, items, counts });

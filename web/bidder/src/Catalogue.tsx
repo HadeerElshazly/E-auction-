@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, config, sar, stageLabels, untilText } from '@eauction/shared'
+import { CardClock, api, config, sar, stageLabels } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Props {
@@ -156,14 +156,7 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
                     is legitimately running. Rendering the countdown regardless put
                     "انتهى" on a card that said جارٍ الآن beside it, which is not a
                     cosmetic mismatch — it tells a citizen an open auction is over. */}
-                {live && new Date(a.endsAt).getTime() > Date.now() && (
-                  <div className="countdown wide" aria-hidden="true">
-                    <div>
-                      <b>{untilText(a.endsAt)}</b>
-                      <span>حتى الإغلاق</span>
-                    </div>
-                  </div>
-                )}
+                <CardClock status={a.status} channel={a.channel} startsAt={a.startsAt} endsAt={a.endsAt} />
               </div>
 
               <div className="body">

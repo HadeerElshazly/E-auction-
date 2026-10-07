@@ -524,7 +524,7 @@ app.MapGet("/awards/follow-up", async (
 }).RequireAuthorization(Policies.Reporting);
 
 app.MapGet("/auctions", async (
-    string? status, int? skip, int? take,
+    string? status, string? state, string? q, int? skip, int? take,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     AuctionStatus? filter = null;
@@ -549,6 +549,25 @@ app.MapGet("/auctions", async (
     var query = db.Auctions.AsNoTracking();
     if (filter is not null) query = query.Where(a => a.Status == filter);
 
+    // The same chips and the same search as the public catalogue (StageGroups,
+    // ArabicText), plus «قيد الإعداد» for what the public never sees. The names are
+    // read once and matched here, because the Arabic folding is not SQL's.
+    var needle = ArabicText.Normalise(q);
+    var names = await query.Select(a => new { a.Id, a.Status, a.NameAr, a.NameEn }).ToListAsync(ct);
+    var found = names
+        .Where(a => needle.Length == 0
+            || ArabicText.Normalise(a.NameAr).Contains(needle)
+            || ArabicText.Normalise(a.NameEn).Contains(needle))
+        .ToList();
+    var counts = StageGroups.Staff.ToDictionary(
+        k => k, k => found.Count(a => StageGroups.In(a.Status.ToString(), k)));
+
+    if (needle.Length > 0 || !string.IsNullOrWhiteSpace(state))
+    {
+        var ids = found.Where(a => StageGroups.In(a.Status.ToString(), state)).Select(a => a.Id).ToList();
+        query = query.Where(a => ids.Contains(a.Id));
+    }
+
     var total = await query.CountAsync(ct);
 
     // Newest first, with the id as a tiebreak so paging cannot skip or repeat a
@@ -570,7 +589,7 @@ app.MapGet("/auctions", async (
                 .FirstOrDefault() ?? a.PendingCandidateBidderId))
         .ToListAsync(ct);
 
-    return Results.Ok(new { total, skip = offset, take = page, items = rows });
+    return Results.Ok(new { total, skip = offset, take = page, items = rows, counts });
 })
     .RequireAuthorization();
 

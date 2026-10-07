@@ -68,7 +68,8 @@ export function App() {
   // by design (§34).
   const canWatch = isAdmin || isCommittee || isClerk
 
-  const [view, setView] = useState<View>('auctions')
+  // Back where the decision was being made, after the second-factor round trip.
+  const [view, setView] = useState<View>(() => (confirmed === 'followup-decision' ? 'followup' : 'auctions'))
 
   // A reader lands on their own screen, not on an auction list they cannot use:
   // the auditor on سجل المراجعة, reporting on التقارير.
@@ -303,7 +304,17 @@ export function App() {
         {view === 'monitor' ? (
           <Monitor session={session} />
         ) : view === 'followup' ? (
-          <FollowUp session={session} canRecord={isAdmin} />
+          <FollowUp
+            session={session}
+            canRecord={isAdmin}
+            canDecide={isCommittee}
+            committeeUserId={session.subject}
+            runDecision={(work) => stepUp.run('followup-decision', work)}
+            onOpenAuction={(id) => {
+              setView('auctions')
+              void open(id)
+            }}
+          />
         ) : view === 'inquiries' ? (
           <Inquiries session={session} canAct={canInquire} />
         ) : view === 'reports' ? (

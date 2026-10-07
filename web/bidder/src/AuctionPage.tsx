@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, sar, untilText, when, type Session } from '@eauction/shared'
+import { ApiError, CountdownPanel, api, config, sar, untilText, when, type Session } from '@eauction/shared'
 import type { AuctionDetail, Bidder, Subscription, WinnerAward } from './types'
 import { WinnerPanel } from './WinnerPanel'
 import { useLivePrice } from './useLivePrice'
@@ -178,6 +178,14 @@ export function AuctionPage({
             <span className="timeline-value">{countdown.value}</span>
           </div>
         </div>
+
+        {/* حتى البدء / حتى الإغلاق — ticking, on the page as on the card. A hall
+            auction has no closing clock (§29). */}
+        {lifecycle === 'Scheduled' || lifecycle === 'Approved' ? (
+          <CountdownPanel target={auction.startsAt} label="حتى البدء" />
+        ) : live && !onsite ? (
+          <CountdownPanel target={endsAt} label="حتى الإغلاق" />
+        ) : null}
 
         <div className="stat-grid">
           <div className={`stat${live ? ' highlight' : ''}`}>
