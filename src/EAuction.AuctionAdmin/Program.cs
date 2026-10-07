@@ -80,6 +80,7 @@ builder.Services.AddSingleton<IEventStream>(sp =>
         }));
 builder.Services.AddSingleton<LifecycleConsumer>();
 builder.Services.AddHostedService<LifecycleConsumerService>();
+builder.Services.AddHostedService<AwardSnapshotRepublisher>();
 
 // Compliance window before a winner is disqualified and the award cascades.
 // A contract term, not a tuning knob: it has to match the كراسة الشروط, which
@@ -125,9 +126,10 @@ app.MapPost("/auctions", async (
     // Outside Mutate because the auction does not exist to be loaded yet, so the
     // audit row is written by hand. The transaction is the same one, which is what
     // matters.
-    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var actor = StaffAudit.ActorOf(http);
     db.RecordStaffAction(
-        who, roles, source, "CreateAuctionDraft", AuditSubject.Auction(auction.Id), r.NameAr);
+        actor.Subject, actor.Roles, actor.SourceAddress, "CreateAuctionDraft",
+        AuditSubject.Auction(auction.Id), r.NameAr, actor.Name, auction.NameAr);
 
     await db.SaveChangesAsync(ct);
     return Results.Created($"/auctions/{auction.Id}", AuctionResponse.From(auction));
@@ -151,9 +153,7 @@ app.MapPut("/auctions/{id:guid}", (
         // service's database, for ever. An auditor who needs the figure asks the
         // auction service; what they need from here is that somebody changed it, and
         // who.
-        details: r.ReservePriceMinorUnits is null
-            ? null
-            : "The reserve price was changed (the figure is deliberately not recorded here)."))
+        diff: true))
     .RequireAuthorization(Policies.AuctionAdmin);
 
 // --- قاعة المزاد: the clerk on the floor (§29) ------------------------------
@@ -193,10 +193,10 @@ app.MapGet("/auctions/{id:guid}/clerk-key", async (
     // asked after a disputed hall auction. Writing on a GET is the smaller
     // oddity — the audit row *is* a state change, and the alternative is the one
     // secret this service hands out leaving no trace.
-    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var actor = StaffAudit.ActorOf(http);
     db.RecordStaffAction(
-        who, roles, source, "ReadClerkSigningKey", AuditSubject.Auction(id),
-        $"Key epoch {auction.ClerkKeyEpoch}.");
+        actor.Subject, actor.Roles, actor.SourceAddress, "ReadClerkSigningKey",
+        AuditSubject.Auction(id), $"Key epoch {auction.ClerkKeyEpoch}.", actor.Name, auction.NameAr);
     await db.SaveChangesAsync(ct);
 
     return Results.Ok(new SigningKeyResponse(
@@ -210,7 +210,7 @@ app.MapPost("/auctions/{id:guid}/extend", (
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "ExtendAuction",
         a => a.ExtendByClerk(http.User.SubjectId() ?? Guid.Empty, r.Seconds),
-        details: $"By {r.Seconds} seconds."))
+        details: $"تمديد {r.Seconds} ثانية."))
     .RequireAuthorization(Policies.Operator);
 
 app.MapPost("/auctions/{id:guid}/close", (
@@ -248,6 +248,20 @@ app.MapPost("/auctions/{id:guid}/cover-image", (
         details: $"Document {r.DocumentId}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
+app.MapPost("/auctions/{id:guid}/attachments", (
+    Guid id, AttachmentRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "AddPublicDocument", a => a.AddAttachment(r.DocumentId, r.TitleAr),
+        details: $"Document {r.DocumentId}: {r.TitleAr}."))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+app.MapDelete("/auctions/{id:guid}/attachments/{documentId:guid}", (
+    Guid id, Guid documentId, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "RemovePublicDocument", a => a.RemoveAttachment(documentId),
+        details: $"Document {documentId}."))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
 app.MapGet("/auctions/{id:guid}/validation", async (Guid id, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
@@ -274,6 +288,16 @@ app.MapPost("/auctions/{id:guid}/reject", (
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "RejectAuction", a => a.Reject(r.Reason), details: r.Reason))
     .RequireAuthorization(Policies.AwardCommittee);
+
+// Withdrawing an approved auction before it opens. The auction manager's call, as
+// preparing it was, and audited with its reason — «توثيق الإلغاء المصرح به».
+app.MapPost("/auctions/{id:guid}/cancel", (
+    Guid id, RejectRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "CancelAuction",
+        a => a.Cancel(r.Reason, http.User.SubjectId() ?? Guid.Empty, DateTimeOffset.UtcNow),
+        details: r.Reason))
+    .RequireAuthorization(Policies.AuctionAdmin);
 
 // --- lifecycle --------------------------------------------------------------
 //
@@ -315,7 +339,11 @@ app.MapPost("/auctions/{id:guid}/award", (
     Guid id, ConfirmAwardRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "ConfirmAward",
-        a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow)))
+        a => a.ConfirmAward(r.CommitteeUserId, DateTimeOffset.UtcNow, complianceWindow),
+        after: a => a.CurrentAward is { } w
+            ? $"الفائز: {w.BidderId} · مبلغ الترسية: {AuctionChanges.Money(w.AmountMinorUnits)} · "
+              + $"مهلة السداد: {AuctionChanges.Date(w.ComplianceDeadline)}"
+            : null))
     // The single most consequential act in the platform: it transfers a parcel of
     // state land to a named person. A committee member's role is not enough on its
     // own — the second factor is what ties the decision to the person, which is
@@ -387,7 +415,28 @@ app.MapPost("/auctions/{id:guid}/award/disqualify", (
         a => a.DisqualifyWinner(r.Reason, r.ForfeitDeposit, DateTimeOffset.UtcNow),
         details: r.ForfeitDeposit
             ? $"Deposit forfeited. {r.Reason}"
-            : $"Deposit returned. {r.Reason}"))
+            : $"Deposit returned. {r.Reason}",
+        after: a => a.Awards.Where(w => w.DisqualifiedAt != null).OrderByDescending(w => w.DisqualifiedAt)
+            .FirstOrDefault() is { } w
+            ? $"المزايد: {w.BidderId} · {(r.ForfeitDeposit ? "صودر التأمين" : "يُرد التأمين")} · السبب: {r.Reason}"
+            : null))
+    .RequireAuthorization(Policies.AwardCommittee);
+
+// After a winner is disqualified, the committee — not the system — decides whether
+// the next bidder is put up for award.
+app.MapPost("/auctions/{id:guid}/next-bidder", (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "ReferToNextBidder", a => a.ReferToNextBidder(),
+        after: a => a.PendingCandidateBidderId is { } next
+            ? $"المرشّح التالي: {next} · {AuctionChanges.Money(a.PendingCandidateAmountMinorUnits ?? 0)}"
+            : "أُحيلت الترسية إلى المزايد التالي في الترتيب."))
+    .RequireAuthorization(Policies.AwardCommittee);
+
+app.MapPost("/auctions/{id:guid}/result/reject", (
+    Guid id, RejectRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "RejectPreliminaryResult", a => a.RejectResult(r.Reason),
+        details: r.Reason, after: a => $"السبب: {r.Reason}"))
     .RequireAuthorization(Policies.AwardCommittee);
 
 app.MapPost("/auctions/{id:guid}/unsold", (
@@ -397,14 +446,85 @@ app.MapPost("/auctions/{id:guid}/unsold", (
 
 app.MapPost("/auctions/{id:guid}/settle", (
     Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, http, "SettleAuction", a => a.Settle(DateTimeOffset.UtcNow)))
+    Mutate(f, id, ct, http, "SettleAuction", a => a.Settle(DateTimeOffset.UtcNow),
+        after: a => a.FollowUpAward is { } w
+            ? $"الفائز: {w.BidderId} · المبلغ: {AuctionChanges.Money(w.AmountMinorUnits)} — اكتمل السداد."
+            : null))
     .RequireAuthorization(Policies.AwardCommittee);
 
 // The list the portal opens on. Staff-only: it carries every auction including
 // drafts and rejections, which is a different thing entirely from the public
 // catalogue the query BFF serves.
+// --- award follow-up (الخاصية 11) ------------------------------------------
+//
+// The winner pays the land price, and the title passes at the notary, outside this
+// platform; integrating either is out of the first phase. What is in scope is the
+// manual record, so these endpoints write entries — each with the reference a person
+// can trace it by — and never move money. Recorded by the administrators the
+// requirements give settlement to; read by them, the committee and finance.
+
+app.MapPost("/auctions/{id:guid}/award/receipts", (
+    Guid id, AwardReceiptRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "RecordAwardPayment",
+        a => a.RecordAwardPayment(r.AmountMinorUnits, r.PaidOn, r.Reference, r.DocumentId,
+            http.User.SubjectId() ?? Guid.Empty, DateTimeOffset.UtcNow),
+        details: $"{r.AmountMinorUnits} halalas, reference {r.Reference}.",
+        after: a => $"دفعة: {AuctionChanges.Money(r.AmountMinorUnits)} · المرجع: {r.Reference} · "
+            + $"المتبقي: {AuctionChanges.Money(a.CurrentAward?.RemainingMinorUnits ?? 0)}"))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+app.MapPost("/auctions/{id:guid}/award/deposit-credit", (
+    Guid id, ReferenceRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "CreditDepositToAward",
+        a => a.CreditDepositToAward(r.Reference, http.User.SubjectId() ?? Guid.Empty,
+            DateTimeOffset.UtcNow),
+        details: $"Deposit counted towards the price, reference {r.Reference}.",
+        after: a => $"احتُسب التأمين من الثمن · المرجع: {r.Reference} · "
+            + $"المتبقي: {AuctionChanges.Money(a.CurrentAward?.RemainingMinorUnits ?? 0)}"))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+app.MapPost("/auctions/{id:guid}/award/transfer", (
+    Guid id, TransferRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "UpdateTransfer",
+        a => a.UpdateTransfer(r.Status, r.Reference, r.DocumentId, DateTimeOffset.UtcNow),
+        details: $"Transfer {r.Status}, reference {r.Reference ?? "—"}.",
+        after: _ => $"الإفراغ: {(r.Status switch { TransferStatus.Completed => "مكتمل", TransferStatus.InProgress => "قيد الإجراء", _ => "لم يبدأ" })}"
+            + $" · المرجع: {r.Reference ?? "—"}"))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// Every award still being followed up, overdue first: unpaid, unsettled, or settled
+// with the title not yet transferred. The list «تظهر الترسية غير المسددة» asks for.
+app.MapGet("/awards/follow-up", async (
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var auctions = await db.Auctions
+        .Include(a => a.Awards)
+        .Where(a => a.Status == AuctionStatus.Awarded || a.Status == AuctionStatus.Settled)
+        .AsSplitQuery()
+        .ToListAsync(ct);
+
+    var now = DateTimeOffset.UtcNow;
+    var items = auctions
+        .Select(a => (a, award: a.FollowUpAward))
+        .Where(x => x.award is not null
+                    && !(x.a.Status == AuctionStatus.Settled
+                         && x.award.TransferStatus == TransferStatus.Completed))
+        .Select(x => new FollowUpEntry(
+            x.a.Id, x.a.NameAr, x.a.Status.ToString(), x.a.Phase,
+            AwardResponse.From(x.award!, now)))
+        .OrderByDescending(e => e.Award.Overdue)
+        .ThenBy(e => e.Award.ComplianceDeadline)
+        .ToArray();
+
+    return Results.Ok(new { items });
+}).RequireAuthorization(Policies.Reporting);
+
 app.MapGet("/auctions", async (
-    string? status, int? skip, int? take,
+    string? status, string? state, string? q, int? skip, int? take,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     AuctionStatus? filter = null;
@@ -429,6 +549,25 @@ app.MapGet("/auctions", async (
     var query = db.Auctions.AsNoTracking();
     if (filter is not null) query = query.Where(a => a.Status == filter);
 
+    // The same chips and the same search as the public catalogue (StageGroups,
+    // ArabicText), plus «قيد الإعداد» for what the public never sees. The names are
+    // read once and matched here, because the Arabic folding is not SQL's.
+    var needle = ArabicText.Normalise(q);
+    var names = await query.Select(a => new { a.Id, a.Status, a.NameAr, a.NameEn }).ToListAsync(ct);
+    var found = names
+        .Where(a => needle.Length == 0
+            || ArabicText.Normalise(a.NameAr).Contains(needle)
+            || ArabicText.Normalise(a.NameEn).Contains(needle))
+        .ToList();
+    var counts = StageGroups.Staff.ToDictionary(
+        k => k, k => found.Count(a => StageGroups.In(a.Status.ToString(), k)));
+
+    if (needle.Length > 0 || !string.IsNullOrWhiteSpace(state))
+    {
+        var ids = found.Where(a => StageGroups.In(a.Status.ToString(), state)).Select(a => a.Id).ToList();
+        query = query.Where(a => ids.Contains(a.Id));
+    }
+
     var total = await query.CountAsync(ct);
 
     // Newest first, with the id as a tiebreak so paging cannot skip or repeat a
@@ -440,10 +579,17 @@ app.MapGet("/auctions", async (
             a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
             a.BidderVisibility.ToString(),
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.DepositMinorUnits,
-            a.Plots.Count, a.CreatedAt))
+            a.Plots.Count, a.CreatedAt,
+            a.BookletPriceMinorUnits, a.CoverImageDocumentId, a.Plots.Sum(p => p.AreaSqm),
+            // Who won: the latest award that was not disqualified — settled ones
+            // included — else the candidate before the committee.
+            a.Awards.Where(w => w.DisqualifiedAt == null)
+                .OrderByDescending(w => w.ConfirmedAt)
+                .Select(w => (Guid?)w.BidderId)
+                .FirstOrDefault() ?? a.PendingCandidateBidderId))
         .ToListAsync(ct);
 
-    return Results.Ok(new { total, skip = offset, take = page, items = rows });
+    return Results.Ok(new { total, skip = offset, take = page, items = rows, counts });
 })
     .RequireAuthorization();
 
@@ -489,9 +635,16 @@ static async Task<Auction?> Load(AdminDbContext db, Guid id, CancellationToken c
 /// transaction for the attempt — buys a trail a portal's ordinary validation
 /// failures would fill.
 /// </remarks>
+/// <param name="diff">Record each changed field, before and after (الخاصية 14).</param>
+/// <param name="after">
+/// Details read from the auction once the change is made — the award's winner and
+/// amount, what remains to pay — so the trail says what was decided, not only that
+/// something was.
+/// </param>
 static async Task<IResult> Mutate(
     IDbContextFactory<AdminDbContext> factory, Guid id, CancellationToken ct,
-    HttpContext http, string action, Action<Auction> change, string? details = null)
+    HttpContext http, string action, Action<Auction> change, string? details = null,
+    bool diff = false, Func<Auction, string?>? after = null)
 {
     await using var db = await factory.CreateDbContextAsync(ct);
     var auction = await Load(db, id, ct);
@@ -499,10 +652,15 @@ static async Task<IResult> Mutate(
 
     try
     {
+        var before = diff ? AuctionChanges.Of(auction) : null;
         change(auction);
+        if (before is not null) details = AuctionChanges.Describe(before, AuctionChanges.Of(auction));
+        else if (after is not null) details = after(auction) ?? details;
 
-        var (who, roles, source) = StaffAudit.ActorOf(http);
-        db.RecordStaffAction(who, roles, source, action, AuditSubject.Auction(id), details);
+        var actor = StaffAudit.ActorOf(http);
+        db.RecordStaffAction(
+            actor.Subject, actor.Roles, actor.SourceAddress, action, AuditSubject.Auction(id),
+            details, actor.Name, auction.NameAr);
 
         await db.SaveChangesAsync(ct);
         return Results.Ok(AuctionResponse.From(auction));
@@ -545,6 +703,8 @@ public sealed record AssignClerkRequest(Guid ClerkUserId);
 public sealed record ExtendRequest(int Seconds);
 public sealed record SigningKeyResponse(string SecretHex, int KeyEpoch);
 
+public sealed record AttachmentRequest(Guid DocumentId, string TitleAr);
+
 public sealed record AddPlotRequest(
     string DeedNumber, decimal AreaSqm, string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn);
@@ -575,7 +735,11 @@ public sealed record AuctionListItem(
     Guid Id, string Status, string NameAr, string NameEn, string Channel, string BidderVisibility,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long DepositMinorUnits,
-    int PlotCount, DateTimeOffset CreatedAt);
+    int PlotCount, DateTimeOffset CreatedAt,
+    // What the bidder's catalogue card shows, so staff see the same card citizens do.
+    long BookletPriceMinorUnits, Guid? CoverImageDocumentId, decimal TotalAreaSqm,
+    // Staff only see this list: the real winner, not the public pseudonym (D-22).
+    Guid? WinnerBidderId);
 
 public sealed record AuctionResponse(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,
@@ -585,30 +749,71 @@ public sealed record AuctionResponse(
     decimal BrokerageFeePercent, long BookletPriceMinorUnits,
     int? QuietPeriodSeconds, int MaxExtensions,
     Guid? BookletDocumentId, Guid? CoverImageDocumentId,
+    IReadOnlyList<PublicDocument> Attachments,
     int PlotCount, decimal TotalAreaSqm, string? RejectionReason,
+    string? CancellationReason, DateTimeOffset? CancelledAt,
+    string? ResultRejectionReason,
     // Both halves of the pending candidate. The id alone would ask the committee to
     // approve an unknown sum.
     Guid? PendingCandidateBidderId, long? PendingCandidateAmountMinorUnits,
-    AwardResponse? CurrentAward)
+    AwardResponse? CurrentAward,
+    // The open award, or the settled one whose title transfer is still tracked.
+    AwardResponse? FollowUpAward)
 {
-    public static AuctionResponse From(Auction a) => new(
-        a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
-        a.BidderVisibility.ToString(), a.ClerkUserId, a.Phase,
-        a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
-        a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
-        a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,
-        a.Plots.Count, a.TotalAreaSqm, a.RejectionReason,
-        a.PendingCandidateBidderId, a.PendingCandidateAmountMinorUnits,
-        a.CurrentAward is null ? null : AwardResponse.From(a.CurrentAward));
+    public static AuctionResponse From(Auction a)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new(
+            a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
+            a.BidderVisibility.ToString(), a.ClerkUserId, a.Phase,
+            a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
+            a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
+            a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,
+            a.Attachments.Select(x => new PublicDocument(x.DocumentId, x.TitleAr)).ToArray(),
+            a.Plots.Count, a.TotalAreaSqm, a.RejectionReason,
+            a.CancellationReason, a.CancelledAt,
+            a.ResultRejectionReason,
+            a.PendingCandidateBidderId, a.PendingCandidateAmountMinorUnits,
+            a.CurrentAward is null ? null : AwardResponse.From(a.CurrentAward, now),
+            a.FollowUpAward is null ? null : AwardResponse.From(a.FollowUpAward, now));
+    }
 }
 
 public sealed record AwardResponse(
     Guid Id, Guid BidderId, long AmountMinorUnits, int CascadeStep,
     DateTimeOffset ConfirmedAt, DateTimeOffset ComplianceDeadline,
-    Guid? LetterDocumentId, Guid? SignedLetterDocumentId, DateTimeOffset? WinnerNotifiedAt)
+    Guid? LetterDocumentId, Guid? SignedLetterDocumentId, DateTimeOffset? WinnerNotifiedAt,
+    DateTimeOffset? SettledAt,
+    long PaidMinorUnits, long RemainingMinorUnits, bool Overdue,
+    IReadOnlyList<ReceiptResponse> Receipts,
+    string TransferStatus, string? TransferReference, Guid? TransferDocumentId,
+    DateTimeOffset? TransferUpdatedAt, DateTimeOffset? TransferCompletedAt)
 {
-    public static AwardResponse From(Award a) => new(
+    public static AwardResponse From(Award a, DateTimeOffset now) => new(
         a.Id, a.BidderId, a.AmountMinorUnits, a.CascadeStep,
         a.ConfirmedAt, a.ComplianceDeadline,
-        a.LetterDocumentId, a.SignedLetterDocumentId, a.WinnerNotifiedAt);
+        a.LetterDocumentId, a.SignedLetterDocumentId, a.WinnerNotifiedAt,
+        a.SettledAt,
+        a.PaidMinorUnits, a.RemainingMinorUnits, a.IsOverdue(now),
+        a.Receipts.OrderBy(r => r.PaidOn)
+            .Select(r => new ReceiptResponse(
+                r.ReceiptId, r.Kind.ToString(), r.AmountMinorUnits, r.PaidOn, r.Reference,
+                r.DocumentId, r.RecordedAt))
+            .ToArray(),
+        a.TransferStatus.ToString(), a.TransferReference, a.TransferDocumentId,
+        a.TransferUpdatedAt, a.TransferCompletedAt);
 }
+
+public sealed record ReceiptResponse(
+    Guid Id, string Kind, long AmountMinorUnits, DateTimeOffset PaidOn, string Reference,
+    Guid? DocumentId, DateTimeOffset RecordedAt);
+
+public sealed record FollowUpEntry(
+    Guid AuctionId, string NameAr, string Status, string? Phase, AwardResponse Award);
+
+public sealed record AwardReceiptRequest(
+    long AmountMinorUnits, DateTimeOffset PaidOn, string Reference, Guid? DocumentId);
+
+public sealed record ReferenceRequest(string Reference);
+
+public sealed record TransferRequest(TransferStatus Status, string? Reference, Guid? DocumentId);

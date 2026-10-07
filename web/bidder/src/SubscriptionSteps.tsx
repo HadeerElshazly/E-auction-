@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, config, sar, useStepUp, type Api, type Session } from '@eauction/shared'
+import { ApiError, api, config, sar, useStepUp, when, type Api, type Session } from '@eauction/shared'
 import { authConfig } from './authConfig'
 import type { AuctionDetail, Bidder, Subscription } from './types'
 
@@ -90,14 +90,20 @@ export function SubscriptionSteps({
   const needsProfile = bidder !== null && !bidder.profileComplete
   const status = subscription?.status ?? (bidder ? 'none' : 'unregistered')
 
+  const freeBooklet = auction.bookletPriceMinorUnits === 0
+
   if (subscription?.status === 'Eligible') {
     return (
       <div className="card">
-        <h2>مؤهّل للمزايدة ✓</h2>
+        <div className="section-head">
+          <h2>مؤهّل للمزايدة</h2>
+          <EligibilityPill subscription={subscription} />
+        </div>
         <p className="muted small">
           سُدّد التأمين وقُبلت الشروط. مفتاح التوقيع الخاص بك رقم{' '}
           <span className="num">{subscription.keyEpoch}</span>.
         </p>
+        <TermsRecord subscription={subscription} />
         <Booklet
           auction={auction}
           session={session}
@@ -111,15 +117,39 @@ export function SubscriptionSteps({
   if (subscription?.status === 'Revoked') {
     return (
       <div className="card">
-        <h2>أُلغي الاشتراك</h2>
-        <div className="notice error">{subscription.revocationReason ?? 'بدون سبب مسجّل'}</div>
+        <div className="section-head">
+          <h2>طلب المشاركة</h2>
+          <EligibilityPill subscription={subscription} />
+        </div>
+        <div className="notice error">
+          <strong>سبب الرفض: </strong>
+          {subscription.eligibilityReason ?? 'بدون سبب مسجّل'}
+        </div>
       </div>
     )
   }
 
   return (
     <div className="card">
-      <h2>خطوات التأهّل للمزايدة</h2>
+      <div className="section-head">
+        <h2>خطوات التأهّل للمزايدة</h2>
+        {subscription && <EligibilityPill subscription={subscription} />}
+      </div>
+
+      {subscription?.eligibility === 'Rejected' && (
+        <div className="notice error small" role="alert">
+          <strong>رُفض الضمان البنكي: </strong>
+          {subscription.eligibilityReason}. يمكنك رفع ضمان آخر أدناه.
+        </div>
+      )}
+
+      {subscription?.eligibility === 'UnderReview' && (
+        <div className="notice info small" aria-live="polite">
+          {subscription.depositMethod === 'BankGuarantee'
+            ? 'طلبك قيد المراجعة — تتحقّق إدارة المزاد من الضمان البنكي، وتظهر النتيجة في هذه الصفحة.'
+            : 'طلبك قيد المراجعة — بانتظار تأكيد سداد التأمين.'}
+        </div>
+      )}
 
       <ol className="steps" style={{ marginBottom: 16 }}>
         <Step done={bidder !== null} text="التسجيل بالهوية الوطنية" />
@@ -127,11 +157,19 @@ export function SubscriptionSteps({
         <Step done={subscription !== null} text="الاشتراك في المزاد" />
         <Step
           done={subscription?.bookletPurchasedAt != null}
-          text={`شراء كراسة الشروط — ${sar(auction.bookletPriceMinorUnits, 'ar')}`}
+          text={
+            freeBooklet
+              ? 'الحصول على كراسة الشروط — مجاناً'
+              : `شراء كراسة الشروط — ${sar(auction.bookletPriceMinorUnits, 'ar')}`
+          }
         />
         <Step
           done={subscription?.termsAcceptedAt != null}
-          text="الموافقة على الشروط والأحكام"
+          text={
+            subscription?.termsAcceptedAt
+              ? `الموافقة على الشروط والأحكام — ${when(subscription.termsAcceptedAt)}`
+              : 'الموافقة على الشروط والأحكام'
+          }
         />
         <Step done={subscription?.depositMethod != null} text="اختيار طريقة التأمين" />
         <Step
@@ -261,7 +299,7 @@ export function SubscriptionSteps({
               )
             }
           >
-            شراء كراسة الشروط
+            {freeBooklet ? 'الحصول على كراسة الشروط (مجاناً)' : 'شراء كراسة الشروط'}
           </button>
         )}
 
@@ -376,18 +414,12 @@ export function SubscriptionSteps({
                 disabled={busy}
                 onClick={() => guaranteeInput.current?.click()}
               >
-                رفع الضمان البنكي
+                {subscription.guaranteeDocumentId !== null
+                  ? 'استبدال الضمان البنكي'
+                  : 'رفع الضمان البنكي'}
               </button>
             </>
           ))}
-
-        {subscription?.status === 'AwaitingDeposit' &&
-          subscription.depositMethod === 'BankGuarantee' &&
-          subscription.guaranteeDocumentId !== null && (
-            <span className="muted small">
-              بانتظار تحقّق الإدارة من الضمان البنكي.
-            </span>
-          )}
       </div>
     </div>
   )
@@ -414,27 +446,30 @@ function Booklet({
   onError: (message: string | null) => void
 }) {
   const [busy, setBusy] = useState(false)
+  const documents = api({ baseUrl: config.documentsApi, session })
 
   const open = async () => {
     setBusy(true)
     onError(null)
+    let granted = false
     try {
       const { documentId, grant } = await participant.get<{
         documentId: string
         grant: string
       }>(`/auctions/${auction.id}/subscriptions/${session.subject}/booklet-grant`)
+      granted = true
 
-      // A new tab rather than a fetch into a blob: the document service answers
-      // with Content-Disposition: attachment, so the browser saves the file and
-      // the tab closes itself. A blob URL would work too and would cost holding
-      // a 40MB booklet in the page's memory for no reason.
-      window.open(
-        `${config.documentsApi}/documents/${documentId}?grant=${encodeURIComponent(grant)}`,
-        '_blank',
-        'noopener,noreferrer',
+      // Fetched with the token, not opened in a new tab. The grant is bound to this
+      // bidder, so the document service checks it against the caller's subject —
+      // and a tab opened with window.open carries no Authorization header, so it
+      // arrived anonymous and got a 404 every time. Holding the booklet in memory
+      // as a blob for a moment is the price of the grant meaning what it says.
+      await documents.download(
+        `/documents/${documentId}?grant=${encodeURIComponent(grant)}`,
+        `كراسة-الشروط-${auction.id}.pdf`,
       )
     } catch (e) {
-      onError(e instanceof Error ? e.message : String(e))
+      onError(granted ? 'تعذّر تنزيل كراسة الشروط. حاول مرة أخرى بعد قليل.' : bookletProblem(e))
     } finally {
       setBusy(false)
     }
@@ -446,6 +481,54 @@ function Booklet({
         تنزيل كراسة الشروط
       </button>
     </div>
+  )
+}
+
+/**
+ * What a bidder is told when the booklet will not open. Not the raw "GET … failed
+ * (404)": that is a URL and a status code on the one screen with no staff on it.
+ *
+ * For the grant request only: it answers 404 when the auction has no booklet
+ * attached and 409 when this bidder has not paid for it. A failure after the grant
+ * — the download itself — is reported by the caller as worth retrying.
+ */
+function bookletProblem(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.reason === 'BookletNotPurchased') return 'لم يكتمل شراء كراسة الشروط بعد.'
+    if (e.status === 404) return 'لم تُرفق كراسة الشروط بهذا المزاد بعد. تواصل مع إدارة المزاد.'
+  }
+  return 'تعذّر تنزيل كراسة الشروط. حاول مرة أخرى بعد قليل.'
+}
+
+const eligibilityAr: Record<Subscription['eligibility'], { ar: string; tone: string }> = {
+  Incomplete: { ar: 'قيد الاستكمال', tone: 'done' },
+  UnderReview: { ar: 'قيد المراجعة', tone: 'wait' },
+  Accepted: { ar: 'مقبول', tone: 'live' },
+  Rejected: { ar: 'مرفوض', tone: 'bad' },
+}
+
+function EligibilityPill({ subscription }: { subscription: Subscription }) {
+  const s = eligibilityAr[subscription.eligibility] ?? eligibilityAr.Incomplete
+  return <span className={`pill ${s.tone}`}>الأهلية: {s.ar}</span>
+}
+
+/**
+ * What the bidder agreed to and when — the record the requirements ask the system
+ * to keep, shown back to the person it binds.
+ */
+function TermsRecord({ subscription }: { subscription: Subscription }) {
+  if (!subscription.termsAcceptedAt) return null
+  return (
+    <p className="muted small">
+      وافقتَ على الشروط والأحكام في {when(subscription.termsAcceptedAt)}
+      {subscription.acceptedBookletDocumentId && (
+        <>
+          {' '}— نسخة الكراسة{' '}
+          <span className="mono">{subscription.acceptedBookletDocumentId.slice(0, 8)}</span>
+        </>
+      )}
+      .
+    </p>
   )
 }
 

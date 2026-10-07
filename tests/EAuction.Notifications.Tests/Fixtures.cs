@@ -59,6 +59,7 @@ public sealed class NotificationsDatabase : IAsyncDisposable
         try
         {
             await using var db = await Factory.CreateDbContextAsync();
+            EAuction.TestSupport.TestDatabases.EnsureDisposable(db.Database.GetDbConnection().Database);
             await db.Database.EnsureDeletedAsync();
         }
         catch (Exception)

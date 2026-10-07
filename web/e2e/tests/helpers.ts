@@ -373,7 +373,7 @@ export async function qualify(page: Page, nameAr: string, email: string): Promis
     page,
     nameAr,
     /دفع مبلغ التأمين/,
-    page.getByRole('heading', { name: 'مؤهّل للمزايدة ✓' }),
+    page.getByRole('heading', { name: 'مؤهّل للمزايدة' }),
     'the deposit',
   )
 }
@@ -461,13 +461,18 @@ export async function openAuction(page: Page, auctionId: string): Promise<void> 
  * confirming and the only thing that works.
  */
 export async function openAuctionInPlace(page: Page, auctionId: string): Promise<void> {
-  const row = page.locator('tbody tr').filter({ hasNot: page.locator('_nonexistent') })
-  await expect(row.first()).toBeVisible({ timeout: 30_000 })
+  // المزادات is a grid of cards, and the card itself is the target — there is no
+  // separate open button, the same as the screens this portal is built from. Found
+  // by test id rather than by its Arabic label: the label is the auction's name,
+  // which changes every run, and matching on wording makes a rename look like a
+  // broken list.
+  const card = page.getByTestId('auction-card')
+  await expect(card.first()).toBeVisible({ timeout: 30_000 })
 
-  // The list shows no ids, so open rows until the editor shows the one wanted. The
+  // The list shows no ids, so open the first and assert which one it was. The
   // newest is first and that is this run's auction, but asserting the id means a
   // stale auction from an earlier run cannot quietly stand in for it.
-  await page.getByRole('button', { name: 'فتح' }).first().click()
+  await card.first().click()
   await expect(page.locator('code.muted.small').first()).toHaveText(auctionId, {
     timeout: 20_000,
   })
@@ -481,7 +486,12 @@ export async function openPublicAuction(page: Page, nameAr: string): Promise<voi
 
 /** The same, without the reload — see openAuctionInPlace for why that matters. */
 export async function openPublicAuctionInPlace(page: Page, nameAr: string): Promise<void> {
-  const card = page.locator('.card', { hasText: nameAr })
+  // `.auction-card`, not `.card`: the catalogue is a grid of auction cards now. A
+  // generic `.card` would also match the notice above the grid and whatever else
+  // frames the page — `hasText` narrows it, but matching the wrong kind of box and
+  // being saved by its contents is how a locator starts passing for the wrong
+  // reason.
+  const card = page.locator('.auction-card', { hasText: nameAr })
   await expect(card).toBeVisible({ timeout: 90_000 })
   await card.getByRole('button', { name: 'التفاصيل' }).click()
 }

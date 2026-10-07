@@ -121,8 +121,8 @@ app.MapPost("/bidders/register", async (
     var nationalId = http.User.FindFirst("national_id")?.Value;
     if (string.IsNullOrWhiteSpace(nationalId))
         return Results.Json(
-            new { problems = new[] { "The token carries no national_id claim. A bidder "
-                                   + "must reach this endpoint through Nafath." } },
+            new { problems = new[] { "لم تصل هويتك من نفاذ. يجب الدخول عبر نفاذ "
+                                   + "قبل التسجيل كمزايد." } },
             statusCode: 403);
 
     var nameAr = http.User.FindFirst("name_ar")?.Value ?? "";
@@ -144,8 +144,8 @@ app.MapPost("/bidders/register", async (
         return Results.Conflict(new
         {
             reason = "NationalIdAlreadyRegistered",
-            problems = new[] { "This national ID is registered to a different account. "
-                             + "It has to be re-linked before this one can be used." }
+            problems = new[] { "رقم الهوية مسجَّل بحساب آخر. يلزم ربطه من جديد "
+                             + "قبل استخدامه مع هذا الحساب." }
         });
 
     try
@@ -170,8 +170,8 @@ app.MapPost("/bidders/register", async (
         return Results.Conflict(new
         {
             reason = "NationalIdAlreadyRegistered",
-            problems = new[] { "This national ID is registered to a different account. "
-                             + "It has to be re-linked before this one can be used." }
+            problems = new[] { "رقم الهوية مسجَّل بحساب آخر. يلزم ربطه من جديد "
+                             + "قبل استخدامه مع هذا الحساب." }
         });
     }
 })
@@ -222,8 +222,11 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions", async (
 
     await using var db = await f.CreateDbContextAsync(ct);
 
-    if (await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct) is null)
+    var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+    if (terms is null)
         return Results.NotFound(new { error = "Unknown auction." });
+    if (terms.CancelledAt is not null)
+        return Results.BadRequest(new { problems = new[] { "أُلغي هذا المزاد ولا تُقبل فيه اشتراكات." } });
 
     var existing = await db.Subscriptions
         .FirstOrDefaultAsync(s => s.AuctionId == auctionId && s.BidderId == r.BidderId, ct);
@@ -254,7 +257,7 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/terms", (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.AcceptTerms(DateTimeOffset.UtcNow), http))
+        (s, _, terms) => s.AcceptTerms(DateTimeOffset.UtcNow, terms.BookletDocumentId), http))
     .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit-method", (
@@ -307,6 +310,130 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/revoke", (
         http, staffAction: true, audit: "RevokeEligibility", details: r.Reason))
     .RequireAuthorization(Policies.AuctionAdmin);
 
+app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/reject", (
+    HttpContext http, Guid auctionId, Guid bidderId, RevokeRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    Mutate(f, auctionId, bidderId, ct,
+        (s, _, _) => s.RejectBankGuarantee(r.Reason, DateTimeOffset.UtcNow),
+        // Audited like the acceptance: refusing a citizen's guarantee keeps them out
+        // of the auction until they find another, and the reason is what they will
+        // dispute.
+        http, staffAction: true, audit: "RejectBankGuarantee", details: r.Reason))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «صفحة شخصية لمتابعة الحالة» (الخاصية 09): every auction this bidder applied to, and
+// where each stands. Their own only — the subject must be the bidder asked about.
+app.MapGet("/bidders/{bidderId:guid}/subscriptions", async (
+    HttpContext http, Guid bidderId, string? stage, string? eligibility, string? q,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    if (http.User.SubjectId() != bidderId) return Results.Forbid();
+
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    // A bidder has a handful of applications, so they are read whole and filtered
+    // here — on the server, so every client gets the same answer and the counts are
+    // the real ones — rather than one SQL query per combination. Eligibility is
+    // derived, not stored (Subscription.Eligibility), which is the other reason.
+    var rows = await db.Subscriptions
+        .Where(s => s.BidderId == bidderId)
+        .Join(db.AuctionTerms, s => s.AuctionId, t => t.AuctionId, (s, t) => new { s, t })
+        .OrderByDescending(x => x.s.CreatedAt)
+        .ToListAsync(ct);
+
+    // The awards this bidder holds, and any withdrawn from them.
+    var won = (await db.WinnerAwards
+            .Where(a => a.WinnerBidderId == bidderId)
+            .ToListAsync(ct))
+        .ToDictionary(a => a.AuctionId);
+
+    var wantedStage = MyApplications.Stage(stage);
+    var wantedStanding = MyApplications.Standing(eligibility);
+    var needle = MyApplications.Normalise(q);
+
+    bool Matches(Subscription s, AuctionTerms t, string? stageKey, string? standingKey) =>
+        (stageKey is null
+            || (stageKey == "won"
+                ? won.TryGetValue(t.AuctionId, out var w) && w.DisqualifiedAt is null
+                : MyApplications.StageKey(t) == stageKey))
+        && (standingKey is null || s.Eligibility.State.ToString() == standingKey)
+        && (needle.Length == 0 || MyApplications.Normalise(t.NameAr).Contains(needle));
+
+    var items = rows
+        .Where(x => Matches(x.s, x.t, wantedStage, wantedStanding))
+        .Select(x => new MyApplication(
+            SubscriptionResponse.From(x.s), x.t.NameAr, MyApplications.StageKey(x.t),
+            won.TryGetValue(x.t.AuctionId, out var a) ? WinnerAwardResponse.From(a) : null))
+        .ToArray();
+
+    // Each filter's counts under the other filter and the search, so a chip says how
+    // many rows pressing it would show.
+    var counts = new
+    {
+        stage = MyApplications.StageKeys.ToDictionary(
+            k => k, k => rows.Count(x => Matches(x.s, x.t, k == "all" ? null : k, wantedStanding))),
+        eligibility = MyApplications.StandingKeys.ToDictionary(
+            k => k, k => rows.Count(x => Matches(x.s, x.t, wantedStage, k == "all" ? null : k))),
+    };
+
+    return Results.Ok(new { items, counts });
+}).RequireAuthorization(Policies.Bidder);
+
+// Closing a deposit once the award is final: the refund made, the guarantee released,
+// the forfeit carried out — each against the reference that proves it (الخاصية 11).
+app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit/close", (
+    HttpContext http, Guid auctionId, Guid bidderId, CloseDepositRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    Mutate(f, auctionId, bidderId, ct,
+        (s, _, _) => s.CloseDeposit(r.Reference, http.User.SubjectId() ?? Guid.Empty,
+            DateTimeOffset.UtcNow),
+        http, staffAction: true, audit: "CloseDeposit", details: $"Reference {r.Reference}."))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «التأمينات غير المسواة» — every deposit, across auctions, that the award has
+// resolved and nobody has yet recorded as refunded, released or forfeited.
+app.MapGet("/deposits/unsettled", async (
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var rows = await db.Subscriptions
+        .Where(s => s.DepositResolvedAt != null && s.DepositClosedAt == null)
+        .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
+        .ToListAsync(ct);
+
+    return Results.Ok(new
+    {
+        items = rows
+            .Where(x => x.s.DepositSettlement is DepositSettlement.ToRefund
+                or DepositSettlement.ToRelease or DepositSettlement.ToForfeit)
+            .OrderBy(x => x.s.DepositResolvedAt)
+            .Select(x => ApplicationEntry.From(x.s, x.NameAr))
+    });
+}).RequireAuthorization(Policies.Reporting);
+
+// Every application to one auction, for the administrator reviewing them — not
+// only the eligible ones the clerk's roster shows. Names and the state of each
+// step; no national id and no payment references, which the review does not need.
+app.MapGet("/auctions/{auctionId:guid}/applications", async (
+    Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var rows = await db.Subscriptions
+        .Where(s => s.AuctionId == auctionId)
+        .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
+        .ToListAsync(ct);
+
+    return Results.Ok(new
+    {
+        items = rows
+            .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
+            .ThenBy(x => x.NameAr)
+            .Select(x => ApplicationEntry.From(x.s, x.NameAr))
+    });
+}).RequireAuthorization(Policies.AuctionAdmin);
+
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key", (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
@@ -350,6 +477,34 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions", async (
             i + 1))
     });
 }).RequireAuthorization(Policies.StaffOnTheFloor);
+
+// Staff only: who a bidder id is, for the administrator's view of who leads a
+// running auction and who won a finished one. Names and contact, nothing more —
+// the same narrowness as the roster above. Masking (D-22) governs what bidders and
+// the public see of each other, not what the people running the auction see.
+app.MapGet("/staff/bidders", async (
+    string? ids, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var wanted = (ids ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(x => Guid.TryParse(x, out var g) ? g : Guid.Empty)
+        .Where(g => g != Guid.Empty)
+        .Distinct()
+        .Take(200)
+        .ToArray();
+    if (wanted.Length == 0) return Results.Ok(new { items = Array.Empty<object>() });
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Bidders.AsNoTracking()
+        .Where(b => wanted.Contains(b.Id))
+        .Select(b => new { b.Id, b.NameAr, b.Phone, b.Email })
+        .ToListAsync(ct);
+
+    return Results.Ok(new { items = rows });
+}).RequireAuthorization(p => p.RequireRole(
+    Roles.Operator, Roles.AuctionAdmin, Roles.AwardCommittee,
+    // The auditor reads who did what; an id alone answers neither.
+    Roles.Auditor));
 
 app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}", async (
     HttpContext http, Guid auctionId, Guid bidderId,
@@ -438,6 +593,158 @@ app.MapGet("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/booklet-gra
         DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
 }).RequireAuthorization(Policies.Bidder);
 
+// --- «الاستفسارات والإجابات» (الخاصية 10) ----------------------------------
+
+// A registered bidder asks about an auction that has not finished. Not only the
+// eligible: a question about the booklet is exactly what someone deciding whether
+// to subscribe asks.
+app.MapPost("/auctions/{auctionId:guid}/inquiries", async (
+    HttpContext http, Guid auctionId, AskInquiryRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    if (subject is null) return Results.Forbid();
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    if (await db.Bidders.FindAsync(new object?[] { subject.Value }, ct) is null)
+        return Results.BadRequest(new { problems = new[] { "سجّل كمزايد أولاً لتتمكن من إرسال استفسار." } });
+
+    var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+    if (terms is null) return Results.NotFound(new { error = "Unknown auction." });
+    if (terms.Stage is not (AuctionStage.Upcoming or AuctionStage.Live))
+        return Results.BadRequest(new { problems = new[] { "لا تُقبل الاستفسارات بعد انتهاء المزاد أو إلغائه." } });
+
+    // A ceiling, not a quota: enough for anyone with real questions, and the end of
+    // the road for a script.
+    var open = await db.Inquiries.CountAsync(
+        i => i.AuctionId == auctionId && i.BidderId == subject && i.Status == InquiryStatus.Open, ct);
+    if (open >= 5)
+        return Results.BadRequest(new { problems = new[] { "لديك خمسة استفسارات بانتظار الرد في هذا المزاد." } });
+
+    try
+    {
+        var inquiry = Inquiry.Ask(auctionId, subject.Value, r.Question, DateTimeOffset.UtcNow);
+        db.Inquiries.Add(inquiry);
+        await db.SaveChangesAsync(ct);
+        return Results.Created($"/inquiries/{inquiry.Id}", InquiryResponse.Mine(inquiry));
+    }
+    catch (ParticipantValidationException ex)
+    {
+        return Results.BadRequest(new { problems = ex.Problems });
+    }
+}).RequireAuthorization(Policies.Bidder);
+
+// The bidder's own questions on one auction, with the private replies.
+app.MapGet("/auctions/{auctionId:guid}/inquiries/mine", async (
+    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Inquiries.AsNoTracking()
+        .Where(i => i.AuctionId == auctionId && i.BidderId == subject)
+        .OrderByDescending(i => i.AskedAt)
+        .ToListAsync(ct);
+    return Results.Ok(new { items = rows.Select(InquiryResponse.Mine) });
+}).RequireAuthorization(Policies.Bidder);
+
+// Staff: every question, filtered. The inquiries desk works them; administrators and
+// the committee may read them — only the desk replies or publishes.
+app.MapGet("/inquiries", async (
+    string? status, string? clarification, Guid? auctionId,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var query = db.Inquiries.AsNoTracking();
+    if (Enum.TryParse<InquiryStatus>(status, true, out var s)) query = query.Where(i => i.Status == s);
+    if (Enum.TryParse<ClarificationStatus>(clarification, true, out var c)) query = query.Where(i => i.Clarification == c);
+    if (auctionId is not null) query = query.Where(i => i.AuctionId == auctionId);
+
+    var rows = await query
+        .OrderBy(i => i.Status).ThenByDescending(i => i.AskedAt)
+        .Take(200)
+        .Join(db.Bidders, i => i.BidderId, b => b.Id, (i, b) => new { i, b.NameAr })
+        .ToListAsync(ct);
+    var auctions = await db.AuctionTerms.AsNoTracking()
+        .Where(t => rows.Select(x => x.i.AuctionId).Contains(t.AuctionId))
+        .ToDictionaryAsync(t => t.AuctionId, t => t.NameAr, ct);
+
+    var all = await db.Inquiries.AsNoTracking().GroupBy(i => i.Status)
+        .Select(g => new { g.Key, Count = g.Count() }).ToListAsync(ct);
+    var drafted = await db.Inquiries.CountAsync(i => i.Clarification == ClarificationStatus.Drafted, ct);
+
+    return Results.Ok(new
+    {
+        items = rows.Select(x => InquiryResponse.ForStaff(
+            x.i, x.NameAr, auctions.GetValueOrDefault(x.i.AuctionId))),
+        counts = new
+        {
+            open = all.FirstOrDefault(x => x.Key == InquiryStatus.Open)?.Count ?? 0,
+            answered = all.FirstOrDefault(x => x.Key == InquiryStatus.Answered)?.Count ?? 0,
+            closed = all.FirstOrDefault(x => x.Key == InquiryStatus.Closed)?.Count ?? 0,
+            awaitingApproval = drafted,
+        }
+    });
+}).RequireAuthorization(p => p.RequireRole(Roles.Inquiries, Roles.AuctionAdmin, Roles.AwardCommittee));
+
+app.MapPost("/inquiries/{id:guid}/reply", (
+    HttpContext http, Guid id, ReplyInquiryRequest r, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct, (i, staff, now) => i.Reply(r.Answer, r.Close, staff, now),
+        r.Close ? "ReplyAndCloseInquiry" : "ReplyToInquiry"))
+    .RequireAuthorization(Policies.Inquiries);
+
+app.MapPost("/inquiries/{id:guid}/close", (
+    HttpContext http, Guid id, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct, (i, _, now) => i.Close(now), "CloseInquiry"))
+    .RequireAuthorization(Policies.Inquiries);
+
+app.MapPost("/inquiries/{id:guid}/clarification", (
+    HttpContext http, Guid id, DraftClarificationRequest r, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct,
+        (i, staff, now) => i.DraftClarification(r.QuestionAr, r.AnswerAr, staff, now), "DraftClarification"))
+    .RequireAuthorization(Policies.Inquiries);
+
+// «بعد اعتماده»: a second member of the inquiries desk approves what the first
+// drafted (Inquiry.ApproveClarification refuses the author), and only then does it
+// reach the public auction page.
+app.MapPost("/inquiries/{id:guid}/clarification/approve", (
+    HttpContext http, Guid id, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    MutateInquiry(f, id, http, ct, (i, staff, now) => i.ApproveClarification(staff, now), "PublishClarification"))
+    .RequireAuthorization(Policies.Inquiries);
+
+// «رسا عليك المزاد» — the award, for its winner only. Anyone else, including another
+// bidder in the same auction, is told there is nothing: 404, not 403, so the
+// answer does not confirm that someone else won.
+app.MapGet("/auctions/{auctionId:guid}/award", async (
+    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var award = await db.WinnerAwards.FindAsync(new object?[] { auctionId }, ct);
+    return award is null || award.WinnerBidderId != subject
+        ? Results.NotFound()
+        : Results.Ok(WinnerAwardResponse.From(award));
+}).RequireAuthorization(Policies.Bidder);
+
+// The signed award letter, for the winner: a grant to read a Restricted document,
+// the same mechanism as the booklet. Only once the winner has been notified; until
+// then the letter is the committee's, not yet theirs.
+app.MapGet("/auctions/{auctionId:guid}/award/letter-grant", async (
+    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    var subject = http.User.SubjectId();
+    await using var db = await f.CreateDbContextAsync(ct);
+    var award = await db.WinnerAwards.FindAsync(new object?[] { auctionId }, ct);
+    if (award is null || award.WinnerBidderId != subject || award.DisqualifiedAt is not null)
+        return Results.NotFound();
+    if (award.SignedLetterDocumentId is not { } letter || award.WinnerNotifiedAt is null)
+        return Results.Conflict(new { error = "The award letter has not been issued yet." });
+
+    return Results.Ok(new DocumentGrantResponse(
+        letter,
+        DocumentGrants.Mint(documentGrantKey, letter, subject!.Value, DateTimeOffset.UtcNow),
+        DateTimeOffset.UtcNow.Add(DocumentGrants.Lifetime)));
+}).RequireAuthorization(Policies.Bidder);
+
 app.Run();
 
 // ---------------------------------------------------------------------------
@@ -484,10 +791,12 @@ static async Task<IResult> Mutate(
 
         if (audit is not null && http is not null)
         {
-            var (who, roles, source) = StaffAudit.ActorOf(http);
+            var actor = StaffAudit.ActorOf(http);
             db.RecordStaffAction(
-                who, roles, source, audit,
-                AuditSubject.Subscription(auctionId, bidderId), details);
+                actor.Subject, actor.Roles, actor.SourceAddress, audit,
+                AuditSubject.Subscription(auctionId, bidderId), details, actor.Name,
+                // Whose application, in which auction — what the auditor reads first.
+                $"{bidder.NameAr} — {terms.NameAr ?? auctionId.ToString()}");
         }
 
         await db.SaveChangesAsync(ct);
@@ -504,6 +813,33 @@ static async Task<IResult> Mutate(
     catch (InvalidSubscriptionTransitionException ex)
     {
         return Results.Conflict(new { error = ex.Message, status = ex.From.ToString() });
+    }
+}
+
+static async Task<IResult> MutateInquiry(
+    IDbContextFactory<ParticipantDbContext> factory, Guid id, HttpContext http, CancellationToken ct,
+    Action<Inquiry, Guid, DateTimeOffset> change, string audit)
+{
+    await using var db = await factory.CreateDbContextAsync(ct);
+    var inquiry = await db.Inquiries.FindAsync(new object?[] { id }, ct);
+    if (inquiry is null) return Results.NotFound();
+
+    var actor = StaffAudit.ActorOf(http);
+    try
+    {
+        change(inquiry, actor.Subject, DateTimeOffset.UtcNow);
+        var bidder = await db.Bidders.FindAsync(new object?[] { inquiry.BidderId }, ct);
+        var terms = await db.AuctionTerms.FindAsync(new object?[] { inquiry.AuctionId }, ct);
+        db.RecordStaffAction(
+            actor.Subject, actor.Roles, actor.SourceAddress, audit,
+            AuditSubject.Inquiry(inquiry.AuctionId, inquiry.Id), null, actor.Name,
+            $"استفسار {bidder?.NameAr} — {terms?.NameAr ?? inquiry.AuctionId.ToString()}");
+        await db.SaveChangesAsync(ct);
+        return Results.Ok(InquiryResponse.ForStaff(inquiry, bidder?.NameAr, terms?.NameAr));
+    }
+    catch (ParticipantValidationException ex)
+    {
+        return Results.BadRequest(new { problems = ex.Problems });
     }
 }
 
@@ -534,6 +870,34 @@ public sealed record BidderResponse(
 /// <summary>One eligible bidder, as the clerk's terminal lists them.</summary>
 public sealed record RosterEntry(Guid BidderId, string NameAr, int PaddleNumber);
 
+public sealed record ApplicationEntry(
+    Guid BidderId, string NameAr, string Status,
+    string Eligibility, string? EligibilityReason,
+    DateTimeOffset? BookletPurchasedAt, bool BookletFree,
+    DateTimeOffset? TermsAcceptedAt, Guid? AcceptedBookletDocumentId,
+    string? DepositMethod, DateTimeOffset? DepositPaidAt,
+    Guid? GuaranteeDocumentId, DateTimeOffset? GuaranteeExpiresAt,
+    DateTimeOffset? EligibleAt,
+    Guid AuctionId,
+    // The gateway's reference for the deposit itself — what staff quote when they
+    // count it towards the winner's price.
+    string? DepositPaymentRef,
+    string DepositSettlement, DateTimeOffset? DepositClosedAt, string? DepositClosureReference)
+{
+    public static ApplicationEntry From(Subscription s, string nameAr) => new(
+        s.BidderId, nameAr, s.Status.ToString(),
+        s.Eligibility.State.ToString(), s.Eligibility.Reason,
+        s.BookletPurchasedAt, s.BookletPaymentRef == Subscription.FreeBookletRef,
+        s.TermsAcceptedAt, s.AcceptedBookletDocumentId,
+        s.DepositMethod?.ToString(), s.DepositPaidAt,
+        s.GuaranteeDocumentId, s.GuaranteeExpiresAt,
+        s.EligibleAt,
+        s.AuctionId, s.DepositPaymentRef,
+        s.DepositSettlement.ToString(), s.DepositClosedAt, s.DepositClosureReference);
+}
+
+public sealed record CloseDepositRequest(string Reference);
+
 /// <summary>
 /// Carries the two "requested at" timestamps and the last refusal as well as the
 /// status, because with payment asynchronous the status alone no longer tells a
@@ -544,11 +908,14 @@ public sealed record SubscriptionResponse(
     Guid Id, Guid AuctionId, Guid BidderId, string Status,
     DateTimeOffset? BookletRequestedAt,
     DateTimeOffset? BookletPurchasedAt, DateTimeOffset? TermsAcceptedAt,
+    Guid? AcceptedBookletDocumentId,
     string? DepositMethod,
     DateTimeOffset? DepositRequestedAt, DateTimeOffset? DepositPaidAt,
     Guid? GuaranteeDocumentId, DateTimeOffset? GuaranteeExpiresAt,
     DateTimeOffset? GuaranteeVerifiedAt,
     int KeyEpoch, DateTimeOffset? EligibleAt, string? RevocationReason,
+    string Eligibility, string? EligibilityReason, bool BookletFree,
+    string DepositSettlement,
     DateTimeOffset? DepositResolvedAt, bool DepositForfeited,
     string? PaymentFailurePurpose, string? PaymentFailureReason,
     DateTimeOffset? PaymentFailedAt)
@@ -556,9 +923,87 @@ public sealed record SubscriptionResponse(
     public static SubscriptionResponse From(Subscription s) => new(
         s.Id, s.AuctionId, s.BidderId, s.Status.ToString(),
         s.BookletRequestedAt, s.BookletPurchasedAt, s.TermsAcceptedAt,
+        s.AcceptedBookletDocumentId,
         s.DepositMethod?.ToString(), s.DepositRequestedAt, s.DepositPaidAt,
         s.GuaranteeDocumentId, s.GuaranteeExpiresAt, s.GuaranteeVerifiedAt,
         s.KeyEpoch, s.EligibleAt, s.RevocationReason,
+        s.Eligibility.State.ToString(), s.Eligibility.Reason,
+        s.BookletPaymentRef == Subscription.FreeBookletRef,
+        s.DepositSettlement.ToString(),
         s.DepositResolvedAt, s.DepositForfeited,
         s.PaymentFailurePurpose, s.PaymentFailureReason, s.PaymentFailedAt);
+}
+
+public sealed record MyApplication(
+    SubscriptionResponse Subscription, string? AuctionNameAr, string Stage, WinnerAwardResponse? Award);
+
+public sealed record AskInquiryRequest(string Question);
+public sealed record ReplyInquiryRequest(string Answer, bool Close);
+public sealed record DraftClarificationRequest(string QuestionAr, string AnswerAr);
+
+/// <summary>
+/// A question and where it stands. The bidder's view carries no staff identities
+/// and no clarification draft; the staff view adds who asked and on what.
+/// </summary>
+public sealed record InquiryResponse(
+    Guid Id, Guid AuctionId, string Question, DateTimeOffset AskedAt, string Status,
+    string? Answer, DateTimeOffset? AnsweredAt, DateTimeOffset? ClosedAt,
+    string Clarification, DateTimeOffset? ClarificationPublishedAt,
+    // Staff only:
+    string? BidderNameAr, string? AuctionNameAr,
+    string? ClarificationQuestion, string? ClarificationAnswer,
+    Guid? ClarificationDraftedBy, DateTimeOffset? ClarificationDraftedAt)
+{
+    public static InquiryResponse Mine(Inquiry i) => new(
+        i.Id, i.AuctionId, i.Question, i.AskedAt, i.Status.ToString(),
+        i.Answer, i.AnsweredAt, i.ClosedAt,
+        i.Clarification == ClarificationStatus.Published ? "Published" : "None",
+        i.ClarificationPublishedAt, null, null, null, null, null, null);
+
+    public static InquiryResponse ForStaff(Inquiry i, string? bidderNameAr, string? auctionNameAr) => new(
+        i.Id, i.AuctionId, i.Question, i.AskedAt, i.Status.ToString(),
+        i.Answer, i.AnsweredAt, i.ClosedAt,
+        i.Clarification.ToString(), i.ClarificationPublishedAt,
+        bidderNameAr, auctionNameAr, i.ClarificationQuestion, i.ClarificationAnswer,
+        i.ClarificationDraftedBy, i.ClarificationDraftedAt);
+}
+
+/// <summary>The winner's award, as the winner reads it.</summary>
+public sealed record WinnerAwardResponse(
+    Guid AuctionId, long AmountMinorUnits, long BrokerageMinorUnits,
+    DateTimeOffset ConfirmedAt, DateTimeOffset ComplianceDeadline,
+    bool LetterAvailable, DateTimeOffset? WinnerNotifiedAt,
+    long PaidMinorUnits, long RemainingMinorUnits,
+    string TransferStatus, DateTimeOffset? TransferCompletedAt,
+    DateTimeOffset? SettledAt, DateTimeOffset? WithdrawnAt, string NextStep)
+{
+    public static WinnerAwardResponse From(WinnerAward a) => new(
+        a.AuctionId, a.AmountMinorUnits, a.BrokerageMinorUnits,
+        a.ConfirmedAt, a.ComplianceDeadline,
+        a.SignedLetterDocumentId is not null && a.WinnerNotifiedAt is not null, a.WinnerNotifiedAt,
+        a.PaidMinorUnits, a.RemainingMinorUnits,
+        a.TransferStatus, a.TransferCompletedAt, a.SettledAt, a.DisqualifiedAt, a.NextStep);
+}
+
+/// <summary>«طلباتي»'s filter vocabulary, and the search's Arabic normalisation.</summary>
+public static class MyApplications
+{
+    public static readonly string[] StageKeys = ["all", "live", "upcoming", "finished", "won"];
+    public static readonly string[] StandingKeys = ["all", "Accepted", "UnderReview", "Rejected", "Incomplete"];
+
+    /// <summary>Cancelled counts as finished: nothing more will happen in it.</summary>
+    public static string StageKey(AuctionTerms t) => t.Stage switch
+    {
+        AuctionStage.Live => "live",
+        AuctionStage.Upcoming => "upcoming",
+        _ => "finished",
+    };
+
+    public static string? Stage(string? value) =>
+        value is "live" or "upcoming" or "finished" or "won" ? value : null;
+
+    public static string? Standing(string? value) =>
+        value is "Accepted" or "UnderReview" or "Rejected" or "Incomplete" ? value : null;
+
+    public static string Normalise(string? text) => EAuction.Core.ArabicText.Normalise(text);
 }

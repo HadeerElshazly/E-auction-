@@ -79,6 +79,11 @@ public static class ControlTopics
             + "erase the history that is the entire point.",
             Partitions: 1),
 
+        new(Topics.Inquiries, TopicShape.EventLog,
+            "Replies to bidders' questions and the clarifications published from them. "
+            + "The query BFF replays it from the start to rebuild each auction's public "
+            + "clarifications, so it must not be compacted down to one per auction."),
+
         new(Topics.ParticipantPayments, TopicShape.EventLog,
             "Requests for the booklet fee and the deposit. The payment service consumes "
             + "it; without the topic the participant outbox cannot drain, and eligibility "

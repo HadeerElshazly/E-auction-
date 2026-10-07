@@ -56,6 +56,14 @@ public static class Roles
     /// information about work those two already do.
     /// </summary>
     public const string Reporting = "reporting";
+
+    /// <summary>
+    /// موظف الاستفسارات — answers bidders' questions and publishes clarifications
+    /// (الخاصية 10), and nothing else. A role of its own so that the administrators
+    /// and the award committee are not the help desk. Publishing still takes two
+    /// people: the one who drafted a clarification cannot be the one who approves it.
+    /// </summary>
+    public const string Inquiries = "inquiries";
 }
 
 /// <summary>Authorization policy names.</summary>
@@ -74,6 +82,8 @@ public static class Policies
     /// needs the room's roster, not the programme's revenue.
     /// </summary>
     public const string Reporting = "policy:reporting";
+
+    public const string Inquiries = "policy:inquiries";
 
     /// <summary>
     /// Who may post a frame to the bid catcher: a bidder bidding for themselves,

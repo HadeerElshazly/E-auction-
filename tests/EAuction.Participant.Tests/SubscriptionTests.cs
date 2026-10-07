@@ -195,7 +195,7 @@ public class SubscriptionTests
         var ex = Assert.Throws<ParticipantValidationException>(
             () => s.ConfirmDepositPayment("deposit", unverified, terms, Now));
 
-        Assert.Contains(ex.Problems, p => p.Contains("profile is incomplete"));
+        Assert.Contains(ex.Problems, p => p.Contains("بيانات المزايد غير مكتملة"));
         Assert.NotEqual(SubscriptionStatus.Eligible, s.Status);
         Assert.Empty(s.Events.OfType<ParticipantEligibilityChanged>());
     }
@@ -274,6 +274,22 @@ public class SubscriptionTests
         Assert.Equal(SubscriptionStatus.Revoked, s.Status);
         var published = Assert.Single(s.Events.OfType<ParticipantEligibilityChanged>());
         Assert.False(published.Eligible);
+    }
+
+    [Fact]
+    public void Eligibility_cannot_be_revoked_once_bidding_has_ended()
+    {
+        var auctionId = Guid.NewGuid();
+        var bidder = Build.VerifiedBidder();
+        var terms = Build.Terms(auctionId);
+        var s = Build.EligibleByPayment(auctionId, bidder, terms);
+        s.ClearEvents();
+
+        Assert.Throws<ParticipantValidationException>(
+            () => s.Revoke("شيك مرتجع", bidder, terms, terms.EndsAt));
+
+        Assert.Equal(SubscriptionStatus.Eligible, s.Status);
+        Assert.Empty(s.Events);
     }
 
     [Fact]

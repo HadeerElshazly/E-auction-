@@ -72,6 +72,16 @@ public sealed record StaffActionRecorded : IDomainEvent
     public required DateTimeOffset At { get; init; }
 
     /// <summary>
+    /// Who, as a person reads it — the account's name — beside the subject id that
+    /// identifies them for certain. An auditor asked "who approved this" should not
+    /// have to resolve a GUID to answer it.
+    /// </summary>
+    public string? ActorName { get; init; }
+
+    /// <summary>What, as a person reads it — the auction's name, the bidder's — beside <see cref="Subject"/>.</summary>
+    public string? SubjectLabel { get; init; }
+
+    /// <summary>
     /// Composes an entry from an actor and what they did.
     ///
     /// Takes the actor's three values rather than a type from EAuction.Security,
@@ -80,8 +90,11 @@ public sealed record StaffActionRecorded : IDomainEvent
     /// </summary>
     public static StaffActionRecorded By(
         Guid actorSubject, string actorRoles, string? sourceAddress,
-        string action, string subject, string? details = null) => new()
+        string action, string subject, string? details = null,
+        string? actorName = null, string? subjectLabel = null) => new()
     {
+        ActorName = actorName,
+        SubjectLabel = subjectLabel,
         ActorSubject = actorSubject,
         ActorRoles = actorRoles,
         SourceAddress = sourceAddress,
@@ -128,6 +141,9 @@ public static class AuditSubject
 
     public static string Document(Guid id) => $"document/{id}";
 
+    /// <summary>A bidder's question on an auction (الخاصية 10).</summary>
+    public static string Inquiry(Guid auctionId, Guid inquiryId) => $"auction/{auctionId}/inquiry/{inquiryId}";
+
     public static string Bidder(Guid id) => $"bidder/{id}";
 }
 
@@ -168,7 +184,9 @@ public static class StaffAuditOutbox
     public static void RecordStaffAction(
         this DbContext db,
         Guid actorSubject, string actorRoles, string? sourceAddress,
-        string action, string subject, string? details = null) =>
+        string action, string subject, string? details = null,
+        string? actorName = null, string? subjectLabel = null) =>
         db.Set<OutboxMessage>().Add(OutboxMessage.From(StaffActionRecorded.By(
-            actorSubject, actorRoles, sourceAddress, action, subject, details)));
+            actorSubject, actorRoles, sourceAddress, action, subject, details,
+            actorName, subjectLabel)));
 }

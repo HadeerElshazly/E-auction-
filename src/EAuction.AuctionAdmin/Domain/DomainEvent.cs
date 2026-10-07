@@ -36,6 +36,9 @@ public abstract record DomainEvent : IDomainEvent
 /// purpose: an event that serialised the entity would carry whatever is added to it
 /// later, which is how internal fields end up on a public topic by accident.
 /// </summary>
+/// <summary>A document anyone may read, named for the catalogue that lists it.</summary>
+public sealed record PublicDocument(Guid DocumentId, string TitleAr);
+
 public sealed record PublicPlot(
     Guid Id, string DeedNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
@@ -89,6 +92,13 @@ public sealed record AuctionApproved : DomainEvent
     public Guid? CoverImageDocumentId { get; init; }
 
     /// <summary>
+    /// The public documents — plans, photographs — listed on the plot page. Public
+    /// in the document service, so the ids here open to anyone, which is the point.
+    /// Empty rather than absent for consumers built before it existed.
+    /// </summary>
+    public IReadOnlyList<PublicDocument> Attachments { get; init; } = [];
+
+    /// <summary>
     /// المخطط — which plan and phase this land belongs to, e.g. "مخطط السعيد — المرحلة الأولى".
     ///
     /// Added for the reporting service (§35), which groups almost everything by it:
@@ -131,6 +141,39 @@ public sealed record AuctionReserveSet : DomainEvent
     public override string AggregateId => AuctionId.ToString();
 }
 
+/// <summary>
+/// An approved auction withdrawn before it opened (المرحلة الأولى، الخاصية 05:
+/// «توثيق الإلغاء المصرح به»). On the lifecycle topic, which every service that
+/// acts on an auction already follows: the processor must not start it, the catcher
+/// must refuse its bids, the catalogue must say so, and its bidders must be told.
+/// </summary>
+public sealed record AuctionCancelled : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required string Reason { get; init; }
+    public required Guid CancelledByUserId { get; init; }
+    public required DateTimeOffset At { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>
+/// The committee, after reviewing a disqualified winner, put the next bidder up for
+/// award. On the lifecycle topic because it changes the auction's public state —
+/// every read model has to move to "awaiting award" on this, not on the processor's
+/// suggestion, or the portals disagree about what stage the auction is in.
+/// </summary>
+public sealed record NextBidderReferred : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid BidderId { get; init; }
+    public required long AmountMinorUnits { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
 public sealed record AuctionRejected : DomainEvent
 {
     public required Guid AuctionId { get; init; }
@@ -159,6 +202,41 @@ public sealed record AwardConfirmed : DomainEvent
 
     public required DateTimeOffset ComplianceDeadline { get; init; }
     public required int CascadeStep { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>
+/// Where the award stands, for the winner: the whole follow-up as one snapshot,
+/// raised on every change to it — the letter, the notice, each receipt, the
+/// transfer, the settlement, a withdrawal. On <c>auctions.lifecycle</c>, keyed by
+/// the auction.
+///
+/// A snapshot rather than one event per step, because its one consumer — the
+/// participant service, which answers the winner's «ما الخطوة التالية؟» — wants the
+/// current state, and a snapshot cannot be applied out of order into a wrong one.
+/// Carries what the winner may know about their own award and nothing about anyone
+/// else: no other bidder, no receipt scans, no staff identities.
+/// </summary>
+public sealed record AwardFollowUpUpdated : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid AwardId { get; init; }
+    public required Guid WinnerBidderId { get; init; }
+    public required long AmountMinorUnits { get; init; }
+    public required long BrokerageMinorUnits { get; init; }
+    public required DateTimeOffset ConfirmedAt { get; init; }
+    public required DateTimeOffset ComplianceDeadline { get; init; }
+    public Guid? SignedLetterDocumentId { get; init; }
+    public DateTimeOffset? WinnerNotifiedAt { get; init; }
+    public required long PaidMinorUnits { get; init; }
+    public required long RemainingMinorUnits { get; init; }
+    public required string TransferStatus { get; init; }
+    public DateTimeOffset? TransferCompletedAt { get; init; }
+    public DateTimeOffset? SettledAt { get; init; }
+    public DateTimeOffset? DisqualifiedAt { get; init; }
+    public required DateTimeOffset At { get; init; }
 
     public override string AggregateType => "auction-lifecycle";
     public override string AggregateId => AuctionId.ToString();

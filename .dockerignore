@@ -1,0 +1,9 @@
+# Host build output carries host paths (Windows NuGet fallback folders) into
+# project.assets.json, which breaks `dotnet publish --no-restore` in the image.
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+.git/
+.vs/
+.vscode/

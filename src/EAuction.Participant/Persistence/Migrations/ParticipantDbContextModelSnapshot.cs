@@ -80,11 +80,21 @@ namespace EAuction.Participant.Persistence.Migrations
                     b.Property<long>("BookletPriceMinorUnits")
                         .HasColumnType("bigint");
 
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<long>("DepositMinorUnits")
                         .HasColumnType("bigint");
 
                     b.Property<DateTimeOffset>("EndsAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NameAr")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<int>("Stage")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("StartsAt")
                         .HasColumnType("timestamp with time zone");
@@ -93,6 +103,8 @@ namespace EAuction.Participant.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("AuctionId");
+
+                    b.HasIndex("Stage");
 
                     b.ToTable("auction_terms", (string)null);
                 });
@@ -142,9 +154,81 @@ namespace EAuction.Participant.Persistence.Migrations
                     b.ToTable("bidder", (string)null);
                 });
 
+            modelBuilder.Entity("EAuction.Participant.Domain.Inquiry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Answer")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTimeOffset?>("AnsweredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("AnsweredBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("AskedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("AuctionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BidderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Clarification")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ClarificationAnswer")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<Guid?>("ClarificationApprovedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ClarificationDraftedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ClarificationDraftedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ClarificationPublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ClarificationQuestion")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTimeOffset?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BidderId");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("AuctionId", "AskedAt");
+
+                    b.ToTable("inquiry", (string)null);
+                });
+
             modelBuilder.Entity("EAuction.Participant.Domain.Subscription", b =>
                 {
                     b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AcceptedBookletDocumentId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid>("AuctionId")
@@ -165,6 +249,19 @@ namespace EAuction.Participant.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("DepositAppliedToPurchase")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("DepositClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DepositClosedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DepositClosureReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<bool>("DepositForfeited")
                         .HasColumnType("boolean");
@@ -193,6 +290,13 @@ namespace EAuction.Participant.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("GuaranteeExpiresAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("GuaranteeRejectedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("GuaranteeRejectionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
 
                     b.Property<DateTimeOffset?>("GuaranteeVerifiedAt")
                         .HasColumnType("timestamp with time zone");
@@ -235,6 +339,65 @@ namespace EAuction.Participant.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("subscription", (string)null);
+                });
+
+            modelBuilder.Entity("EAuction.Participant.Domain.WinnerAward", b =>
+                {
+                    b.Property<Guid>("AuctionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("AmountMinorUnits")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("AwardId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("BrokerageMinorUnits")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("ComplianceDeadline")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ConfirmedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("DisqualifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("PaidMinorUnits")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("RemainingMinorUnits")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("SettledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SignedLetterDocumentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("TransferCompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TransferStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("WinnerBidderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("WinnerNotifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("AuctionId");
+
+                    b.HasIndex("WinnerBidderId");
+
+                    b.ToTable("winner_award", (string)null);
                 });
 #pragma warning restore 612, 618
         }

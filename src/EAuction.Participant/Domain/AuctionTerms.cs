@@ -37,6 +37,59 @@ public sealed class AuctionTerms
 
     public DateTimeOffset UpdatedAt { get; private set; } = DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// When auction-admin withdrew the auction, from the lifecycle topic. Without it
+    /// this service went on taking enrolments and deposits for an auction that would
+    /// never open — and a deposit paid after the cancellation released the others was
+    /// held for good, because nothing would ever release it.
+    /// </summary>
+    public DateTimeOffset? CancelledAt { get; private set; }
+
+    public void Cancel(DateTimeOffset at)
+    {
+        CancelledAt ??= at;
+        Stage = AuctionStage.Cancelled;
+    }
+
+    /// <summary>The auction's Arabic name, from its approval — what a bidder searches «طلباتي» by.</summary>
+    public string? NameAr { get; private set; }
+
+    public void Name(string? nameAr) => NameAr = string.IsNullOrWhiteSpace(nameAr) ? NameAr : nameAr.Trim();
+
+    /// <summary>
+    /// Where the auction is, followed from the lifecycle topic, so «طلباتي» can be
+    /// filtered here — on the server — by upcoming, running and finished.
+    /// </summary>
+    public AuctionStage Stage { get; private set; } = AuctionStage.Upcoming;
+
+    /// <summary>
+    /// Moves the stage forward on a lifecycle event, never back: the topic is replayed
+    /// from the start, and a replayed «opened» must not undo a later «closed».
+    /// </summary>
+    public bool Advance(string eventType)
+    {
+        var next = eventType switch
+        {
+            "AuctionStarted" => AuctionStage.Live,
+            "AuctionClosed" or "CandidateOffered" or "LadderExhausted" or "AwardConfirmed"
+                or "WinnerDisqualified" or "NextBidderReferred" or "AuctionUnsold"
+                or "AuctionSettled" => AuctionStage.Finished,
+            "AuctionCancelled" => AuctionStage.Cancelled,
+            _ => (AuctionStage?)null
+        };
+        if (next is null || next <= Stage) return false;
+        Stage = next.Value;
+        return true;
+    }
+
+    /// <summary>Refuses any enrolment or money step on a cancelled auction.</summary>
+    public void RequireOpen()
+    {
+        if (CancelledAt is not null)
+            throw new ParticipantValidationException(
+                new[] { "أُلغي هذا المزاد ولا تُقبل فيه اشتراكات أو مدفوعات." });
+    }
+
     private AuctionTerms() { }
 
     public AuctionTerms(
@@ -68,4 +121,13 @@ public sealed class AuctionTerms
         BookletDocumentId = bookletDocumentId;
         UpdatedAt = now;
     }
+}
+
+/// <summary>An auction's stage as «طلباتي» groups it. Ordered: it only moves forward.</summary>
+public enum AuctionStage
+{
+    Upcoming = 0,
+    Live = 1,
+    Finished = 2,
+    Cancelled = 3,
 }

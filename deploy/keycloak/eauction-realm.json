@@ -45,6 +45,10 @@
       {
         "name": "auditor",
         "description": "مراجع — reads the staff audit trail, and nothing else. Deliberately held by nobody who operates the platform: an auditor who could also approve an auction would be reading their own record."
+      },
+      {
+        "name": "inquiries",
+        "description": "موظف الاستفسارات — replies to bidders' questions and publishes clarifications (الخاصية 10). Publishing takes two holders: whoever drafted a clarification cannot approve it."
       }
     ]
   },
@@ -265,6 +269,37 @@
       ]
     },
     {
+      "username": "noura",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Noura",
+      "lastName": "Al-Qahtani",
+      "email": "noura@example.sa",
+      "attributes": {
+        "national_id": [
+          "1055555555"
+        ],
+        "name_ar": [
+          "نورة القحطاني"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        },
+        {
+          "type": "otp",
+          "secretData": "{\"value\": \"eauctiondevsecret1234567890\"}",
+          "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
+        }
+      ],
+      "realmRoles": [
+        "bidder"
+      ]
+    },
+    {
       "username": "admin-user",
       "enabled": true,
       "emailVerified": true,
@@ -339,6 +374,42 @@
       ],
       "realmRoles": [
         "auditor"
+      ]
+    },
+    {
+      "username": "inquiries-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Inquiries",
+      "lastName": "Officer",
+      "email": "inquiries@example.sa",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "inquiries"
+      ]
+    },
+    {
+      "username": "inquiries-supervisor",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Inquiries",
+      "lastName": "Supervisor",
+      "email": "inquiries-lead@example.sa",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "inquiries"
       ]
     },
     {

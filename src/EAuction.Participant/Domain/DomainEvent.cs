@@ -49,6 +49,26 @@ public sealed record ParticipantEligibilityChanged : DomainEvent
 /// A deposit is owed. The payment service picks this up; until it reports
 /// back, the bidder is not eligible.
 /// </summary>
+/// <summary>
+/// Staff refused a bidder's bank guarantee, with the reason they will be told
+/// (الخاصية 09: إشعار المستخدم بقرارات الأهلية والتأمين).
+///
+/// On the participants topic, which is compacted by key — so its key is its own,
+/// never the bidder's eligibility key: compaction keeps the latest row per key, and
+/// a refusal sharing that key would replace the row the catcher admits bidders by.
+/// </summary>
+public sealed record BankGuaranteeRejected : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid BidderId { get; init; }
+    public required string Reason { get; init; }
+    public required DateTimeOffset At { get; init; }
+
+    public override string AggregateType => "participant-eligibility";
+    public override string AggregateId =>
+        $"{AuctionId}:{BidderId}:guarantee-rejected:{At.ToUnixTimeMilliseconds()}";
+}
+
 public sealed record DepositRequested : DomainEvent
 {
     public required Guid AuctionId { get; init; }

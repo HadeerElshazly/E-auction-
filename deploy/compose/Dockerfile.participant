@@ -7,6 +7,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 COPY src/EAuction.Core/EAuction.Core.csproj src/EAuction.Core/
+COPY src/EAuction.Security/EAuction.Security.csproj src/EAuction.Security/
+COPY src/EAuction.Outbox/EAuction.Outbox.csproj src/EAuction.Outbox/
 COPY src/EAuction.Participant/EAuction.Participant.csproj src/EAuction.Participant/
 RUN dotnet restore src/EAuction.Participant/EAuction.Participant.csproj
 COPY src/ src/

@@ -19,14 +19,14 @@ public sealed record AuctionSummary(
     DateTimeOffset StartsAt, DateTimeOffset EndsAt,
     long OpeningPriceMinorUnits, long? PriceMinorUnits, long MinimumNextBidMinorUnits,
     long DepositMinorUnits, long BookletPriceMinorUnits,
-    int PlotCount, decimal TotalAreaSqm)
+    int PlotCount, decimal TotalAreaSqm, Guid? CoverImageDocumentId)
 {
     public static AuctionSummary From(AuctionEntry a) => new(
         a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
         a.StartsAt, a.EndsAt,
         a.OpeningPriceMinorUnits, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
         a.DepositMinorUnits, a.BookletPriceMinorUnits,
-        a.Plots.Count, a.TotalAreaSqm);
+        a.Plots.Count, a.TotalAreaSqm, a.CoverImageDocumentId);
 }
 
 public sealed record AuctionDetail(
@@ -42,7 +42,9 @@ public sealed record AuctionDetail(
     long? PriceMinorUnits, long MinimumNextBidMinorUnits,
     long DepositMinorUnits, long BookletPriceMinorUnits,
     int? QuietPeriodSeconds, int MaxExtensions, int ExtensionsUsed,
-    decimal TotalAreaSqm, IReadOnlyList<PlotEntry> Plots)
+    decimal TotalAreaSqm, IReadOnlyList<PlotEntry> Plots,
+    Guid? CoverImageDocumentId, IReadOnlyList<PublicDocumentEntry> Attachments,
+    decimal BrokerageFeePercent, string? CancellationReason)
 {
     public static AuctionDetail From(AuctionEntry a) => new(
         a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
@@ -51,7 +53,8 @@ public sealed record AuctionDetail(
         a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
         a.DepositMinorUnits, a.BookletPriceMinorUnits,
         a.QuietPeriodSeconds, a.MaxExtensions, a.ExtensionsUsed,
-        a.TotalAreaSqm, a.Plots);
+        a.TotalAreaSqm, a.Plots, a.CoverImageDocumentId, a.Attachments,
+        a.BrokerageFeePercent, a.CancellationReason);
 }
 
 public sealed record LivePrice(
@@ -67,6 +70,36 @@ public sealed record LivePrice(
     Guid? YourWinningBidId,
     DateTimeOffset EffectiveEndsAt, int ExtensionsUsed, int MaxExtensions,
     DateTimeOffset AsOf);
+
+/// <summary>
+/// One auction on the live monitor: what it is, plus where its bidding has got to.
+///
+/// The name and the channel ride along because a monitor showing six auctions has
+/// to say which is which, and the alternative — the portal joining this against the
+/// catalogue list by id on every tick — is a second request and a second thing to
+/// get out of step.
+///
+/// The leader label comes through <see cref="LeaderLabels"/> like every other
+/// caller's, so a masked auction stays masked here too (D-22). Staff watching the
+/// room are not an exception to that: the masking is the auction's own setting, and
+/// a screen that quietly unmasked it would make the setting a lie.
+/// </summary>
+public sealed record MonitorRow(
+    Guid AuctionId, string NameAr, string Channel,
+    string Status, long? PriceMinorUnits, long MinimumNextBidMinorUnits,
+    long OpeningPriceMinorUnits,
+    string? LeaderLabel,
+    DateTimeOffset StartsAt, DateTimeOffset EffectiveEndsAt,
+    int ExtensionsUsed, int MaxExtensions)
+{
+    public static MonitorRow From(AuctionEntry a, string? label) => new(
+        a.AuctionId, a.NameAr, a.Channel,
+        a.Status, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
+        a.OpeningPriceMinorUnits,
+        label,
+        a.StartsAt, a.EffectiveEndsAt ?? a.EndsAt,
+        a.ExtensionsUsed, a.MaxExtensions);
+}
 
 /// <summary>A bidder's own bid outcome. Sent to that bidder and to nobody else.</summary>
 public sealed record BidVerdictView(

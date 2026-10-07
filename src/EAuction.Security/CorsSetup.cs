@@ -42,9 +42,10 @@ public static class CorsSetup
                 // last place to notice something else trying.
                 .WithHeaders("Authorization", "Content-Type")
 
-                // The bid receipt is the only thing a portal reads off a response
-                // header today; listing it keeps AllowAnyHeader out of the picture.
-                .WithExposedHeaders("Location")
+                // Location for the bid receipt; Content-Disposition so a download
+                // fetched with a token (booklets, reports) keeps its real file name
+                // instead of falling back to one without an extension.
+                .WithExposedHeaders("Location", "Content-Disposition")
 
                 // Cache the preflight. Without it a browser sends an OPTIONS before
                 // every single bid, which doubles the request count on the hot path.

@@ -15,6 +15,20 @@ auction in front of them.
 tools/smoke/run-portals.sh --with-deps --keep-up
 ```
 
+Then plant some history, so التقارير and سجل المراجعة have something to show
+beyond whatever you create in the room:
+
+```bash
+dotnet run --project tools/seed -- --count 24
+# Compose instead of the local stack? Kafka is on 9192 there:
+#   dotnet run --project tools/seed -- --kafka localhost:9192 --count 24
+```
+
+About two dozen auctions across six months, in every outcome the platform can
+produce — sold, unsold, rejected, and both halves of a winner defaulting. Safe to
+run twice; see `tools/seed/README.md` for why, and for why it does not appear in
+المزادات.
+
 Wait for `Everything is up`. That brings up eleven services and both portals and
 leaves them running. Then **run it once more as a rehearsal** — the full
 walk-through, which takes about four minutes and tells you whether anything is
@@ -29,17 +43,54 @@ sessions do not fight:
 
 | Tab | URL | Sign in as |
 |---|---|---|
+| **Sandbox** | http://localhost:5111 | nobody — no sign-in |
 | Catalogue | http://localhost:3000 | nobody — stay signed out |
 | Bidder | http://localhost:3000 | `sara` |
 | Second bidder | http://localhost:3000 | `khalid` |
 | Administration | http://localhost:3001 | `admin-user` |
-| Committee | http://localhost:3001 | `committee-user` |
+| Committee | http://localhost:3001 | `committee-user` | 
+| **Live board** | http://localhost:3001 → المتابعة المباشرة | `committee-user` |
 | Reports | http://localhost:3001 | `reporting-user` |
 | Audit | http://localhost:3001 | `auditor-user` |
+| Inquiries desk | http://localhost:3001 | `inquiries-user` |
+| Inquiries approval | http://localhost:3001 | `inquiries-supervisor` |
+| Hall clerk (optional) | http://localhost:3001 | `clerk-user` — assign them to A3 as `admin-user` first |
+| New citizen (optional) | http://localhost:3000 | `noura` — not yet registered |
 
-Password for every account: `dev-only-password`. The two bidders also need a
-one-time code at the money steps; the terminal prints one, or any TOTP app seeded
-with `eauctiondevsecret1234567890` will produce it.
+`sara`, `khalid`, `noura` and `committee-user` also need the one-time code shown on
+the sandbox page — one code, valid for all of them.
+
+Password for every account: `dev-only-password`.
+
+The addresses above are the ones `run-portals.sh` uses. If you brought the stack up
+with Docker Compose instead, the portals, Keycloak and the sandbox are at these same
+addresses, but the services sit on different ports — see the header of
+`deploy/compose/docker-compose.yml`, which lists them. Nothing in this script asks
+you to open a service directly.
+
+**Open the sandbox first and keep it open**, ideally on a second screen. Registering
+as a bidder and paying a deposit are both behind a second factor, and the sandbox is
+the only place its code can be read — without it you cannot get past the first step
+of the bidder's journey, because the gate is real even though Nafath behind it is
+not. The code changes every thirty seconds and the page counts down to the next one;
+if the bar is nearly empty, wait for the next code rather than racing it.
+
+> Earlier versions of this page said any authenticator app seeded with
+> `eauctiondevsecret1234567890` would produce the code. It will not: that is an
+> ASCII secret and authenticator apps expect base32, so the codes come out wrong
+> and the login fails for a reason nothing on screen explains. Use the sandbox.
+
+The sandbox's second panel is the payment gateway. It shows the booklet fee, the
+deposit, the brokerage and any refunds as they are charged, with the reference the
+bidder would quote — worth pointing at, because otherwise the money in this system
+moves entirely out of sight. It also has the switch described in §6.1.
+
+**Put المتابعة المباشرة on the second screen.** It shows every open auction at
+once — price, leader, countdown — and refreshes itself every two seconds, so while
+you drive a bid in one window the board moves beside it. An auction inside its last
+two minutes outlines itself in red, which is the moment worth pointing at. Nobody
+needs to touch it during the demonstration; it is the thing people watch while you
+talk.
 
 **Pick your times before you start.** When you create the auction, set it to open
 about four minutes out and close about three minutes after that. Too soon and you
@@ -132,8 +183,31 @@ Confirm the award. **This is the one action that needs a second factor from a
 committee member**, because it transfers a parcel of state land to a named person.
 
 Then show the cascade, which is the part worth the time: **disqualify the winner**
-with a reason, and forfeit the deposit. The award moves down the ladder to Khalid
-at his own lower price — not Sara's. Confirm it, and settle.
+with a reason, and forfeit the deposit. The award does **not** move on by itself —
+the requirements send a defaulting winner to manual review. The screen shows Khalid
+as the suggested next bidder, at his own lower price — not Sara's — and two choices:
+**إحالة الترسية للمزايد التالي** or **إنهاء دون ترسية**. Refer it, then confirm it.
+
+> "The system names who is next. A person decides whether they get the land."
+
+### 6.2 Following the award up — `admin-user` (3 min)
+
+Open **متابعة الترسية**. The land price is paid outside the platform and the title
+passes at the notary; neither is integrated in the first phase, so this is where
+staff record them by hand — and nothing closes without a reference.
+
+1. Open Khalid's row → **احتساب التأمين المدفوع من الثمن** with the deposit's
+   gateway reference (the sandbox's payment panel shows it).
+2. **تسجيل السداد** for the balance, with a SADAD or transfer number. The remaining
+   figure drops to zero. Point out that an amount over the remainder is refused.
+3. Back on the committee tab, **اعتماد التسوية** is now enabled — it was disabled
+   while money was owed, because settling releases every other bidder's deposit.
+4. **بدء الإفراغ**, then **إكمال الإفراغ** with the new deed number.
+5. Below, **التأمينات غير المسوّاة** lists Sara's forfeited deposit and the losers'
+   refunds. Close each against its reference.
+
+An award past its payment deadline with money owed turns red as **متعثر — للمراجعة**.
+The platform does not act on it by itself; a person decides.
 
 ## 7. التقارير — `reporting-user` (5 min)
 
@@ -168,6 +242,22 @@ listed: who created the auction, who approved it, who accepted the guarantee, wh
 disqualified the winner. Find the reserve-price change — it says the reserve was
 changed and by whom, and no figure.
 
+Then open the other two tabs at the top of the screen:
+
+- **أحداث النظام** — what the platform did with no member of staff involved: Sara
+  becoming eligible when her deposit settled, each booklet and deposit payment, a
+  refund. The actor is «النظام».
+- **سجل المزايدات** — pick A5: every bid in the order it was recorded, with the time,
+  the bidder's name, the amount and whether the processor accepted it; then, below,
+  how the result became an award — who confirmed it, the winner and the amount.
+
+> "Nobody can edit a recorded bid — there is no screen, no endpoint and no role for
+> it. This is read straight from the bid log."
+
+An edit to an auction now reads «سعر الافتتاح: 900,000.00 ر.س ← 950,000.00 ر.س» —
+the value before, the value after, and the date. The reserve is the exception: it
+says only that it changed.
+
 Then press **تحقّق من السلسلة.**
 
 > "Each entry's hash is computed over the one before it. This just recomputed every
@@ -184,6 +274,24 @@ chain still shows it afterwards.
 
 | Question | The honest answer |
 |---|---|
+### 6.1 Showing the path where a bidder does not pay
+
+Worth ninety seconds if anyone asks what happens when a payment fails, because it
+is the only part of the money story that cannot be shown by it working.
+
+In the sandbox's payment panel pick a reason and press **رفض الدفع**, then have the
+second bidder try to pay their deposit. The portal tells them the payment was
+refused and offers to try again; they never become eligible; and the committee's
+screen shows them as not qualified. Press **قبول الدفع** afterwards, or the rest of
+the demonstration will fail in the same way and you will be debugging in front of an
+audience.
+
+What this is not: a real decline from a real bank. It is the platform's own refusal
+path being driven on purpose, which is the point — the behaviour on the far side of
+a refusal is real, and is what a procurement officer is actually asking about.
+
+---
+
 | Is Nafath connected? | No. Registration reads the identity claims from the token and stands in for the real callback. It needs credentials from Elm/NIC under contract. **Until then this must not touch real citizens' identities.** |
 | Did money move? | No. The payment gateway is a simulator that settles everything. The service refuses to start in production without an explicit flag, so it cannot ship by accident. PayTabs/SADAD need merchant accounts. |
 | Do bidders get an SMS? | Not yet. The in-product inbox works; SMS needs a licensed aggregator and a registered sender name. |

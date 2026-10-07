@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, config, type Session } from '@eauction/shared'
+import { BellIcon,api, config, type Session } from '@eauction/shared'
 
 interface Notice {
   id: string
@@ -121,13 +121,16 @@ export function Notifications({ session, onOpen }: Props) {
   return (
     <div ref={panel} style={{ position: 'relative' }}>
       <button
+        className={`icon-btn${open ? ' on' : ''}`}
         aria-label={unread > 0 ? `الإشعارات (${unread} غير مقروء)` : 'الإشعارات'}
+        title="الإشعارات"
+        aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
       >
-        الإشعارات
+        <BellIcon />
         {unread > 0 && (
-          <span className="pill warn num" style={{ marginInlineStart: 6 }}>
-            {unread}
+          <span className="icon-badge num" aria-hidden="true">
+            {unread > 9 ? '9+' : unread}
           </span>
         )}
       </button>

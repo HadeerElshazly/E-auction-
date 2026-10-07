@@ -1,22 +1,51 @@
 /*
- * One stylesheet for both portals. Arabic-first: the realm's default locale is ar,
- * the documents are Arabic, and the award letters are issued in Arabic, so RTL is
- * the default direction and LTR is the exception rather than the other way round.
+ * One stylesheet for both portals.
+ *
+ * The design is the one in the Amana Tech proposal deck (ppt/media/image34-37):
+ * a teal accent on near-white, a navigation rail on the right, content in soft
+ * white cards with generous radii, auctions as a grid of cards with a countdown
+ * strip over the cover image, and work done in stepped modals. The palette here
+ * was sampled from those screenshots rather than guessed — #06A8B7 is the colour
+ * read off the active rail item, the primary button and the active page number,
+ * which agreed to within a JPEG artifact.
+ *
+ * Arabic-first: the realm's default locale is ar, the documents are Arabic, and
+ * the award letters are issued in Arabic, so RTL is the default direction and LTR
+ * is the exception rather than the other way round. Everything below uses logical
+ * properties (inline-start/end) so the rail lands on the right in Arabic and the
+ * left in English without a second stylesheet.
  */
 
 :root {
-  --bg: #f6f7f9;
+  /* Sampled from the proposal screenshots. */
+  --accent: #06a8b7;
+  --accent-dark: #058b98;
+  --accent-weak: #e6f7f9;      /* icon tiles, hover fills, soft chips */
+  --accent-line: #b9e7ec;
+
+  --bg: #f4f6f8;
   --surface: #ffffff;
-  --border: #d8dce3;
-  --text: #15181d;
-  --muted: #5c6472;
-  --accent: #0f5c3f;        /* the green of Saudi government services */
-  --accent-weak: #e7f1ec;
-  --danger: #a3242b;
-  --danger-weak: #fbeceb;
-  --warn: #8a5a00;
-  --warn-weak: #fdf3e0;
-  --radius: 8px;
+  --surface-sunken: #f7f9fa;   /* the field cards on the detail tabs */
+  --border: #e8ebee;
+  --border-strong: #d6dbe0;
+
+  --text: #22282b;
+  --muted: #8b9299;
+
+  --ok: #127a46;
+  --ok-weak: #e4f0ea;
+  --danger: #c0392b;
+  --danger-weak: #fbecea;
+  --warn: #b26a00;
+  --warn-weak: #fdf2e2;
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --shadow: 0 1px 2px rgba(16, 32, 38, .04), 0 8px 24px rgba(16, 32, 38, .06);
+  --shadow-lift: 0 2px 6px rgba(16, 32, 38, .06), 0 16px 40px rgba(16, 32, 38, .10);
+  --rail: 232px;
+
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 }
 
@@ -26,7 +55,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Numbers read left-to-right even inside Arabic text, and a price that reverses
@@ -37,165 +67,875 @@ body {
 }
 .mono, code { font-family: var(--mono); }
 
-.app { max-width: 1120px; margin: 0 auto; padding: 0 20px 64px; }
+/* --- the shell -------------------------------------------------------------
+ *
+ * A fixed navigation rail with the content beside it. `grid` rather than a float
+ * or a margin so the rail and the content cannot disagree about the width, and so
+ * the rail collapses to a horizontal strip on a narrow screen with one rule. */
+
+.shell {
+  display: grid;
+  /* The rail is column one, and the rail markup comes first. In RTL that puts it
+     on the right, where the proposal has it; in LTR it lands on the left, which is
+     where an English reader expects it. One rule, both directions. */
+  grid-template-columns: var(--rail) 1fr;
+  align-items: start;
+  gap: 24px;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 24px 64px;
+}
+
+/* Both tracks may shrink below their content.
+ *
+ * A grid item's `min-width` is `auto`, which resolves to its min-content size and
+ * so refuses to shrink past it. One table wider than the phone therefore widens its
+ * track, the grid, and finally the page — and on a phone that does not show a
+ * scrollbar, it widens the layout viewport and renders every screen zoomed out.
+ * The `.table-scroll` wrappers cannot help until the track is allowed to be
+ * narrower than what is inside it. */
+.shell > * { min-width: 0; }
+
+.rail {
+  position: sticky;
+  top: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.rail a, .rail button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+.rail button .icon { flex: none; width: 20px; text-align: center; opacity: .75; }
+.rail button:hover:not(.on) { background: var(--accent-weak); }
+
+/* The active item is the one solid block of colour on the screen, which is what
+   makes it findable without reading. */
+/* The active item, and its hover.
+ *
+ * Both, because the generic `button:hover` below sets `color: var(--accent)` and
+ * carries the same specificity as this rule while coming later in the file — so
+ * hovering the active item painted teal text on the teal fill and the label
+ * disappeared. It is only visible when the pointer is actually resting on the item
+ * a person has just chosen, which is to say: most of the time they are looking
+ * at it. */
+.rail button.on,
+.rail button.on:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 6px 18px rgba(6, 168, 183, .28);
+}
+.rail button.on .icon { opacity: 1; }
+.rail .chevron { margin-inline-start: auto; opacity: .45; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 4px;
+  }
+  .rail button { width: auto; white-space: nowrap; }
+  .rail .chevron { display: none; }
+}
+
+/* --- the top bar ----------------------------------------------------------- */
 
 header.bar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 14px 20px; margin-bottom: 24px;
-  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 28px;
+  margin-bottom: 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 header.bar h1 { font-size: 17px; margin: 0; font-weight: 650; }
 header.bar .grow { flex: 1; }
 header.bar .who { color: var(--muted); font-size: 13px; }
 
-.card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 18px; margin-bottom: 16px;
+/* The circular controls in the corner of the proposal's top bar. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
 }
-.card h2 { font-size: 15px; margin: 0 0 14px; font-weight: 650; }
-.card h3 { font-size: 13px; margin: 18px 0 8px; color: var(--muted); font-weight: 650; }
+.icon-btn:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-line); }
+.icon-btn { position: relative; }
+/* The page this button opens is the one showing. */
+.icon-btn.on { background: var(--accent-weak); color: var(--accent); border-color: var(--accent-line); }
+/* An unread count on the bell, in the corner it would be read from first. */
+.icon-badge {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* --- surfaces -------------------------------------------------------------- */
+
+.app { max-width: 1440px; margin: 0 auto; padding: 0 24px 64px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.card h2 { font-size: 17px; margin: 0 0 4px; font-weight: 650; }
+.card h2 + .lede { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+.card h3 { font-size: 13px; margin: 20px 0 10px; color: var(--muted); font-weight: 650; }
+
+/* A page heading with its action on the far side, as every screen in the deck
+   opens. */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.page-head .grow { flex: 1; }
+.page-head h2 { margin: 0 0 4px; font-size: 19px; font-weight: 650; }
+.page-head p { margin: 0; color: var(--muted); font-size: 13px; }
+
+/* --- controls -------------------------------------------------------------- */
 
 button {
-  font: inherit; padding: 8px 14px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: inherit;
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  transition: background .12s, border-color .12s, box-shadow .12s;
 }
-button:hover:not(:disabled) { border-color: var(--muted); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.primary:hover:not(:disabled) { filter: brightness(1.1); }
-button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
-button.big { padding: 12px 20px; font-size: 16px; font-weight: 650; }
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .5; cursor: not-allowed; }
 
-label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
-label > span { display: block; margin-bottom: 4px; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(6, 168, 183, .25);
+}
+button.primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
+
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.danger:hover:not(:disabled) { filter: brightness(1.06); color: #fff; }
+button.big { padding: 13px 24px; font-size: 16px; font-weight: 650; }
+button.ghost { border-color: transparent; background: none; }
+
+label { display: block; margin-bottom: 14px; font-size: 13px; color: var(--text); font-weight: 500; }
+label > span { display: block; margin-bottom: 6px; }
+
 input, select, textarea {
-  font: inherit; width: 100%; padding: 8px 10px;
-  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  font: inherit;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: var(--text);
 }
-input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input::placeholder, textarea::placeholder { color: var(--muted); }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+input:disabled, select:disabled, textarea:disabled { background: var(--surface-sunken); }
 
-.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; }
 
+/* --- tables ---------------------------------------------------------------- */
+
+/* A table wider than the screen scrolls inside its own box.
+ *
+ * Without this the table widens the page, and on a phone that does not produce a
+ * horizontal scrollbar — it widens the *layout viewport*. التقارير has ten columns,
+ * so a 390px phone laid the whole page out at 1090px and rendered it zoomed out to
+ * about a third size: every screen in the portal, not just the table, unreadable.
+ *
+ * Not `overflow-x` on `.card`, which would have been one line and covered every
+ * table at once. `overflow-x: auto` forces `overflow-y` to compute as `auto` too,
+ * so cards would have gained vertical scrollbars and clipped their own content. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: start; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+
+/* Columns size to their content inside the scroller rather than crushing to fit,
+   which is what makes the horizontal scroll meaningful instead of just a
+   narrower, more broken table. */
+.table-scroll > table { min-width: max-content; }
+th, td { text-align: start; padding: 12px 12px; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-size: 12px; font-weight: 650; }
-tbody tr:hover { background: var(--bg); }
+/* A .num cell is left-to-right, which turns `start` into left: on an Arabic page
+   the value drifted to the far side of its column, away from its heading. */
+[dir="rtl"] td.num, [dir="rtl"] th.num { text-align: right; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--surface-sunken); }
+
+/* --- tabs ------------------------------------------------------------------
+ *
+ * The underline row from the auction detail modal. A button rather than a link,
+ * because none of these change the URL — the portals carry no router. */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.tabs button {
+  border: 0;
+  background: none;
+  border-radius: 0;
+  padding: 12px 16px;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tabs button:hover:not(:disabled) { color: var(--accent); border-color: transparent; }
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 650; }
+
+/* --- pills ----------------------------------------------------------------- */
 
 .pill {
-  display: inline-block; padding: 2px 9px; border-radius: 99px;
-  font-size: 12px; font-weight: 650; border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
 }
-.pill.live { background: var(--accent-weak); color: var(--accent); }
+.pill::before {
+  content: "";
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+}
+.pill.plain::before { display: none; }
+.pill.live { background: var(--ok-weak); color: var(--ok); }
 .pill.wait { background: var(--warn-weak); color: var(--warn); }
 .pill.done { background: var(--bg); color: var(--muted); border-color: var(--border); }
 .pill.bad  { background: var(--danger-weak); color: var(--danger); }
+.pill.teal { background: var(--accent-weak); color: var(--accent); }
 
-.notice { padding: 11px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 14px; }
-.notice.error { background: var(--danger-weak); color: var(--danger); }
-.notice.ok { background: var(--accent-weak); color: var(--accent); }
-.notice.info { background: var(--warn-weak); color: var(--warn); }
+/* --- notices --------------------------------------------------------------- */
+
+.notice {
+  padding: 13px 16px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+  font-size: 14px;
+  border: 1px solid transparent;
+}
+.notice.error { background: var(--danger-weak); color: var(--danger); border-color: #f3d3cf; }
+.notice.ok { background: var(--accent-weak); color: var(--accent-dark); border-color: var(--accent-line); }
+.notice.info { background: var(--warn-weak); color: var(--warn); border-color: #f0dcbb; }
 .notice ul { margin: 6px 0 0; padding-inline-start: 20px; }
 
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
-.big-number { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; }
-.steps { list-style: none; padding: 0; margin: 0; }
-.steps li { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; }
-.steps .tick { width: 18px; text-align: center; }
-.steps .done { color: var(--accent); }
-.steps .todo { color: var(--border); }
+.big-number { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
 
-.centre { max-width: 420px; margin: 72px auto; text-align: center; }
+.strong { font-weight: 650; }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14161a; --surface: #1c1f25; --border: #30353e;
-    --text: #e9ecf1; --muted: #949cab;
-    --accent: #3faa7d; --accent-weak: #16271f;
-    --danger: #e4797f; --danger-weak: #2a1719;
-    --warn: #d9a441; --warn-weak: #2a2214;
-  }
-  header.bar { background: var(--surface); }
+/* --- the auction page (bidder) ---------------------------------------------
+ *
+ * Read top to bottom the way a bidder decides: what is this and what state is it
+ * in, when does it run, what does it cost to take part. */
+
+.back-link {
+  border: 0;
+  background: none;
+  padding: 6px 0;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.back-link:hover:not(:disabled) { color: var(--accent); }
+
+.auction-hero { padding: 26px; }
+.auction-hero h1 { font-size: 24px; font-weight: 700; margin: 0; line-height: 1.35; }
+.auction-hero .hero-sub { color: var(--muted); font-size: 14px; margin-top: 2px; }
+
+/* Short facts in a line, separated by dots rather than boxed — they are context
+   for the title, not things to act on. */
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 0;
+  margin: 14px 0 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.hero-meta > span:not(:last-child)::after {
+  content: "·";
+  margin-inline: 10px;
+  color: var(--border-strong);
 }
 
-/* --- the bid certificate -------------------------------------------------- */
+/* When it runs: start → end, and the one figure that changes — the countdown. */
+.timeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 20px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.timeline-point,
+.timeline-countdown { display: grid; gap: 2px; }
+.timeline-label { color: var(--muted); font-size: 13px; }
+.timeline-value { font-size: 16px; font-weight: 650; }
+.timeline-note { color: var(--warn); font-size: 12px; }
+.timeline-arrow { color: var(--border-strong); font-size: 18px; }
+.timeline-countdown {
+  margin-inline-start: auto;
+  padding-inline-start: 20px;
+  border-inline-start: 1px solid var(--border);
+}
+.timeline-countdown .timeline-value { color: var(--accent-dark); font-size: 18px; }
 
-/*
- * A printable overlay. It sits over the page rather than on a route of its own
- * because the portal has no router — and because a certificate is something a
- * bidder opens, prints and dismisses, not a place they navigate to.
+/* The four figures a bidder weighs, at one size so none of them reads as a
+   footnote. The price tile is tinted once the auction is live, because then it is
+   the figure that moves. */
+.stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.stat {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.stat.highlight { background: var(--accent-weak); border-color: var(--accent-line); }
+.stat-label { color: var(--muted); font-size: 13px; font-weight: 500; }
+.stat-value { font-size: 21px; font-weight: 700; line-height: 1.35; }
+.stat.highlight .stat-value { color: var(--accent-dark); }
+.stat-sub { color: var(--muted); font-size: 13px; }
+
+.section-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 4px; }
+.section-head h2 { margin: 0; }
+.card .lede { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+
+
+/* The auction's cover image, across the top of its card. */
+.auction-hero .hero-cover {
+  display: block;
+  width: calc(100% + 52px);
+  max-height: 260px;
+  object-fit: cover;
+  margin: -26px -26px 20px;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+@media (max-width: 640px) {
+  .auction-hero .hero-cover { width: calc(100% + 36px); margin: -18px -18px 16px; }
+}
+
+/* Public documents: a plain list of downloads. */
+.doc-list { list-style: none; margin: 0; padding: 0; }
+.doc-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-list li:last-child { border-bottom: 0; }
+.doc-list a { font-weight: 500; }
+
+/* --- شاشة المزايدة ----------------------------------------------------------
+ *
+ * The bidder's screen while the price moves: the figure and the clock large enough
+ * to read from across a desk, and the raises as big targets — a bid war is fought
+ * in seconds and a small button is a missed bid. */
+
+.room-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-color: var(--accent-line);
+  background: var(--accent-weak);
+}
+
+.room { max-width: 920px; margin: 0 auto; }
+.room-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.room-title { font-size: 22px; font-weight: 700; margin: 0 0 14px; }
+
+.room-board {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow);
+}
+.room-price, .room-clock {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 22px 24px;
+  background: var(--surface);
+}
+.room-label { color: var(--muted); font-size: 14px; }
+.room-figure { font-size: 34px; font-weight: 700; line-height: 1.2; }
+.room-price .room-figure { color: var(--accent-dark); }
+.room-sub { color: var(--muted); font-size: 13px; min-height: 1em; }
+.room-standing { font-size: 15px; font-weight: 600; color: var(--muted); }
+.room-standing.lead { color: var(--ok); }
+.room-standing.behind { color: var(--warn); }
+/* The last two minutes: the clock turns red, because this is when it is decided. */
+.room-board.closing .room-clock { background: var(--danger-weak); }
+.room-board.closing .room-clock .room-figure { color: var(--danger); }
+
+.quick-raise {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.quick-raise-btn {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 16px 10px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-weak);
+  color: var(--accent-dark);
+  border-radius: var(--radius-sm);
+}
+.quick-raise-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+.quick-raise-step { font-size: 13px; font-weight: 600; opacity: .85; }
+.quick-raise-amount { font-size: 18px; font-weight: 700; }
+
+@media (max-width: 640px) {
+  .room-board { grid-template-columns: 1fr; }
+  .room-figure { font-size: 28px; }
+  .quick-raise { grid-template-columns: 1fr; }
+}
+
+/* --- مزاداتي الجارية ---------------------------------------------------------
+ *
+ * One card per running auction. The edge says where the bidder stands at a glance
+ * — green leading, amber behind — so a row of cards can be scanned for the one
+ * that needs a raise without reading any of them. */
+
+.live-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+}
+.live-card {
+  display: grid;
+  gap: 9px;
+  align-content: start;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-inline-start: 5px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.live-card.lead { border-inline-start-color: var(--ok); }
+.live-card.behind { border-inline-start-color: var(--warn); }
+.live-card.closing { background: var(--danger-weak); }
+
+.live-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.live-card-name { flex: 1; margin: 0; font-weight: 700; font-size: 15px; }
+.live-card-clock { font-size: 19px; font-weight: 700; color: var(--text); }
+.live-card-clock.urgent { color: var(--danger); }
+
+.live-card-price { display: grid; gap: 0; min-height: 44px; align-content: center; }
+.live-card-figure { font-size: 23px; font-weight: 700; color: var(--accent-dark); line-height: 1.2; }
+
+.live-card-standing { font-weight: 600; color: var(--warn); }
+.live-card-standing.lead { color: var(--ok); }
+
+.live-card-raises { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.live-card-raises .quick-raise-btn { padding: 7px 4px; gap: 2px; }
+.live-card-raises .quick-raise-step { font-size: 11px; }
+.live-card-raises .quick-raise-amount { font-size: 13px; }
+.live-card-custom { display: flex; gap: 6px; }
+.live-card-custom input {
+  flex: 1; min-width: 0; font: inherit; padding: 7px 10px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+}
+.live-card-custom button { padding: 7px 16px; }
+.live-card-more { justify-self: start; padding: 2px 0; color: var(--muted); font-size: 13px; }
+
+/* طلباتي: search and two rows of filters above the table. */
+.applications-tools { display: grid; gap: 10px; margin-bottom: 14px; }
+.applications-tools input[type="search"] {
+  font: inherit; padding: 9px 14px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface);
+}
+
+/* Search and status filter above the catalogue. */
+.catalogue-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.catalogue-tools input[type="search"] {
+  flex: 1 1 260px;
+  font: inherit;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 7px 14px; border-radius: 999px; font-size: 14px; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.on:hover:not(:disabled) { color: #fff; }
+
+/* متابعة الترسية: an overdue award stands out, and a row opens into its record. */
+tr.row-alert td { background: var(--danger-weak); }
+tr.detail-row:hover { background: none; }
+tr.detail-row > td { background: var(--surface-sunken); }
+.followup-detail {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  padding: 6px 2px;
+}
+.followup-detail h3 { margin-top: 0; }
+.followup-detail input { font: inherit; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+
+/* A refusal typed in place, in the row it refuses. */
+.refuse { display: grid; gap: 8px; min-width: 220px; }
+.refuse input { font: inherit; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+
+@media (max-width: 640px) {
+  .auction-hero { padding: 18px; }
+  .auction-hero h1 { font-size: 20px; }
+  .timeline-arrow { display: none; }
+  .timeline-countdown { margin-inline-start: 0; padding-inline-start: 0; border-inline-start: 0; }
+}
+
+.steps { list-style: none; padding: 0; margin: 0; }
+.steps li { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; }
+.steps .tick { width: 18px; text-align: center; }
+.steps .done { color: var(--accent); }
+.steps .todo { color: var(--border-strong); }
+
+.centre { max-width: 440px; margin: 80px auto; text-align: center; }
+.centre h1 { font-size: 24px; }
+
+/* --- the auction grid ------------------------------------------------------
+ *
+ * The screen the proposal leads with: each auction a card with its cover image,
+ * the channel it runs on, a countdown, and the few facts a clerk scans for. */
+
+.auction-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.auction-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  text-align: start;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: box-shadow .15s, transform .15s;
+}
+.auction-card:hover { box-shadow: var(--shadow-lift); transform: translateY(-2px); border-color: var(--border); color: inherit; }
+
+/* A card that is not itself the control. The bidder's catalogue puts a التفاصيل
+   button in the body, so the card must not offer a pointer and lift on hover and
+   then do nothing when clicked. */
+.auction-card.static { cursor: default; }
+.auction-card.static:hover { transform: none; box-shadow: var(--shadow); }
+
+.auction-card .cover {
+  position: relative;
+  height: 150px;
+  background: linear-gradient(135deg, #d9c9ab, #c6ab83);
+  background-size: cover;
+  background-position: center;
+}
+.auction-card .cover > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.auction-card .cover .channel {
+  position: absolute;
+  top: 12px;
+  inset-inline-start: 12px;
+  background: rgba(255, 255, 255, .92);
+  color: var(--text);
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+/* The opposite corner, for a card that carries two of them. */
+.auction-card .cover .channel.at-end { inset-inline-start: auto; inset-inline-end: 12px; }
+
+/* The countdown straddles the bottom edge of the image, which is what makes the
+   card read as one object rather than a picture with a caption. */
+.countdown {
+  position: absolute;
+  inset-inline-start: 50%;
+  transform: translateX(50%);
+  bottom: -18px;
+  display: flex;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.countdown div {
+  min-width: 52px;
+  padding: 6px 4px 7px;
+  text-align: center;
+  border-inline-start: 1px solid var(--border);
+}
+.countdown div:first-child { border-inline-start: 0; }
+.countdown b {
+  display: block;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  direction: ltr;
+}
+.countdown span { display: block; color: var(--muted); font-size: 11px; }
+
+.auction-card .body { padding: 30px 16px 16px; flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.auction-card .title { font-weight: 650; font-size: 15px; margin: 0; }
+.auction-card .facts { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+
+/* The price on a catalogue card.
+ *
+ * Not `.big-number`, which is sized for a figure standing alone on a page. At 32px
+ * inside a 300px card an Arabic-Indic riyal amount runs the full width and becomes
+ * the only thing on the card, which is wrong twice over: the name of the land is
+ * what a bidder is looking for, and a number that wide reads as a layout accident.
  */
-.certificate-backdrop {
+.auction-card .price {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  line-height: 1.25;
+}
+
+/* The clock sits in the countdown strip, which is sized for four short cells. A
+   single wide cell needs room for "3 يوم 4 ساعة" without wrapping it. */
+.auction-card .countdown.wide div { min-width: 0; padding-inline: 14px; }
+.auction-card .countdown.wide b { font-size: 14px; white-space: nowrap; }
+.auction-card .facts div { display: flex; gap: 7px; align-items: center; }
+
+/* --- the live monitor ------------------------------------------------------
+ *
+ * Sized to be read from across a room rather than from a desk: this is the screen
+ * that goes on the wall while a plan is being sold. Hence the price at 34px and the
+ * clock in a monospaced face, so the digits do not shift sideways as they count
+ * down and draw the eye to a number that is not changing. */
+
+.monitor-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+
+.monitor-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+/* The last two minutes, which is when an auction is actually decided and when a
+   watcher needs to be looking at this one rather than the other five. */
+.monitor-card.closing {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-weak), var(--shadow);
+}
+
+.monitor-card .name { font-weight: 650; font-size: 15px; margin: 0 0 10px; }
+
+.monitor-card .price {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  line-height: 1.15;
+  color: var(--accent);
+}
+
+.monitor-card .clock {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.monitor-card .clock.urgent { color: var(--danger); }
+.monitor-card .days { margin-inline-end: 6px; }
+
+/* The clock is monospaced so its digits do not shift sideways as they count down.
+   A word in that slot has to leave the monospace face: it has no Arabic shaping,
+   and انتهى renders with its letters disconnected. */
+.monitor-card .clock.word { font-family: inherit; font-size: 15px; }
+
+.monitor-card .facts { display: grid; gap: 7px; font-size: 14px; }
+.monitor-card .facts > div { display: flex; gap: 10px; }
+.monitor-card .facts > div > span:first-child { min-width: 118px; }
+
+/* --- field cards (the detail tabs) ----------------------------------------- */
+
+.field-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.field-card .tile {
+  flex: none;
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+.field-card .label { display: block; color: var(--muted); font-size: 12px; }
+.field-card .value { display: block; font-weight: 600; }
+
+/* --- pagination ------------------------------------------------------------ */
+
+.pagination { display: flex; gap: 8px; align-items: center; }
+.pagination button {
+  width: 36px; height: 36px; padding: 0;
+  border-radius: 50%;
+  display: grid; place-items: center;
+}
+.pagination button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* --- modal -----------------------------------------------------------------
+ *
+ * The deck does most of its work in a dialog over a dimmed page. Used here for
+ * the certificate too, which is why `.certificate-backdrop` shares the look. */
+
+.modal-backdrop, .certificate-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 20, 0.55);
+  background: rgba(20, 30, 34, .45);
   display: flex;
   align-items: flex-start;
   justify-content: center;
   overflow: auto;
-  padding: 24px 16px;
+  padding: 40px 16px;
   z-index: 50;
 }
-
-.certificate {
-  max-width: 680px;
-  width: 100%;
-  margin: 0;
+.modal {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lift);
+  width: min(760px, 100%);
+  padding: 24px 28px 28px;
 }
+.modal-head { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+.modal-head .grow { flex: 1; }
+.modal-head h2 { margin: 0 0 2px; font-size: 18px; font-weight: 650; }
+.modal-head p { margin: 0; color: var(--muted); font-size: 13px; }
 
-.certificate h2 {
-  border-bottom: 2px solid var(--accent);
-  padding-bottom: 8px;
-}
+/* The step bar from the four-step create flow: a track, a filled portion, and
+   the count underneath. */
+.stepbar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+.stepbar i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
 
-/*
- * Printing drops everything but the certificate. Without this the print carries
- * the catalogue, the bid box and a modal backdrop rendered as a grey slab.
- *
- * Hidden by visibility rather than display, and that is not a style preference.
- * The certificate is rendered inside the app's own tree, so `display: none` on
- * anything above it takes the certificate out of the layout too and prints a blank
- * page. `visibility: hidden` does not inherit past a descendant that sets
- * `visible`, which is the one way to keep a deep node and drop its ancestors.
- */
+.certificate { max-width: 680px; width: 100%; margin: 0; }
+.certificate h2 { border-bottom: 2px solid var(--accent); padding-bottom: 10px; }
+
 @media print {
-  body * {
-    visibility: hidden;
-  }
-
-  .certificate-backdrop,
-  .certificate-backdrop * {
-    visibility: visible;
-  }
-
-  .certificate-backdrop {
-    position: absolute;
-    inset: 0;
-    background: none;
-    padding: 0;
-    overflow: visible;
-  }
-
-  .certificate {
-    box-shadow: none;
-    border: none;
-    max-width: none;
-  }
-
-  /* Buttons print as empty boxes and are useless on paper. */
-  .no-print {
-    display: none !important;
-  }
+  body * { visibility: hidden; }
+  .certificate-backdrop, .certificate-backdrop * { visibility: visible; }
+  .certificate-backdrop { position: absolute; inset: 0; background: none; padding: 0; overflow: visible; }
+  .certificate { box-shadow: none; border: none; max-width: none; }
+  .no-print { display: none !important; }
 }
 
 /* The clerk's own user id in the portal header (§29). Not `.who`: that class is
    the one identifying span a test can rely on, and a second match breaks it. */
-.bar .ltr-id {
-  margin-inline-end: 12px;
-}
+.bar .ltr-id { margin-inline-end: 12px; }
 
 /* --- the notification bell -------------------------------------------------
  *
@@ -216,25 +956,13 @@ tbody tr:hover { background: var(--bg); }
   text-align: start;
 }
 
-ul.notifications {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-ul.notifications li {
-  border-top: 1px solid var(--border);
-}
-
-ul.notifications li:first-child {
-  border-top: none;
-}
+ul.notifications { list-style: none; margin: 0; padding: 0; }
+ul.notifications li { border-top: 1px solid var(--border); }
+ul.notifications li:first-child { border-top: none; }
 
 /* The unread marker is a border on the inline-start edge, which flips with the
  * writing direction on its own. */
-ul.notifications li.unread {
-  border-inline-start: 3px solid var(--accent);
-}
+ul.notifications li.unread { border-inline-start: 3px solid var(--accent); }
 
 button.notice-row {
   display: block;
@@ -242,22 +970,137 @@ button.notice-row {
   text-align: start;
   background: none;
   border: none;
-  padding: 10px 12px;
+  border-radius: 0;
+  padding: 11px 14px;
   cursor: pointer;
   font: inherit;
   color: inherit;
 }
+button.notice-row:hover { background: var(--accent-weak); color: inherit; }
 
-button.notice-row:hover {
-  background: var(--accent-weak);
+.notice-title { display: block; font-weight: 600; margin-bottom: 2px; }
+.notice-body { display: block; }
+
+/* --- dark -----------------------------------------------------------------
+ *
+ * The proposal is a light design and this is not in it. Kept because a portal
+ * that ignores the setting looks broken on a machine that asked for dark, and
+ * tuned to the same teal so the two are recognisably one product. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #11161a; --surface: #182025; --surface-sunken: #141b20;
+    --border: #28333a; --border-strong: #35424a;
+    --text: #e7edf1; --muted: #8c99a3;
+    --accent: #2fc0cf; --accent-dark: #4ad0dd; --accent-weak: #102d33; --accent-line: #1d4850;
+    --ok: #4cc08a; --ok-weak: #11291f;
+    --danger: #e8736f; --danger-weak: #2b1a19;
+    --warn: #d9a44a; --warn-weak: #2a2113;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+    --shadow-lift: 0 2px 6px rgba(0,0,0,.35), 0 16px 40px rgba(0,0,0,.4);
+  }
+  header.bar { background: var(--surface); }
 }
 
-.notice-title {
-  display: block;
-  font-weight: 600;
-  margin-bottom: 2px;
+/* The real winner on a staff card — highlighted, since it is the one fact the
+   public view masks and staff came to the card for. */
+.winner-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--teal-soft, rgba(13, 148, 136, 0.08));
+  font-size: 0.9rem;
+}
+.winner-row > span:first-child {
+  color: var(--muted, #64748b);
 }
 
-.notice-body {
-  display: block;
+/* A staff account on the bidder portal: the message, and the way out of it. */
+.staff-redirect {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+
+/* Paging under a long list — the audit trail. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+
+/* «رسا عليك المزاد» — the winner's panel on the auction page. */
+.winner-panel { border: 1px solid var(--accent); }
+.winner-head { display: flex; align-items: center; gap: 12px; }
+.winner-badge { font-size: 2rem; line-height: 1; }
+.award-steps { list-style: none; padding: 0; margin: 0; }
+.award-step { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.award-step:last-child { border-bottom: 0; }
+.award-step-mark {
+  width: 26px; height: 26px; flex: none; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 700;
+  background: var(--border, #e5e7eb); color: var(--muted, #64748b);
+}
+.award-step.done .award-step-mark { background: var(--accent); color: #fff; }
+.award-step.you .award-step-mark { background: #f59e0b; color: #fff; }
+.award-step-title { font-weight: 600; margin-bottom: 2px; }
+.pill.small { font-size: 0.75rem; padding: 1px 8px; }
+
+/* الاستفسارات — staff list and the bidder's section on the auction page. */
+.inquiry-list { display: grid; gap: 12px; }
+.inquiry-card { border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+.inquiry-question { margin: 0; white-space: pre-wrap; font-weight: 500; }
+.inquiry-answer { background: var(--surface-2, #f8fafc); border-radius: 8px; padding: 10px; white-space: pre-wrap; }
+.inquiry-actions { display: grid; gap: 8px; }
+.inquiry-actions textarea { width: 100%; font: inherit; }
+.clarification { padding: 10px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.clarification:last-child { border-bottom: 0; }
+.clarification .q { font-weight: 600; margin-bottom: 4px; }
+
+/* سجل المزايدات — the bid history and the decisions after it. */
+tr.row-lead td { background: var(--accent-soft, rgba(13, 148, 136, 0.08)); font-weight: 600; }
+.decision-list { padding-inline-start: 20px; display: grid; gap: 10px; }
+.bid-history-card summary { cursor: pointer; list-style: none; }
+.bid-history-card[open] summary { margin-bottom: 12px; }
+
+/* متابعة الترسية — the committee's decision cell. */
+.decision-cell { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.decision-cell input { flex: 1 1 160px; min-width: 140px; }
+
+/* حتى البدء / حتى الإغلاق on the auction page. */
+.countdown-panel {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin: 14px 0; padding: 12px 16px; border-radius: 12px;
+  background: var(--accent-soft, rgba(13, 148, 136, 0.08));
+}
+.countdown-panel-label { font-weight: 600; }
+.countdown-panel-units { display: flex; gap: 8px; direction: rtl; }
+.countdown-panel-unit {
+  display: grid; justify-items: center; min-width: 58px; padding: 6px 8px;
+  border-radius: 10px; background: var(--surface, #fff); border: 1px solid var(--border, #e5e7eb);
+}
+.countdown-panel-unit b { font-size: 1.4rem; line-height: 1.2; }
+.countdown-panel-unit span { font-size: 0.75rem; color: var(--muted, #64748b); }
+
+/* The shared top bar's user badge: initials, name, roles. */
+.user-badge { display: flex; align-items: center; gap: 10px; }
+.user-badge .avatar {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-weak); color: var(--accent); font-weight: 700; font-size: 13px;
+}
+.user-badge .user-lines { display: grid; line-height: 1.25; }
+.user-badge .user-name { font-weight: 600; font-size: 13px; }
+.user-badge .user-role { color: var(--muted); font-size: 12px; }
+@media (max-width: 640px) { .user-badge .user-lines { display: none; } }
+
+/* The side menu folded to its icons. Labels stay in the markup for screen readers. */
+.shell:has(.rail.collapsed) { grid-template-columns: 64px 1fr; }
+.rail.collapsed button { justify-content: center; padding: 12px 0; }
+.rail.collapsed .label, .rail.collapsed .chevron {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+.rail.collapsed .icon { width: auto; font-size: 18px; }

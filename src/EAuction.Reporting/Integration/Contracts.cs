@@ -11,6 +11,7 @@ public static class InboundEvents
 {
     public const string AuctionApproved = "AuctionApproved";
     public const string AuctionRejected = "AuctionRejected";
+    public const string AuctionCancelled = "AuctionCancelled";
     public const string AuctionStarted = "AuctionStarted";
     public const string AuctionClosed = "AuctionClosed";
     public const string CandidateOffered = "CandidateOffered";

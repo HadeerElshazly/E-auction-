@@ -10,11 +10,15 @@ public static class InboundEvents
 {
     public const string AuctionApproved = "AuctionApproved";
     public const string ParticipantEligibilityChanged = "ParticipantEligibilityChanged";
+    public const string BankGuaranteeRejected = "BankGuaranteeRejected";
+    public const string AuctionCancelled = "AuctionCancelled";
+    public const string AuctionUnsold = "AuctionUnsold";
     public const string PaymentSettled = "PaymentSettled";
     public const string AuctionStarted = "AuctionStarted";
     public const string AuctionClosed = "AuctionClosed";
     public const string CurrentWinner = "CurrentWinner";
     public const string AwardConfirmed = "AwardConfirmed";
+    public const string AwardFollowUpUpdated = "AwardFollowUpUpdated";
     public const string WinnerDisqualified = "WinnerDisqualified";
     public const string DepositsReleasable = "DepositsReleasable";
 }
@@ -52,6 +56,34 @@ public sealed record AuctionIdPayload
     public Guid AuctionId { get; init; }
 }
 
+public sealed record GuaranteeRejectedPayload
+{
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public string Reason { get; init; } = "";
+    public DateTimeOffset At { get; init; }
+}
+
+public sealed record InquiryAnsweredPayload
+{
+    public Guid InquiryId { get; init; }
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public bool Closed { get; init; }
+}
+
+public sealed record ClarificationPublishedPayload
+{
+    public Guid ClarificationId { get; init; }
+    public Guid AuctionId { get; init; }
+}
+
+public sealed record AuctionCancelledPayload
+{
+    public Guid AuctionId { get; init; }
+    public string Reason { get; init; } = "";
+}
+
 public sealed record CurrentWinnerPayload
 {
     public Guid AuctionId { get; init; }
@@ -71,6 +103,20 @@ public sealed record AwardConfirmedPayload
     public Guid WinnerBidderId { get; init; }
     public long AmountMinorUnits { get; init; }
     public DateTimeOffset ComplianceDeadline { get; init; }
+}
+
+/// <summary>
+/// auction-admin's snapshot of an award, sent after every step staff record —
+/// and republished whole on its start, so it is a state to compare, not a step.
+/// </summary>
+public sealed record AwardFollowUpPayload
+{
+    public Guid AuctionId { get; init; }
+    public Guid WinnerBidderId { get; init; }
+    public long PaidMinorUnits { get; init; }
+    public long RemainingMinorUnits { get; init; }
+    public string TransferStatus { get; init; } = "";
+    public DateTimeOffset? DisqualifiedAt { get; init; }
 }
 
 public sealed record WinnerDisqualifiedPayload

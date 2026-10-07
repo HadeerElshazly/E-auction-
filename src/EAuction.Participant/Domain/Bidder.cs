@@ -67,9 +67,9 @@ public sealed class Bidder
     public void CompleteProfile(string phone, string email, DateTimeOffset now)
     {
         var problems = new List<string>();
-        if (string.IsNullOrWhiteSpace(phone)) problems.Add("Phone is required.");
-        if (string.IsNullOrWhiteSpace(email)) problems.Add("Email is required.");
-        else if (!email.Contains('@')) problems.Add("Email is not valid.");
+        if (string.IsNullOrWhiteSpace(phone)) problems.Add("رقم الجوال مطلوب.");
+        if (string.IsNullOrWhiteSpace(email)) problems.Add("البريد الإلكتروني مطلوب.");
+        else if (!email.Contains('@')) problems.Add("البريد الإلكتروني غير صحيح.");
         if (problems.Count > 0) throw new ParticipantValidationException(problems);
 
         Phone = phone.Trim();

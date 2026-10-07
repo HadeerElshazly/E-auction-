@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { sar, type Api } from '@eauction/shared'
+import { day, sar, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
+import { BidderName } from './winners'
 
 interface Props {
+  session: Session
   auction: Auction
   client: Api
   busy: boolean
@@ -25,22 +27,33 @@ interface Props {
  * award, then letter, then signed letter, then notify — visible rather than
  * something a clerk discovers by getting a 409.
  */
-export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onAct }: Props) {
+export function AwardPanel({ session, auction, client, busy, canAct, committeeUserId, onAct }: Props) {
   const [reason, setReason] = useState('')
   const [forfeit, setForfeit] = useState(true)
+  const [resultReason, setResultReason] = useState('')
 
-  const before = ['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Live']
+  const before = ['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Live', 'Cancelled']
   if (before.includes(auction.status)) return null
 
-  const award = auction.currentAward
+  // Once settled there is no open award; the settled one is still the result.
+  const award = auction.currentAward ?? auction.followUpAward
+  const awaitingCommittee = auction.status === 'PendingAward' || auction.status === 'WinnerDisqualified'
 
   return (
     <div className="card">
       <h2>الترسية</h2>
 
-      {!canAct && (
+      {/* Say what has happened, to everyone; the viewer's own permission only
+          matters while a decision is still the committee's to take. */}
+      {award && (
+        <div className="notice ok" data-testid="award-confirmed">
+          اعتمدت لجنة الترسية الترسية في {day(award.confirmedAt)}
+          {auction.status === 'Settled' ? ' — واعتُمدت التسوية.' : '.'}
+        </div>
+      )}
+      {!canAct && awaitingCommittee && (
         <div className="notice info">
-          العرض فقط — تأكيد الترسية من صلاحية لجنة الترسية.
+          بانتظار قرار لجنة الترسية — التأكيد من صلاحيتها، وهذه الصفحة للعرض فقط.
         </div>
       )}
 
@@ -52,13 +65,51 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
 
       {auction.status === 'Unsold' && (
         <div className="notice error">
-          لم يبلغ أي عطاء السعر الاحتياطي — المزاد غير مُرسى.
+          {auction.resultRejectionReason
+            ? <>رفضت لجنة الترسية النتيجة المبدئية — السبب: {auction.resultRejectionReason}</>
+            : 'لم يبلغ أي عطاء السعر الاحتياطي — المزاد غير مُرسى.'}
+        </div>
+      )}
+
+      {/* A defaulting winner goes to manual review, not down the ladder by itself
+          (الخاصية 08 and the scope decisions): the next bidder is shown as a
+          suggestion, and the committee decides. */}
+      {auction.status === 'WinnerDisqualified' && (
+        <div className="notice info">
+          سُحب الفوز من الفائز — بانتظار قرار لجنة الترسية.{' '}
+          {auction.pendingCandidateBidderId
+            ? 'المزايد التالي المؤهل مبيَّن أدناه للمراجعة؛ لا تُحال الترسية إليه إلا بقرار اللجنة.'
+            : 'لا يوجد مزايد تالٍ يستوفي السعر الاحتياطي حتى الآن.'}
+        </div>
+      )}
+
+      {auction.status === 'WinnerDisqualified' && canAct && (
+        <div className="row end" style={{ marginBottom: 12 }}>
+          {auction.pendingCandidateBidderId && (
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() => onAct(() => client.post(`/auctions/${auction.id}/next-bidder`))}
+            >
+              إحالة الترسية للمزايد التالي
+            </button>
+          )}
+          <button
+            className="danger"
+            disabled={busy}
+            onClick={() => {
+              if (!window.confirm('إنهاء المزاد دون ترسية؟ يُرد التأمين لغير المستبعدين.')) return
+              void onAct(() => client.post(`/auctions/${auction.id}/unsold`))
+            }}
+          >
+            إنهاء دون ترسية
+          </button>
         </div>
       )}
 
       {auction.pendingCandidateBidderId && (
         <>
-          <h3>المرشّح</h3>
+          <h3>{auction.status === 'WinnerDisqualified' ? 'المزايد التالي (مقترح)' : 'المرشّح'}</h3>
           <div className="grid">
             <div>
               <div className="muted small">قيمة العطاء</div>
@@ -71,11 +122,13 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
               {/* The committee is the one party that must see the real identity:
                   they sign the award letter to a named person. The masking in the
                   public view (D-22) is for everyone else. */}
-              <code className="small">{auction.pendingCandidateBidderId}</code>
+              <BidderName session={session} id={auction.pendingCandidateBidderId} />
             </div>
           </div>
 
-          {canAct && (
+          {/* Confirmable only once it is up for award — after a disqualification
+              that takes the committee's referral first. */}
+          {canAct && auction.status === 'PendingAward' && (
             <div className="row end">
               <button
                 className="primary"
@@ -89,6 +142,35 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
                 }
               >
                 تأكيد الترسية
+              </button>
+            </div>
+          )}
+
+          {/* Refusing the preliminary result (الخاصية 08): with a reason, and not
+              passed down the ladder — the requirements rule out awarding the next
+              bidder automatically. */}
+          {canAct && auction.status === 'PendingAward' && (
+            <div className="row end" style={{ marginTop: 10 }}>
+              <input
+                placeholder="سبب رفض النتيجة المبدئية"
+                aria-label="سبب رفض النتيجة"
+                style={{ flex: '1 1 260px' }}
+                value={resultReason}
+                onChange={(e) => setResultReason(e.target.value)}
+              />
+              <button
+                className="danger"
+                disabled={busy || resultReason.trim() === ''}
+                onClick={() => {
+                  if (!window.confirm('رفض النتيجة يجعل المزاد غير مُرسى ولا ينتقل للمزايد التالي. متابعة؟')) return
+                  void onAct(() =>
+                    client.post(`/auctions/${auction.id}/result/reject`, {
+                      reason: resultReason.trim(),
+                    }),
+                  )
+                }}
+              >
+                رفض النتيجة
               </button>
             </div>
           )}
@@ -111,13 +193,13 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
             </div>
             <div>
               <div className="muted small">مهلة الالتزام</div>
-              <div className="num">
-                {new Date(award.complianceDeadline).toLocaleDateString('ar-SA')}
+              <div>
+                {day(award.complianceDeadline)}
               </div>
             </div>
             <div>
               <div className="muted small">المزايد</div>
-              <code className="small">{award.bidderId}</code>
+              <BidderName session={session} id={award.bidderId} />
             </div>
           </div>
 
@@ -126,9 +208,18 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
             <Step done={award.letterDocumentId !== null} text="إصدار خطاب الترسية" />
             <Step done={award.signedLetterDocumentId !== null} text="توقيع الخطاب" />
             <Step done={award.winnerNotifiedAt !== null} text="إشعار المزايد الفائز" />
+            <Step
+              done={award.remainingMinorUnits === 0}
+              text={
+                award.remainingMinorUnits === 0
+                  ? 'سداد مبلغ الترسية'
+                  : `سداد مبلغ الترسية — المتبقي ${sar(award.remainingMinorUnits, 'ar')}`
+              }
+            />
+            <Step done={auction.status === 'Settled'} text="اعتماد التسوية" />
           </ol>
 
-          {canAct && (
+          {canAct && auction.status === 'Awarded' && (
             <div className="row">
               {!award.letterDocumentId && (
                 <button
@@ -171,13 +262,23 @@ export function AwardPanel({ auction, client, busy, canAct, committeeUserId, onA
               )}
 
               {award.winnerNotifiedAt && auction.status === 'Awarded' && (
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() => onAct(() => client.post(`/auctions/${auction.id}/settle`))}
-                >
-                  تسجيل السداد
-                </button>
+                <>
+                  {/* Settling releases every other bidder's deposit, so it waits
+                      for the price to be receipted in full on متابعة الترسية. */}
+                  <button
+                    className="primary"
+                    disabled={busy || award.remainingMinorUnits > 0}
+                    onClick={() => onAct(() => client.post(`/auctions/${auction.id}/settle`))}
+                  >
+                    اعتماد التسوية
+                  </button>
+                  {award.remainingMinorUnits > 0 && (
+                    <span className="muted small">
+                      المتبقي {sar(award.remainingMinorUnits, 'ar')} — يُسجَّل السداد من صفحة
+                      «متابعة الترسية».
+                    </span>
+                  )}
+                </>
               )}
             </div>
           )}

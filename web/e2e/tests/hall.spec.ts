@@ -125,7 +125,7 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
       const page = committee.page
       await openAuction(page, auctionId)
       await page.getByRole('button', { name: 'اعتماد المزاد' }).click()
-      await expect(page.getByText(/معتمد|مجدول/).first()).toBeVisible({ timeout: 20_000 })
+      await expect(page.getByText(/معتمد|قادم/).first()).toBeVisible({ timeout: 20_000 })
     })
 
     await test.step('a bidder qualifies exactly as they would online', async () => {
@@ -134,7 +134,19 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
 
     await test.step('the bidder has no bid box in a hall auction', async () => {
       // She is in the room with a paddle. A bid box on her phone would let her bid
-      // past an auctioneer who is calling a different price.
+      // past an auctioneer who is calling a different price, and the catcher would
+      // refuse it with NotTheClerk — so the portal must not offer it at all.
+      //
+      // The notice is asserted first, and it is the half that does the work. The
+      // count on its own was satisfied by the bid box collapsing to "أُغلق المزاد"
+      // while the auction is still Scheduled, which made this step a test of
+      // whether qualification had finished within the two minutes before the open
+      // rather than of the channel. It went red the first time it did not. The
+      // notice renders on the channel and not on the clock, so the step now holds
+      // whenever it runs.
+      await expect(sara.page.getByText('المزايدة تجري في القاعة')).toBeVisible({
+        timeout: 20_000,
+      })
       await expect(sara.page.getByRole('button', { name: 'إرسال المزايدة' })).toHaveCount(0)
     })
 

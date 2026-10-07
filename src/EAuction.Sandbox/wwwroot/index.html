@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>صندوق التجارب — e-auction</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2306a8b7'/%3E%3Ctext x='8' y='12' font-size='10' text-anchor='middle' fill='white'%3E%E2%9C%93%3C/text%3E%3C/svg%3E">
+<style>
+/* Standalone on purpose: this page must render with the portals unbuilt and their
+   bundles absent, because it is what you open when the rest is not working yet.
+   The palette is the portals' so the two do not look like different systems. */
+:root {
+  --bg:#f4f6f8; --surface:#fff; --border:#e8ebee; --border-strong:#d6dbe0;
+  --text:#22282b; --muted:#8b9299;
+  --accent:#06a8b7; --accent-dark:#058b98; --accent-weak:#e6f7f9; --accent-line:#b9e7ec;
+  --ok:#127a46; --ok-weak:#e4f0ea;
+  --danger:#c0392b; --danger-weak:#fbecea;
+  --warn:#b26a00; --warn-weak:#fdf2e2;
+  --radius:14px; --radius-sm:10px;
+  --shadow: 0 1px 2px rgba(16,32,38,.04), 0 8px 24px rgba(16,32,38,.06);
+  --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif}
+.ltr,code,.mono,.num{direction:ltr;unicode-bidi:isolate}
+code,.mono{font-family:var(--mono)}
+.app{max-width:1020px;margin:0 auto;padding:0 20px 64px}
+header.bar{display:flex;align-items:center;gap:14px;padding:14px 20px;margin-bottom:20px;
+  background:var(--surface);border-bottom:1px solid var(--border)}
+header.bar h1{font-size:17px;margin:0;font-weight:650}
+.grow{flex:1}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:22px;margin-bottom:16px;box-shadow:var(--shadow)}
+.card h2{font-size:15px;margin:0 0 6px;font-weight:650}
+.card p.lede{margin:0 0 16px;color:var(--muted);font-size:13px}
+.notice{border-radius:var(--radius);padding:12px 14px;margin-bottom:16px;font-size:14px}
+.notice.warn{background:var(--warn-weak);color:var(--warn);border:1px solid #e8d4a8}
+.notice.error{background:var(--danger-weak);color:var(--danger);border:1px solid #efc9c7}
+.small{font-size:13px}
+.muted{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:right;padding:9px 10px;border-bottom:1px solid var(--border)}
+th{font-size:12px;color:var(--muted);font-weight:650}
+tbody tr:last-child td{border-bottom:0}
+/* The code is the whole point of the Nafath panel: big enough to read across a
+   room and off a second screen, and selectable in one click to paste. */
+.code{font-family:var(--mono);font-size:30px;letter-spacing:.14em;font-weight:600;
+  direction:ltr;unicode-bidi:isolate;background:var(--accent-weak);color:var(--accent);
+  border-radius:var(--radius-sm);padding:4px 12px;display:inline-block;cursor:pointer;
+  border:1px solid var(--accent-line);user-select:all}
+.bar-track{height:4px;background:var(--border);border-radius:2px;margin-top:8px;overflow:hidden}
+.bar-fill{height:100%;background:var(--accent);transition:width .95s linear}
+.bar-fill.low{background:var(--danger)}
+button{font:inherit;padding:10px 18px;border-radius:var(--radius-sm);cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--surface);color:var(--text);
+  font-weight:500}
+button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;
+  box-shadow:0 6px 16px rgba(6,168,183,.25)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pill{font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid var(--border)}
+.pill.ok{background:var(--ok-weak);color:var(--ok);border-color:#cfe3d8}
+.pill.no{background:var(--danger-weak);color:var(--danger);border-color:#efc9c7}
+.pill.replay{background:var(--warn-weak);color:var(--warn);border-color:#e8d4a8}
+/* Two explicit choices rather than one toggle: a toggle labelled with the action it
+   would take reads as the current state half the time, and in front of an audience
+   that is a wrong guess about whether the next payment goes through. */
+.choice{display:inline-flex;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  overflow:hidden}
+.choice button{border:0;border-radius:0;background:var(--surface);color:var(--muted)}
+.choice button + button{border-inline-start:1px solid var(--border-strong)}
+.choice button:disabled{cursor:progress}
+#accept.on{background:var(--ok);color:#fff}
+#decline.on{background:var(--danger);color:#fff}
+.choice button.on:hover:not(:disabled){color:#fff}
+select:disabled{opacity:.5}
+select{font:inherit;padding:7px 10px;border-radius:6px;border:1px solid var(--border);
+  background:var(--surface);color:var(--text)}
+ol{margin:0;padding-inline-start:20px;color:var(--muted);font-size:13px}
+ol li{margin-bottom:4px}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#11161a;--surface:#182025;--border:#28333a;--border-strong:#35424a;
+    --text:#e7edf1;--muted:#8c99a3;
+    --accent:#2fc0cf;--accent-dark:#4ad0dd;--accent-weak:#102d33;--accent-line:#1d4850;
+    --ok:#4cc08a;--ok-weak:#11291f;
+    --danger:#e8736f;--danger-weak:#2b1a19;
+    --warn:#d9a44a;--warn-weak:#271f12;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+  }
+}
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>صندوق التجارب</h1>
+  <span class="grow"></span>
+  <span class="muted small">بيئة تطوير — e-auction</span>
+</header>
+
+<div class="app">
+  <div class="notice warn">
+    <strong>هذه ليست نفاذ وليست بوابة دفع.</strong>
+    هذه الصفحة تحلّ محلّ نظامين خارجيين لم يُربطا بعد: نفاذ (يحتاج تعاقدًا مع علم/المركز
+    الوطني) وبوابة الدفع (تحتاج حسابًا تجاريًا). لا تُستخدم مع هوية مواطن حقيقية ولا مع
+    أموال حقيقية، ولا تُنشر مع المنصة.
+  </div>
+
+  <!-- نفاذ -->
+  <div class="card">
+    <h2>نفاذ — التحقق من الهوية</h2>
+    <p class="lede">
+      التسجيل في المنصة ودفع التأمين محميّان بتحقّق ثانٍ. في الإنتاج يكون هذا تأكيد نفاذ
+      ذا الرقمين على جوّال المزايد؛ هنا يشغل نفس الخانة رمزٌ من ستة أرقام تطلبه شاشة الدخول.
+      اقرأ الرمز من هنا وأدخله هناك.
+    </p>
+    <p class="lede" style="margin-top:-8px">
+      الرمز نفسه لكل الحسابات هنا — المزايدين ولجنة الترسية، وهذا متوقَّع: النطاق التجريبي يزرع السرّ ذاته على
+      كل حساب. في الإنتاج لكل مواطن جهازه.
+    </p>
+    <div id="nafath-error"></div>
+    <table>
+      <thead>
+        <tr><th></th><th>يصلح لـ</th><th>الرمز</th></tr>
+      </thead>
+      <tbody id="nafath"></tbody>
+    </table>
+    <h2 style="margin-top:22px">الدورة المتوقّعة</h2>
+    <ol>
+      <li>افتح بوابة المزايدين وسجّل الدخول بـ <code>sara</code> / <code>dev-only-password</code>.</li>
+      <li>اطلب التسجيل في المزاد — ستُعاد إلى شاشة الدخول لطلب كلمة المرور ثم الرمز.</li>
+      <li>انسخ الرمز من الأعلى وأدخله. الرمز يتغيّر كل ثلاثين ثانية؛ انتظر الرمز التالي إن
+          كان الشريط على وشك الانتهاء.</li>
+      <li>تابع الكراسة ثم التأمين. كلٌّ منهما يمرّ على بوابة الدفع أدناه.</li>
+    </ol>
+  </div>
+
+  <!-- بوابة الدفع -->
+  <div class="card">
+    <h2>بوابة الدفع</h2>
+    <p class="lede">
+      ما طُلب من البوابة فعلًا: قيمة الكراسة، والتأمين، والسعي عند الترسية، والمستردّات.
+      اختر كيف تردّ البوابة على عمليات الدفع القادمة: <strong>قبول</strong> (الافتراضي) أو
+      <strong>رفض</strong> بسبب تختاره — وهو الطريق الوحيد لاستعراض حالة «لم يدفع» ثم
+      الاستبعاد. الاختيار يسري على كل عملية دفع جديدة حتى تغيّره.
+    </p>
+
+    <div class="row" style="margin-bottom:14px">
+      <span class="small muted">ردّ البوابة:</span>
+      <div class="choice" role="radiogroup" aria-label="ردّ البوابة على الدفع">
+        <button id="accept" type="button" role="radio">✓ قبول الدفع</button>
+        <button id="decline" type="button" role="radio">✕ رفض الدفع</button>
+      </div>
+      <select id="reason" aria-label="سبب الرفض">
+        <option value="InsufficientFunds">رصيد غير كافٍ — InsufficientFunds</option>
+        <option value="CardDeclined">رفض البنك — CardDeclined</option>
+        <option value="Expired">انتهت صلاحية البطاقة — Expired</option>
+      </select>
+      <span class="grow"></span>
+      <span id="count" class="muted small"></span>
+    </div>
+
+    <div id="pay-error"></div>
+    <table>
+      <thead>
+        <tr><th>الوقت</th><th>الغرض</th><th>المبلغ</th><th>النتيجة</th><th>المرجع</th></tr>
+      </thead>
+      <tbody id="pay"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const PURPOSE = { Booklet: 'الكراسة', Deposit: 'التأمين', Brokerage: 'السعي' }
+
+function el(tag, attrs = {}, text) {
+  const n = document.createElement(tag)
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v
+    else n.setAttribute(k, v)
+  }
+  if (text !== undefined) n.textContent = text
+  return n
+}
+
+function problem(into, message) {
+  const host = document.getElementById(into)
+  host.innerHTML = ''
+  if (message) host.append(el('div', { class: 'notice error' }, message))
+}
+
+// Halalas to riyals. Written out rather than / 100 so a rounding error cannot
+// appear on a screen that is being used to demonstrate how money is handled.
+function riyals(minor) {
+  const sign = minor < 0 ? '-' : ''
+  const n = Math.abs(minor)
+  const whole = String(Math.trunc(n / 100))
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return `${sign}${grouped}.${String(n % 100).padStart(2, '0')}`
+}
+
+async function nafath() {
+  try {
+    const r = await fetch('api/nafath')
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const data = await r.json()
+
+    problem('nafath-error', null)
+    const body = document.getElementById('nafath')
+    body.innerHTML = ''
+
+    // One row: every demo account carries the same secret, so a row per person
+    // would repeat one code and suggest each has their own.
+    for (const p of data.people.slice(0, 1)) {
+      const code = el('span', { class: 'code', title: 'انقر للتحديد' }, p.code)
+      const fill = el('div', { class: 'bar-fill' + (p.secondsRemaining <= 5 ? ' low' : '') })
+      fill.style.width = `${(p.secondsRemaining / 30) * 100}%`
+
+      const track = el('div', { class: 'bar-track' })
+      track.append(fill)
+
+      const cell = el('td')
+      cell.append(code, track,
+        el('div', { class: 'muted small' }, `يتغيّر بعد ${p.secondsRemaining} ثانية`))
+
+      const row = el('tr')
+      row.append(
+        el('td', {}, 'رمز التحقق — لكل الحسابات التجريبية'),
+        el('td', { class: 'small' }, data.people.map((x) => x.username).join(' · ')),
+        cell)
+      body.append(row)
+    }
+  } catch (e) {
+    problem('nafath-error', `تعذّر قراءة الرموز: ${e.message}`)
+  }
+}
+
+let declining = false
+
+function paintToggle() {
+  const accept = document.getElementById('accept')
+  const decline = document.getElementById('decline')
+
+  accept.classList.toggle('on', !declining)
+  decline.classList.toggle('on', declining)
+  accept.setAttribute('aria-checked', String(!declining))
+  decline.setAttribute('aria-checked', String(declining))
+
+  // The reason only means something while declining; changing it then re-applies.
+  document.getElementById('reason').disabled = !declining
+}
+
+async function payments() {
+  try {
+    const r = await fetch('api/payments')
+    const data = await r.json()
+
+    if (!r.ok) {
+      problem('pay-error', data.problem ?? `HTTP ${r.status}`)
+      return
+    }
+
+    problem('pay-error', null)
+    declining = data.declineCharges
+    paintToggle()
+
+    const body = document.getElementById('pay')
+    body.innerHTML = ''
+
+    document.getElementById('count').textContent =
+      data.items.length ? `${data.items.length} عملية` : ''
+
+    if (!data.items.length) {
+      const cell = el('td', { colspan: '5', class: 'muted small' },
+        'لم تُطلب أي عملية دفع بعد.')
+      const row = el('tr')
+      row.append(cell)
+      body.append(row)
+      return
+    }
+
+    for (const i of data.items) {
+      const result = el('td')
+      result.append(el('span',
+        { class: 'pill ' + (i.settled ? 'ok' : 'no') },
+        i.settled ? 'تم' : (i.failureReason ?? 'رُفض')))
+
+      // A redelivered instruction is labelled, because Kafka is at-least-once and
+      // the same deposit appearing twice on this screen would look like a second
+      // charge rather than the idempotency key doing its job.
+      if (i.replayed) result.append(' ', el('span', { class: 'pill replay' }, 'مُعاد'))
+
+      // The reference is what a bidder quotes when they ring up about a payment, so
+      // it is monospaced and left-to-right like every other identifier here.
+      const reference = el('td')
+      reference.append(el('code', {}, i.reference || '—'))
+
+      const row = el('tr')
+      row.append(
+        el('td', { class: 'num' }, new Date(i.at).toLocaleTimeString('en-GB')),
+        el('td', {}, PURPOSE[i.purpose] ?? i.purpose),
+        el('td', { class: 'num' }, riyals(i.amountMinorUnits) + ' SAR'),
+        result,
+        reference)
+      body.append(row)
+    }
+  } catch (e) {
+    problem('pay-error', `تعذّر قراءة العمليات: ${e.message}`)
+  }
+}
+
+async function setDecline(decline) {
+  const buttons = [document.getElementById('accept'), document.getElementById('decline')]
+  buttons.forEach((b) => { b.disabled = true })
+  try {
+    const r = await fetch('api/payments/decline', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        decline,
+        reason: document.getElementById('reason').value,
+      }),
+    })
+    const data = await r.json()
+    if (!r.ok) { problem('pay-error', data.problem ?? `HTTP ${r.status}`); return }
+    problem('pay-error', null)
+    declining = data.declineCharges
+    paintToggle()
+  } catch (e) {
+    problem('pay-error', `تعذّر تغيير حالة البوابة: ${e.message}`)
+  } finally {
+    buttons.forEach((b) => { b.disabled = false })
+  }
+}
+
+document.getElementById('accept').addEventListener('click', () => setDecline(false))
+document.getElementById('decline').addEventListener('click', () => setDecline(true))
+document.getElementById('reason').addEventListener('change', () => {
+  if (declining) setDecline(true)
+})
+
+paintToggle()
+nafath()
+payments()
+// Every second for the codes, because they expire; slower for the payments, which
+// only change when somebody does something.
+setInterval(nafath, 1000)
+setInterval(payments, 2000)
+</script>
+</body>
+</html>

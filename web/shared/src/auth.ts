@@ -341,6 +341,7 @@ export const Roles = {
   operator: 'operator',
   reporting: 'reporting',
   auditor: 'auditor',
+  inquiries: 'inquiries',
 } as const
 
 export function has(session: Session | null, role: string): boolean {

@@ -14,6 +14,7 @@ namespace EAuction.Audit.Persistence;
 public sealed class AuditDbContext(DbContextOptions<AuditDbContext> options) : DbContext(options)
 {
     public DbSet<AuditEntry> Entries => Set<AuditEntry>();
+    public DbSet<SystemEvent> SystemEvents => Set<SystemEvent>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -60,6 +61,26 @@ public sealed class AuditDbContext(DbContextOptions<AuditDbContext> options) : D
             e.HasIndex(x => new { x.Subject, x.At });
             e.HasIndex(x => x.At);
             e.HasIndex(x => x.Action);
+        });
+
+        b.Entity<SystemEvent>(e =>
+        {
+            e.ToTable("system_event");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).UseIdentityAlwaysColumn();
+            e.Property(x => x.Topic).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Key).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Kind).HasMaxLength(40).IsRequired();
+            e.Property(x => x.Purpose).HasMaxLength(40);
+            e.Property(x => x.Outcome).HasMaxLength(40);
+            e.Property(x => x.Reference).HasMaxLength(200);
+            e.Property(x => x.Reason).HasMaxLength(500);
+
+            // A replayed record lands on this and is dropped.
+            e.HasIndex(x => new { x.Topic, x.Key, x.Offset }).IsUnique();
+            e.HasIndex(x => new { x.AuctionId, x.At });
+            e.HasIndex(x => new { x.Kind, x.At });
+            e.HasIndex(x => x.ClientBidId);
         });
     }
 }

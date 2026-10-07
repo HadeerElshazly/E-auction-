@@ -1,0 +1,23 @@
+# The sandbox console: نفاذ and the payment gateway, stood in for.
+#
+# Deliberately not in the Helm chart. This image prints a second factor on a web
+# page and can make the payment gateway refuse — it belongs in a developer's stack
+# and nowhere else, and the surest way to keep it out of a cluster is for the chart
+# never to mention it. The service also refuses to start without Sandbox:Enabled.
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY src/EAuction.Sandbox/EAuction.Sandbox.csproj src/EAuction.Sandbox/
+RUN dotnet restore src/EAuction.Sandbox/EAuction.Sandbox.csproj
+COPY src/ src/
+RUN dotnet publish src/EAuction.Sandbox/EAuction.Sandbox.csproj \
+      -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eauction
+USER 10001
+
+ENTRYPOINT ["./EAuction.Sandbox"]

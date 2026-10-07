@@ -123,11 +123,17 @@ public class OutboxTests(PostgresFixture pg)
 
             saved.DisqualifyWinner("لم يسدد", forfeitDeposit: true, future.AddDays(6));
             saved.OfferCandidate(Guid.NewGuid(), 1_700_000_00);
+            saved.ReferToNextBidder();
             saved.ConfirmAward(Build.Committee, future.AddDays(7), TimeSpan.FromDays(5));
             await db.SaveChangesAsync();
         }
 
-        var types = (await MessagesFor(auction.Id)).Select(m => m.Type).ToList();
+        var all = (await MessagesFor(auction.Id)).Select(m => m.Type).ToList();
+
+        // The winner's follow-up snapshot rides along with every award change; the
+        // trail below is the decisions themselves.
+        Assert.Contains(nameof(AwardFollowUpUpdated), all);
+        var types = all.Where(t => t != nameof(AwardFollowUpUpdated)).ToList();
 
         Assert.Equal(new[]
         {
@@ -135,6 +141,8 @@ public class OutboxTests(PostgresFixture pg)
             nameof(AuctionReserveSet),
             nameof(AwardConfirmed),
             nameof(WinnerDisqualified),
+            // The committee's referral is a public stage change of its own.
+            nameof(NextBidderReferred),
             nameof(AwardConfirmed)
         }.OrderBy(x => x), types.OrderBy(x => x));
 
@@ -178,6 +186,7 @@ public class OutboxTests(PostgresFixture pg)
     {
         var future = DateTimeOffset.UtcNow;
         var auction = Build.AwaitingSettlement(future, out _);
+        Build.PayInFull(auction, future);
         auction.Settle(future.AddDays(1));
 
         await using (var db = await pg.Factory.CreateDbContextAsync())

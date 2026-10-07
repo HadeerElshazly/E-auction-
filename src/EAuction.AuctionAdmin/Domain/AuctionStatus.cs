@@ -43,5 +43,12 @@ public enum AuctionStatus
     WinnerDisqualified = 11,
 
     Settled = 12,
-    Closed = 13
+    Closed = 13,
+
+    /// <summary>
+    /// أُلغي — withdrawn by an administrator after approval and before it opened,
+    /// with a recorded reason. Terminal: nothing bids on it and every deposit is
+    /// released.
+    /// </summary>
+    Cancelled = 14
 }

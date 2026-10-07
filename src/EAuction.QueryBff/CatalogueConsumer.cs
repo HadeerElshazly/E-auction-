@@ -124,6 +124,7 @@ public sealed class CatalogueConsumer(
             MinIncrementMinorUnits = p.MinIncrementMinorUnits,
             DepositMinorUnits = p.DepositMinorUnits,
             BookletPriceMinorUnits = p.BookletPriceMinorUnits,
+            BrokerageFeePercent = p.BrokerageFeePercent,
             QuietPeriodSeconds = p.QuietPeriodSeconds,
             MaxExtensions = p.MaxExtensions,
             TotalAreaSqm = p.TotalAreaSqm,
@@ -131,6 +132,11 @@ public sealed class CatalogueConsumer(
                 .Select(x => new PlotEntry(
                     x.Id, x.DeedNumber, x.AreaSqm,
                     x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn))
+                .ToArray(),
+            CoverImageDocumentId = p.CoverImageDocumentId,
+            Attachments = (p.Attachments ?? [])
+                .Where(x => x.DocumentId != Guid.Empty && !string.IsNullOrWhiteSpace(x.TitleAr))
+                .Select(x => new PublicDocumentEntry(x.DocumentId, x.TitleAr))
                 .ToArray()
         });
 
@@ -182,7 +188,8 @@ public sealed class CatalogueConsumer(
             p.EffectiveEndsAt, p.ExtensionsUsed);
 
         // Null while this topic is replaying ahead of auctions.upcoming, which is
-        // normal on a cold start: the definition arrives and brings its own push.
+        // normal on a cold start: the state holds the price and applies it when the
+        // definition arrives, which brings its own push.
         if (updated is not null) Push(updated);
     }
 
@@ -223,21 +230,21 @@ public sealed class CatalogueConsumer(
 
     private void ApplyLifecycle(StreamEvent record)
     {
-        var status = record.EventType switch
+        if (record.EventType == "AuctionCancelled")
         {
-            "AuctionStarted" => "Live",
-            "AuctionClosed" => "Closed",
-            "CandidateOffered" => "PendingAward",
-            "LadderExhausted" => "Unsold",
-            _ => null
-        };
-        if (status is null) return;
+            if (!Guid.TryParse(record.Key, out var cancelledId)) return;
+            var reason = JsonSerializer.Deserialize<CancelledPayload>(record.Payload, Json)?.Reason ?? "";
+            if (state.MarkCancelled(cancelledId, reason) is { } cancelled) Push(cancelled);
+            fanOut.Forget(cancelledId);
+            return;
+        }
 
         var p = JsonSerializer.Deserialize<LifecyclePayload>(record.Payload, Json);
-        if (p is null) return;
+        if (p is null || p.AuctionId == Guid.Empty) return;
 
-        var updated = state.SetStatus(p.AuctionId, status, p.EffectiveEndsAt);
+        var updated = state.ApplyLifecycle(p.AuctionId, record.EventType, p.EffectiveEndsAt);
         if (updated is null) return;
+        var status = updated.Status;
 
         // Watchers need the close as much as they need a price: it is what turns the
         // bid box off, and a portal that only learned about it by polling would keep
@@ -246,7 +253,7 @@ public sealed class CatalogueConsumer(
 
         // An auction past its award is nobody's live view any more, and its verdict
         // buffers are memory held for bidders who will not come back for them.
-        if (status is "Unsold") fanOut.Forget(p.AuctionId);
+        if (LifecycleStatus.IsFinal(status)) fanOut.Forget(p.AuctionId);
     }
 
     // Local payload shapes rather than a shared contracts package: this service reads
@@ -265,10 +272,19 @@ public sealed class CatalogueConsumer(
         public long MinIncrementMinorUnits { get; init; }
         public long DepositMinorUnits { get; init; }
         public long BookletPriceMinorUnits { get; init; }
+        public decimal BrokerageFeePercent { get; init; }
         public int? QuietPeriodSeconds { get; init; }
         public int MaxExtensions { get; init; }
         public decimal TotalAreaSqm { get; init; }
         public PlotPayload[]? Plots { get; init; }
+        public Guid? CoverImageDocumentId { get; init; }
+        public AttachmentPayload[]? Attachments { get; init; }
+    }
+
+    private sealed record AttachmentPayload
+    {
+        public Guid DocumentId { get; init; }
+        public string TitleAr { get; init; } = "";
     }
 
     private sealed record PlotPayload
@@ -307,6 +323,11 @@ public sealed class CatalogueConsumer(
         public Guid BidderId { get; init; }
         public bool Eligible { get; init; }
         public string? DisplayNameAr { get; init; }
+    }
+
+    private sealed record CancelledPayload
+    {
+        public string Reason { get; init; } = "";
     }
 
     private sealed record LifecyclePayload

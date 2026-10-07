@@ -24,8 +24,30 @@ public static class Messages
     public static string Riyals(long minorUnits) =>
         (minorUnits / 100m).ToString("C2", CultureInfo.GetCultureInfo("ar-SA"));
 
-    private static string Date(DateTimeOffset at) =>
-        at.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    /// <summary>
+    /// A date in the Hijri calendar (Umm al-Qura, the official Saudi one), in Riyadh
+    /// time, as the portals show it: «30 ربيع الآخر 1448 هـ».
+    ///
+    /// The month names are spelled out here rather than taken from the culture: the
+    /// same ar-SA culture names the fourth month «ربيع الثاني» on Windows and «ربيع
+    /// الآخر» under ICU, and a notice that disagrees with the screen it points to is
+    /// a support call. These are the browser's names, so both say the same thing.
+    /// </summary>
+    private static string Date(DateTimeOffset at)
+    {
+        var riyadh = at.ToOffset(RiyadhOffset).DateTime;
+        return $"{UmAlQura.GetDayOfMonth(riyadh)} {HijriMonths[UmAlQura.GetMonth(riyadh) - 1]} "
+               + $"{UmAlQura.GetYear(riyadh)} هـ";
+    }
+
+    private static readonly TimeSpan RiyadhOffset = TimeSpan.FromHours(3);
+    private static readonly UmAlQuraCalendar UmAlQura = new();
+
+    private static readonly string[] HijriMonths =
+    [
+        "محرم", "صفر", "ربيع الأول", "ربيع الآخر", "جمادى الأولى", "جمادى الآخرة",
+        "رجب", "شعبان", "رمضان", "شوال", "ذو القعدة", "ذو الحجة",
+    ];
 
     public static (string Title, string Body) Eligible(string auction) =>
         ("مؤهّل للمزايدة",
@@ -50,6 +72,26 @@ public static class Messages
         ("تمت المزايدة عليك",
          $"لم تعد صاحب أعلى مزايدة في «{auction}». السعر الحالي {Riyals(priceMinorUnits)}.");
 
+    public static (string Title, string Body) GuaranteeRejected(string auction, string reason) =>
+        ("رُفض الضمان البنكي",
+         $"رُفض الضمان البنكي المقدَّم لمزاد «{auction}». السبب: {reason}. يمكنك رفع ضمان آخر من صفحة المزاد.");
+
+    public static (string Title, string Body) AuctionCancelled(string auction, string reason) =>
+        ("أُلغي المزاد",
+         $"أُلغي مزاد «{auction}» قبل بدئه. السبب: {reason}. يُرد التأمين المدفوع أو يُحرَّر الضمان البنكي.");
+
+    public static (string Title, string Body) InquiryAnswered(string auction) =>
+        ("وصلك رد على استفسارك",
+         $"ردّت الأمانة على استفسارك في مزاد «{auction}». اطّلع على الرد في صفحة المزاد، قسم الاستفسارات.");
+
+    public static (string Title, string Body) ClarificationPublished(string auction) =>
+        ("توضيح جديد على المزاد",
+         $"نُشر توضيح جديد على مزاد «{auction}». اطّلع عليه في صفحة المزاد، قسم الاستفسارات.");
+
+    public static (string Title, string Body) AuctionUnsold(string auction) =>
+        ("انتهى المزاد دون ترسية",
+         $"انتهى مزاد «{auction}» دون ترسية. يُرد التأمين المدفوع أو يُحرَّر الضمان البنكي وفق الشروط.");
+
     public static (string Title, string Body) AuctionClosed(string auction) =>
         ("أُغلق المزاد",
          $"أُغلق باب المزايدة في «{auction}». ستُعلن النتيجة بعد اعتماد لجنة الترسية.");
@@ -59,6 +101,20 @@ public static class Messages
         ("تمت الترسية لك",
          $"رُسي عليك «{auction}» بمبلغ {Riyals(amountMinorUnits)}. "
          + $"يجب إكمال الإجراءات قبل {Date(complianceDeadline)}.");
+
+    public static (string Title, string Body) AwardPaymentRecorded(
+        string auction, long paidMinorUnits, long remainingMinorUnits) =>
+        remainingMinorUnits <= 0
+            ? ("تم سداد مبلغ الترسية",
+               $"سُدّد مبلغ الترسية في «{auction}» كاملاً ({Riyals(paidMinorUnits)}). "
+               + "ستحدّد الأمانة موعد الإفراغ لدى كتابة العدل.")
+            : ("سُجّلت دفعة من مبلغ الترسية",
+               $"سجّلت الأمانة سداداً في «{auction}». المسدَّد {Riyals(paidMinorUnits)}، "
+               + $"والمتبقي {Riyals(remainingMinorUnits)}.");
+
+    public static (string Title, string Body) TransferCompleted(string auction) =>
+        ("اكتمل الإفراغ",
+         $"اكتمل إفراغ «{auction}» باسمك لدى كتابة العدل.");
 
     public static (string Title, string Body) Disqualified(
         string auction, string reason, bool depositForfeited) =>
@@ -101,6 +157,7 @@ public static class Messages
     {
         NotificationKind.AuctionClosed => false,
         NotificationKind.DepositResolved => false,
+        NotificationKind.TransferCompleted => false,
         _ => true,
     };
 }

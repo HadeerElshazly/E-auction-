@@ -25,6 +25,8 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             e.Property(x => x.NameEn).HasMaxLength(300).IsRequired();
             e.Property(x => x.Phase).HasMaxLength(100);
             e.Property(x => x.RejectionReason).HasMaxLength(2000);
+            e.Property(x => x.CancellationReason).HasMaxLength(2000);
+            e.Property(x => x.ResultRejectionReason).HasMaxLength(2000);
             e.Property(x => x.BrokerageFeePercent).HasPrecision(5, 2);
 
             e.HasMany(x => x.Plots).WithOne()
@@ -33,10 +35,20 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
                 .HasForeignKey(a => a.AuctionId).OnDelete(DeleteBehavior.Cascade);
 
             e.Navigation(x => x.Plots).UsePropertyAccessMode(PropertyAccessMode.Field);
+
+            // A short list read and written with its auction and never queried on
+            // its own, so a JSON column rather than a table.
+            e.OwnsMany(x => x.Attachments, a =>
+            {
+                a.ToJson("attachments");
+                a.Property(x => x.TitleAr).HasMaxLength(200);
+            });
+            e.Navigation(x => x.Attachments).UsePropertyAccessMode(PropertyAccessMode.Field);
             e.Navigation(x => x.Awards).UsePropertyAccessMode(PropertyAccessMode.Field);
 
             e.Ignore(x => x.Events);
             e.Ignore(x => x.CurrentAward);
+            e.Ignore(x => x.FollowUpAward);
             e.Ignore(x => x.TotalAreaSqm);
 
             e.HasIndex(x => x.Status);
@@ -68,6 +80,18 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             e.Property(x => x.Id).ValueGeneratedNever();
             e.Property(x => x.DisqualificationReason).HasMaxLength(2000);
             e.Ignore(x => x.IsOpen);
+            e.Ignore(x => x.PaidMinorUnits);
+            e.Ignore(x => x.RemainingMinorUnits);
+            e.Property(x => x.TransferStatus).HasConversion<int>();
+            e.Property(x => x.TransferReference).HasMaxLength(100);
+
+            // Entered by hand, a few per award, always read with it.
+            e.OwnsMany(x => x.Receipts, r =>
+            {
+                r.ToJson("receipts");
+                r.Property(x => x.Kind).HasConversion<string>();
+            });
+            e.Navigation(x => x.Receipts).UsePropertyAccessMode(PropertyAccessMode.Field);
 
             // One open award at a time: a cascade must close the previous
             // award before the next can be confirmed.

@@ -88,6 +88,77 @@ namespace EAuction.Audit.Migrations
 
                     b.ToTable("audit_entry", (string)null);
                 });
+
+            modelBuilder.Entity("EAuction.Audit.Domain.SystemEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
+
+                    b.Property<long?>("AmountMinorUnits")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("At")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("AuctionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("BidderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ClientBidId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<long>("Offset")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Purpose")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Topic")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientBidId");
+
+                    b.HasIndex("AuctionId", "At");
+
+                    b.HasIndex("Kind", "At");
+
+                    b.HasIndex("Topic", "Key", "Offset")
+                        .IsUnique();
+
+                    b.ToTable("system_event", (string)null);
+                });
 #pragma warning restore 612, 618
         }
     }

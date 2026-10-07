@@ -14,6 +14,11 @@ namespace EAuction.AuctionAdmin.Domain;
 public sealed class Auction
 {
     private readonly List<Plot> _plots = new();
+    private readonly List<PublicAttachment> _attachments = new();
+
+    public string? CancellationReason { get; private set; }
+    public DateTimeOffset? CancelledAt { get; private set; }
+    public IReadOnlyList<PublicAttachment> Attachments => _attachments;
     private readonly List<Award> _awards = new();
     private readonly List<DomainEvent> _events = new();
 
@@ -179,48 +184,79 @@ public sealed class Auction
         CoverImageDocumentId = documentId;
     }
 
+    /// <summary>A catalogue page is not a file share; this is a backstop, not a policy.</summary>
+    public const int MaxAttachments = 20;
+
+    public void AddAttachment(Guid documentId, string titleAr)
+    {
+        RequireDraft("attach a public document to");
+
+        var problems = new List<string>();
+        if (string.IsNullOrWhiteSpace(titleAr)) problems.Add("عنوان المرفق مطلوب.");
+        else if (titleAr.Trim().Length > 200) problems.Add("عنوان المرفق طويل جداً.");
+        if (_attachments.Count >= MaxAttachments)
+            problems.Add($"الحد الأقصى {MaxAttachments} مرفقاً.");
+        if (documentId == BookletDocumentId)
+            // The booklet is Restricted; listing it publicly would advertise an id
+            // that does not open, and suggest the paid document is free.
+            problems.Add("كراسة الشروط لا تُضاف كمرفق عام.");
+        if (problems.Count > 0) throw new AuctionValidationException(problems);
+
+        if (_attachments.Any(a => a.DocumentId == documentId)) return;
+        _attachments.Add(new PublicAttachment(documentId, titleAr.Trim()));
+    }
+
+    public void RemoveAttachment(Guid documentId)
+    {
+        RequireDraft("remove a public document from");
+        _attachments.RemoveAll(a => a.DocumentId == documentId);
+    }
+
     /// <summary>Everything that must be true before anyone can approve this.</summary>
     public IReadOnlyList<string> Validate(DateTimeOffset now)
     {
         var problems = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(NameAr)) problems.Add("Arabic name is required.");
-        if (string.IsNullOrWhiteSpace(NameEn)) problems.Add("English name is required.");
-        if (_plots.Count == 0) problems.Add("At least one plot is required.");
-        if (BookletDocumentId is null) problems.Add("The terms booklet (كراسة الشروط) is required.");
+        if (string.IsNullOrWhiteSpace(NameAr)) problems.Add("اسم المزاد بالعربي مطلوب.");
+        if (string.IsNullOrWhiteSpace(NameEn)) problems.Add("اسم المزاد بالإنجليزي مطلوب.");
+        if (_plots.Count == 0) problems.Add("يجب إضافة قطعة أرض واحدة على الأقل.");
+        if (BookletDocumentId is null) problems.Add("كراسة الشروط مطلوبة.");
 
         if (StartsAt is null || EndsAt is null)
         {
-            problems.Add("Start and end date/time are required.");
+            problems.Add("تاريخ ووقت بداية المزاد ونهايته مطلوبان.");
         }
         else
         {
-            if (EndsAt <= StartsAt) problems.Add("End must be after start.");
-            if (StartsAt <= now) problems.Add("Start must be in the future.");
+            if (EndsAt <= StartsAt) problems.Add("وقت النهاية يجب أن يكون بعد وقت البداية.");
+            if (StartsAt <= now) problems.Add("وقت البداية يجب أن يكون في المستقبل.");
         }
 
-        if (OpeningPriceMinorUnits <= 0) problems.Add("Opening price must be positive.");
-        if (MinIncrementMinorUnits <= 0) problems.Add("Minimum increment must be positive.");
-        if (DepositMinorUnits <= 0) problems.Add("Deposit (التأمين) must be positive.");
+        if (OpeningPriceMinorUnits <= 0) problems.Add("سعر الافتتاح يجب أن يكون أكبر من صفر.");
+        if (MinIncrementMinorUnits <= 0) problems.Add("أقل مزايدة يجب أن تكون أكبر من صفر.");
+        if (DepositMinorUnits <= 0) problems.Add("مبلغ التأمين يجب أن يكون أكبر من صفر.");
+        // Zero is allowed: the policy may make the booklet free, and a free booklet
+        // is obtained without the gateway. Below zero is never a price.
+        if (BookletPriceMinorUnits < 0) problems.Add("سعر الكراسة لا يمكن أن يكون سالباً.");
 
         if (ReservePriceMinorUnits <= 0)
         {
-            problems.Add("Reserve price must be positive.");
+            problems.Add("السعر الاحتياطي يجب أن يكون أكبر من صفر.");
         }
         else if (ReservePriceMinorUnits < OpeningPriceMinorUnits)
         {
             // A reserve below the opening price is met by the first valid bid,
             // so it does nothing. Almost always a data entry slip.
-            problems.Add("Reserve price cannot be below the opening price.");
+            problems.Add("السعر الاحتياطي لا يمكن أن يقل عن سعر الافتتاح.");
         }
 
         if (BrokerageFeePercent is < 0 or > 100)
-            problems.Add("Brokerage fee must be between 0 and 100 percent.");
+            problems.Add("نسبة السعي يجب أن تكون بين صفر ومئة بالمئة.");
 
         if (QuietPeriodSeconds is not null)
         {
-            if (QuietPeriodSeconds <= 0) problems.Add("Quiet period must be positive when set.");
-            if (MaxExtensions < 1) problems.Add("Max extensions must be at least 1 when extension is enabled.");
+            if (QuietPeriodSeconds <= 0) problems.Add("مدة الهدوء يجب أن تكون أكبر من صفر عند تفعيلها.");
+            if (MaxExtensions < 1) problems.Add("عدد مرات التمديد يجب أن يكون واحدًا على الأقل عند تفعيل التمديد.");
         }
 
         return problems;
@@ -277,6 +313,9 @@ public sealed class Auction
                 .Select(p => new PublicPlot(
                     p.Id, p.DeedNumber, p.AreaSqm,
                     p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn))
+                .ToArray(),
+            Attachments = _attachments
+                .Select(a => new PublicDocument(a.DocumentId, a.TitleAr))
                 .ToArray()
         });
 
@@ -299,9 +338,56 @@ public sealed class Auction
         _events.Add(new AuctionRejected { AuctionId = Id, Reason = RejectionReason });
     }
 
+    /// <summary>
+    /// How close to its start an auction can still be withdrawn. Inside this the
+    /// processor may already be opening it, and a cancellation that raced the start
+    /// would leave an auction taking bids that the register says is cancelled.
+    /// </summary>
+    public static readonly TimeSpan CancellationCutoff = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Withdraws an approved auction before it opens, with the reason on record.
+    ///
+    /// Not once it is live: bids are then on the log in order, and stopping an
+    /// auction mid-bid is a decision about those bidders the first phase does not
+    /// make. Before the start nobody has bid, so every deposit simply goes back.
+    /// </summary>
+    public void Cancel(string reason, Guid cancelledByUserId, DateTimeOffset now)
+    {
+        if (Status is not (AuctionStatus.Approved or AuctionStatus.Scheduled))
+            throw new InvalidAuctionTransitionException(Status, "cancel");
+
+        var problems = new List<string>();
+        if (string.IsNullOrWhiteSpace(reason)) problems.Add("سبب الإلغاء مطلوب.");
+        else if (reason.Trim().Length > 2000) problems.Add("سبب الإلغاء طويل جداً.");
+        if (StartsAt is { } starts && now >= starts - CancellationCutoff)
+            problems.Add("لا يمكن إلغاء المزاد عند بدئه أو بعده.");
+        if (problems.Count > 0) throw new AuctionValidationException(problems);
+
+        Status = AuctionStatus.Cancelled;
+        CancellationReason = reason.Trim();
+        CancelledAt = now;
+
+        _events.Add(new AuctionCancelled
+        {
+            AuctionId = Id,
+            Reason = CancellationReason,
+            CancelledByUserId = cancelledByUserId,
+            At = now
+        });
+
+        // Nobody bid, so nobody forfeits: every deposit taken for this auction is
+        // refunded or its guarantee released, through the same path a finished
+        // auction's losers take.
+        _events.Add(new DepositsReleasable { AuctionId = Id, ForfeitForBidders = [] });
+    }
+
     /// <summary>The relay confirms the auction reached auctions.upcoming.</summary>
     public void MarkScheduled()
     {
+        // Cancelled before the relay confirmed publication: the cancellation went
+        // out after the definition, so there is nothing to move forward.
+        if (Status == AuctionStatus.Cancelled) return;
         if (Status != AuctionStatus.Approved)
             throw new InvalidAuctionTransitionException(Status, "schedule");
         Status = AuctionStatus.Scheduled;
@@ -448,9 +534,38 @@ public sealed class Auction
     {
         if (Status is not (AuctionStatus.PendingEligibilityReview or AuctionStatus.WinnerDisqualified))
             throw new InvalidAuctionTransitionException(Status, "offer a candidate for");
-        Status = AuctionStatus.PendingAward;
+
         PendingCandidateBidderId = bidderId;
         PendingCandidateAmountMinorUnits = amountMinorUnits;
+
+        // After a disqualification the next bidder is only a suggestion. The
+        // requirements (الخاصية 08 and the scope decisions) rule out re-awarding
+        // automatically when a winner defaults: the case goes to manual review, and
+        // the committee decides whether to refer it down the ladder or end unsold.
+        if (Status == AuctionStatus.WinnerDisqualified) return;
+
+        Status = AuctionStatus.PendingAward;
+    }
+
+    /// <summary>
+    /// The committee's decision, after review, to put the next bidder up for award.
+    /// Only that: the award itself is still a separate confirmation, with its own
+    /// letters and signature, exactly as the first one was.
+    /// </summary>
+    public void ReferToNextBidder()
+    {
+        if (Status != AuctionStatus.WinnerDisqualified)
+            throw new InvalidAuctionTransitionException(Status, "refer to the next bidder for");
+        if (PendingCandidateBidderId is null || PendingCandidateAmountMinorUnits is null)
+            throw new AuctionValidationException(new[] { "لا يوجد مزايد تالٍ مؤهل لهذا المزاد." });
+
+        Status = AuctionStatus.PendingAward;
+        _events.Add(new NextBidderReferred
+        {
+            AuctionId = Id,
+            BidderId = PendingCandidateBidderId.Value,
+            AmountMinorUnits = PendingCandidateAmountMinorUnits.Value
+        });
     }
 
     public Guid? PendingCandidateBidderId { get; private set; }
@@ -483,16 +598,107 @@ public sealed class Auction
             ComplianceDeadline = award.ComplianceDeadline,
             CascadeStep = award.CascadeStep
         });
+        RaiseFollowUp(award, now);
 
         return award;
     }
 
     public void GenerateAwardLetter(Guid documentId) => RequireOpenAward().AttachLetter(documentId);
 
-    public void UploadSignedAwardLetter(Guid documentId) =>
-        RequireOpenAward().AttachSignedLetter(documentId);
+    public void UploadSignedAwardLetter(Guid documentId, DateTimeOffset? now = null)
+    {
+        var award = RequireOpenAward();
+        award.AttachSignedLetter(documentId);
+        RaiseFollowUp(award, now ?? DateTimeOffset.UtcNow);
+    }
 
-    public void NotifyWinner(DateTimeOffset now) => RequireOpenAward().MarkWinnerNotified(now);
+    public void NotifyWinner(DateTimeOffset now)
+    {
+        var award = RequireOpenAward();
+        award.MarkWinnerNotified(now);
+        RaiseFollowUp(award, now);
+    }
+
+    /// <summary>
+    /// The latest award's snapshot again, unchanged — see AwardSnapshotRepublisher.
+    /// A withdrawn award is sent too, so its former winner is told it was withdrawn.
+    /// </summary>
+    public void RepublishFollowUp(DateTimeOffset now)
+    {
+        var latest = _awards.OrderByDescending(a => a.CascadeStep).FirstOrDefault();
+        if (latest is not null) RaiseFollowUp(latest, now);
+    }
+
+    /// <summary>The winner's view of the award, after anything that changed it.</summary>
+    private void RaiseFollowUp(Award award, DateTimeOffset now) =>
+        _events.Add(new AwardFollowUpUpdated
+        {
+            AuctionId = Id,
+            AwardId = award.Id,
+            WinnerBidderId = award.BidderId,
+            AmountMinorUnits = award.AmountMinorUnits,
+            BrokerageMinorUnits = (long)Math.Round(award.AmountMinorUnits * BrokerageFeePercent / 100m),
+            ConfirmedAt = award.ConfirmedAt,
+            ComplianceDeadline = award.ComplianceDeadline,
+            SignedLetterDocumentId = award.SignedLetterDocumentId,
+            WinnerNotifiedAt = award.WinnerNotifiedAt,
+            PaidMinorUnits = award.PaidMinorUnits,
+            RemainingMinorUnits = award.RemainingMinorUnits,
+            TransferStatus = award.TransferStatus.ToString(),
+            TransferCompletedAt = award.TransferCompletedAt,
+            SettledAt = award.SettledAt,
+            DisqualifiedAt = award.DisqualifiedAt,
+            At = now
+        });
+
+    /// <summary>
+    /// The award the follow-up is about: the open one, or once settled the one that
+    /// settled — its transfer to the notary usually comes after. Never a withdrawn one.
+    /// </summary>
+    public Award? FollowUpAward =>
+        _awards.Where(a => a.DisqualifiedAt is null)
+            .OrderByDescending(a => a.CascadeStep)
+            .FirstOrDefault();
+
+    public void RecordAwardPayment(
+        long amountMinorUnits, DateTimeOffset paidOn, string reference, Guid? documentId,
+        Guid recordedByUserId, DateTimeOffset now)
+    {
+        if (Status != AuctionStatus.Awarded)
+            throw new InvalidAuctionTransitionException(Status, "record a payment for");
+        var award = RequireOpenAward();
+        award.RecordReceipt(
+            AwardReceiptKind.Payment, amountMinorUnits, paidOn, reference, documentId,
+            recordedByUserId, now);
+        RaiseFollowUp(award, now);
+    }
+
+    /// <summary>
+    /// The winner's paid deposit, counted towards the price. Always the auction's
+    /// deposit amount — the figure is not the clerk's to type.
+    /// </summary>
+    public void CreditDepositToAward(string reference, Guid recordedByUserId, DateTimeOffset now)
+    {
+        if (Status != AuctionStatus.Awarded)
+            throw new InvalidAuctionTransitionException(Status, "credit the deposit to");
+        var award = RequireOpenAward();
+        award.RecordReceipt(
+            AwardReceiptKind.DepositCredit,
+            Math.Min(DepositMinorUnits, award.RemainingMinorUnits),
+            now, reference, null, recordedByUserId, now);
+        RaiseFollowUp(award, now);
+    }
+
+    public void UpdateTransfer(
+        TransferStatus status, string? reference, Guid? documentId, DateTimeOffset now)
+    {
+        if (Status is not (AuctionStatus.Awarded or AuctionStatus.Settled))
+            throw new InvalidAuctionTransitionException(Status, "track the transfer of");
+        var award = FollowUpAward
+            ?? throw new InvalidOperationException("There is no award to transfer.");
+        award.UpdateTransfer(status, reference, documentId, now);
+        RaiseFollowUp(award, now);
+    }
 
     /// <summary>
     /// The winner turned out non-compliant. The award is withdrawn and the
@@ -508,6 +714,7 @@ public sealed class Auction
         var award = RequireOpenAward();
         award.Disqualify(reason.Trim(), forfeitDeposit, now);
         Status = AuctionStatus.WinnerDisqualified;
+        RaiseFollowUp(award, now);
 
         _events.Add(new WinnerDisqualified
         {
@@ -520,6 +727,27 @@ public sealed class Auction
     }
 
     /// <summary>The ladder is exhausted, or nothing reached the reserve.</summary>
+    /// <summary>Why the committee refused the preliminary result, when it did.</summary>
+    public string? ResultRejectionReason { get; private set; }
+
+    /// <summary>
+    /// The committee refuses the preliminary result, with its reason (الخاصية 08).
+    ///
+    /// The auction is left unawarded, and deliberately not passed down the ladder:
+    /// the requirements say a refusal must not award the next bidder automatically,
+    /// so what happens to the land next is a decision outside this button.
+    /// </summary>
+    public void RejectResult(string reason)
+    {
+        if (Status != AuctionStatus.PendingAward)
+            throw new InvalidAuctionTransitionException(Status, "reject the result of");
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new AuctionValidationException(new[] { "سبب رفض النتيجة مطلوب." });
+
+        ResultRejectionReason = reason.Trim();
+        MarkUnsold();
+    }
+
     public void MarkUnsold()
     {
         if (Status is not (AuctionStatus.PendingEligibilityReview
@@ -543,6 +771,7 @@ public sealed class Auction
         var award = RequireOpenAward();
         award.Settle(now);
         Status = AuctionStatus.Settled;
+        RaiseFollowUp(award, now);
 
         // The sale, as a fact on its own rather than something to be read out of
         // the deposit event below. Reporting counts this as revenue (§35), and a

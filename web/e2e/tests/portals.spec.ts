@@ -132,7 +132,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
       const page = committee.page
       await openAuction(page, auctionId)
       await page.getByRole('button', { name: 'اعتماد المزاد' }).click()
-      await expect(page.getByText(/معتمد|مجدول/).first()).toBeVisible()
+      await expect(page.getByText(/معتمد|قادم/).first()).toBeVisible()
     })
 
     await test.step('a citizen sees the catalogue without signing in', async () => {
@@ -141,7 +141,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
       await anon.goto(BIDDER_URL)
       await expect(anon.getByRole('button', { name: 'الدخول بنفاذ' }).first()).toBeVisible()
 
-      const card = anon.locator('.card', { hasText: nameAr })
+      const card = anon.locator('.auction-card', { hasText: nameAr })
       await expect(card).toBeVisible({ timeout: 90_000 })
       await expect(card).toContainText('3 قطعة')
       await card.getByRole('button', { name: 'التفاصيل' }).click()
@@ -181,6 +181,9 @@ test('an auction runs from draft to award through the portals', async ({ browser
     await test.step('the browser signs a bid and the catcher accepts it', async () => {
       const page = sara.page
 
+      // Bidding happens on its own screen, entered from the auction page.
+      await page.getByRole('button', { name: 'شاشة المزايدة' }).click()
+
       // The bid box appears once the processor has opened the auction and the
       // catcher holds it. Nothing polls for that here — the portal does.
       const bid = page.getByRole('button', { name: 'إرسال المزايدة' })
@@ -214,6 +217,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
 
     await test.step('the other bidder outbids her', async () => {
       const page = khalid.page
+      await page.getByRole('button', { name: 'شاشة المزايدة' }).click()
 
       const bid = page.getByRole('button', { name: 'إرسال المزايدة' })
       await expect(bid).toBeVisible({ timeout: 120_000 })
@@ -221,7 +225,7 @@ test('an auction runs from draft to award through the portals', async ({ browser
       // Below the minimum: refused by the form, without troubling the server.
       await page.getByLabel('مبلغ المزايدة').fill('900000.00')
       await expect(bid).toBeDisabled()
-      await expect(page.getByText('أقل من أقل مزايدة مقبولة.')).toBeVisible()
+      await expect(page.getByText(/يجب أن يزيد المبلغ على السعر الحالي/)).toBeVisible()
 
       // At the reserve, which is what makes the auction awardable.
       await page.getByLabel('مبلغ المزايدة').fill('1200000.00')

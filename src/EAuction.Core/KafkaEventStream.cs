@@ -124,7 +124,10 @@ public sealed class KafkaEventStream(KafkaEventStreamOptions options) : IEventSt
 
                 yield return new StreamEvent(
                     topic, result.Message.Key ?? "", result.Message.Value ?? "",
-                    eventType, result.Offset.Value);
+                    eventType, result.Offset.Value,
+                    result.Message.Timestamp.Type == Confluent.Kafka.TimestampType.NotAvailable
+                        ? null
+                        : DateTimeOffset.FromUnixTimeMilliseconds(result.Message.Timestamp.UnixTimestampMs));
             }
         }
         finally

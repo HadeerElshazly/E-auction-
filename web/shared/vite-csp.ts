@@ -80,7 +80,11 @@ export function buildPolicy(env: Record<string, string | undefined>): string {
     "style-src 'self' 'unsafe-inline'",
 
     // data: for the inline SVG favicon, which exists so there is no request to 404.
-    "img-src 'self' data:",
+    // The document service for cover images, which are Public documents served
+    // from it — that one origin, not every API the page talks to.
+    `img-src ${["'self'", 'data:', originOf(env[ENDPOINTS.documentsApi.env] ?? ENDPOINTS.documentsApi.dev)]
+      .filter(Boolean)
+      .join(' ')}`,
     "font-src 'self'",
 
     `connect-src ${connectOrigins(env).join(' ')}`,

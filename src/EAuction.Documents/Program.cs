@@ -142,18 +142,24 @@ app.MapPost("/documents", async (
     if (subject is null) return Results.Forbid();
 
     if (!request.HasFormContentType)
-        return Results.BadRequest(new { problems = new[] { "Expected a multipart form." } });
+        return Results.BadRequest(new { problems = new[] { "صيغة الطلب غير صحيحة؛ يلزم إرسال الملف كنموذج multipart." } });
 
     var form = await request.ReadFormAsync(ct);
     var file = form.Files["file"];
 
     if (file is null || file.Length == 0)
-        return Results.BadRequest(new { problems = new[] { "No file was uploaded." } });
+        return Results.BadRequest(new { problems = new[] { "لم يُرفَق أي ملف." } });
 
     if (file.Length > maxUploadBytes)
         return Results.BadRequest(new
         {
-            problems = new[] { $"The file is {file.Length} bytes; the limit is {maxUploadBytes}." }
+            // Megabytes, not bytes: "الملف 27,983,104 بايت والحد 26,214,400" asks the
+            // person to do arithmetic before they can act on it.
+            problems = new[]
+            {
+                $"حجم الملف {file.Length / 1024 / 1024} ميجابايت، والحد المسموح "
+                + $"{maxUploadBytes / 1024 / 1024} ميجابايت."
+            }
         });
 
     // Unrecognised or absent, it is Restricted. Defaulting to Public would mean a
@@ -325,10 +331,12 @@ static async Task AuditReadAsync(
     var subject = http.User.SubjectId();
     if (subject is null || subject == metadata.OwnerSubject) return;
 
-    var (who, roles, source) = StaffAudit.ActorOf(http);
+    var actor = StaffAudit.ActorOf(http);
+    var (who, roles, source) = actor;
     var entry = StaffActionRecorded.By(
         who, roles, source, action, AuditSubject.Document(metadata.Id),
-        $"{metadata.Access} document owned by {metadata.OwnerSubject}, {metadata.FileName}.");
+        $"{metadata.Access} document owned by {metadata.OwnerSubject}, {metadata.FileName}.",
+        actor.Name, metadata.FileName);
 
     var logger = loggers.CreateLogger("EAuction.Documents.Audit");
 

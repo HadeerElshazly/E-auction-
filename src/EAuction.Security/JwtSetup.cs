@@ -13,6 +13,17 @@ public sealed record JwtOptions
     /// <summary>Keycloak realm URL, e.g. https://id.example.sa/realms/eauction.</summary>
     public string? Authority { get; init; }
 
+    /// <summary>
+    /// A further <c>iss</c> to accept, where it differs from <see cref="Authority"/>.
+    ///
+    /// In Compose the services reach Keycloak as keycloak:8080 but the browser logs in
+    /// at localhost:8080, and Keycloak stamps the host it was called on. Additive
+    /// rather than a replacement: both forms are accepted, because tokens for the same
+    /// realm legitimately arrive carrying either. Leave it unset and only
+    /// <see cref="Authority"/> is accepted.
+    /// </summary>
+    public string? Issuer { get; init; }
+
     public string Audience { get; init; } = "eauction";
     public bool RequireHttpsMetadata { get; init; } = true;
 }
@@ -33,6 +44,7 @@ public static class JwtSetup
         var options = new JwtOptions
         {
             Authority = configuration["Jwt:Authority"],
+            Issuer = configuration["Jwt:Issuer"],
             Audience = configuration["Jwt:Audience"] ?? "eauction",
             RequireHttpsMetadata = configuration.GetValue("Jwt:RequireHttpsMetadata", true)
         };
@@ -59,7 +71,26 @@ public static class JwtSetup
                     ValidateAudience = true,
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
-                    ValidIssuer = options.Authority,
+                    // Both forms, not one, and not `??`.
+                    //
+                    // Not one, because in Compose the services reach Keycloak as
+                    // keycloak:8080 while the browser logs in at localhost:8080, and
+                    // Keycloak stamps `iss` with the host it was called on. Tokens
+                    // legitimately arrive carrying either, so a single ValidIssuer
+                    // rejects whichever one it happens not to be — browser tokens if
+                    // it names the internal host, service-to-service tokens if it
+                    // names the external one.
+                    //
+                    // Not `??`, because configuration returns "" for a key that is
+                    // present and empty: `Jwt__Issuer:` with nothing after it in YAML,
+                    // or a Helm value that resolved to nothing. Null-coalescing lets
+                    // that empty string win, and Microsoft.IdentityModel then refuses
+                    // every token in the service with IDX10204 — an error that names
+                    // neither the setting nor the service that was misconfigured.
+                    ValidIssuers = new[] { options.Issuer, options.Authority }
+                        .Where(i => !string.IsNullOrWhiteSpace(i))
+                        .Distinct()
+                        .ToArray(),
                     ValidAudience = options.Audience,
                     NameClaimType = "sub",
                     RoleClaimType = ClaimTypes.Role,
@@ -128,6 +159,7 @@ public static class JwtSetup
             // changes nothing, and an auditor who had to be an administrator to
             // reach it would be reading their own record.
             auth.AddPolicy(Policies.Auditor, p => p.RequireRole(Roles.Auditor));
+            auth.AddPolicy(Policies.Inquiries, p => p.RequireRole(Roles.Inquiries));
 
             // Three roles, and the point of the first is that it is the only one of
             // the three that cannot change an auction.

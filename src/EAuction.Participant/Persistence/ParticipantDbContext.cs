@@ -10,6 +10,8 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
     public DbSet<Bidder> Bidders => Set<Bidder>();
     public DbSet<Subscription> Subscriptions => Set<Subscription>();
     public DbSet<AuctionTerms> AuctionTerms => Set<AuctionTerms>();
+    public DbSet<WinnerAward> WinnerAwards => Set<WinnerAward>();
+    public DbSet<Inquiry> Inquiries => Set<Inquiry>();
     public DbSet<OutboxMessage> Outbox => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -41,6 +43,10 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             e.Property(x => x.Status).HasConversion<int>();
             e.Property(x => x.DepositMethod).HasConversion<int?>();
             e.Property(x => x.BookletPaymentRef).HasMaxLength(200);
+            e.Property(x => x.GuaranteeRejectionReason).HasMaxLength(1000);
+            e.Ignore(x => x.Eligibility);
+            e.Ignore(x => x.DepositSettlement);
+            e.Property(x => x.DepositClosureReference).HasMaxLength(100);
             e.Property(x => x.DepositPaymentRef).HasMaxLength(200);
             e.Property(x => x.RevocationReason).HasMaxLength(2000);
             e.Property(x => x.PaymentFailurePurpose).HasMaxLength(40);
@@ -57,6 +63,36 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             e.ToTable("auction_terms");
             e.HasKey(x => x.AuctionId);
             e.Property(x => x.AuctionId).ValueGeneratedNever();
+            e.Property(x => x.NameAr).HasMaxLength(300);
+            e.Property(x => x.Stage).HasConversion<int>();
+            e.HasIndex(x => x.Stage);
+        });
+
+        b.Entity<WinnerAward>(e =>
+        {
+            e.ToTable("winner_award");
+            e.HasKey(x => x.AuctionId);
+            e.Property(x => x.AuctionId).ValueGeneratedNever();
+            e.Property(x => x.TransferStatus).HasMaxLength(20);
+            e.Ignore(x => x.NextStep);
+            e.HasIndex(x => x.WinnerBidderId);
+        });
+
+        b.Entity<Inquiry>(e =>
+        {
+            e.ToTable("inquiry");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.Question).HasMaxLength(Inquiry.MaxLength).IsRequired();
+            e.Property(x => x.Answer).HasMaxLength(Inquiry.MaxLength);
+            e.Property(x => x.ClarificationQuestion).HasMaxLength(Inquiry.MaxLength);
+            e.Property(x => x.ClarificationAnswer).HasMaxLength(Inquiry.MaxLength);
+            e.Property(x => x.Status).HasConversion<int>();
+            e.Property(x => x.Clarification).HasConversion<int>();
+            e.Ignore(x => x.Events);
+            e.HasIndex(x => new { x.AuctionId, x.AskedAt });
+            e.HasIndex(x => x.BidderId);
+            e.HasIndex(x => x.Status);
         });
 
         b.Entity<OutboxMessage>(e =>
@@ -94,6 +130,14 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             foreach (var domainEvent in aggregate.Events)
                 Outbox.Add(OutboxMessage.From(domainEvent));
             aggregate.ClearEvents();
+        }
+
+        foreach (var inquiry in ChangeTracker.Entries<Inquiry>().Select(x => x.Entity)
+                     .Where(x => x.Events.Count > 0).ToList())
+        {
+            foreach (var domainEvent in inquiry.Events)
+                Outbox.Add(OutboxMessage.From(domainEvent));
+            inquiry.ClearEvents();
         }
 
         return await base.SaveChangesAsync(ct);

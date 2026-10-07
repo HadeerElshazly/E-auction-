@@ -33,6 +33,8 @@ builder.Services.AddSingleton<BidderAliases>();
 builder.Services.AddSingleton<BidderNames>();
 builder.Services.AddSingleton<LeaderLabels>();
 builder.Services.AddSingleton<FanOut>();
+builder.Services.AddSingleton<Clarifications>();
+builder.Services.AddHostedService<ClarificationsConsumer>();
 builder.Services.AddSingleton(sp => new CatalogueConsumer(
     sp.GetRequiredService<CatalogueState>(),
     sp.GetRequiredService<BidderNames>(),
@@ -76,25 +78,86 @@ app.MapGet("/health/ready", (CatalogueConsumer c) =>
 // is reachable from here.
 // ---------------------------------------------------------------------------
 
-app.MapGet("/auctions", (string? state, CatalogueState catalogue) =>
+app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
 {
-    var now = DateTimeOffset.UtcNow;
+    // The chips' grouping is shared with the administrators' list (StageGroups), so
+    // an auction is "upcoming" or "finished" on both portals alike.
+    bool InState(AuctionEntry a, string? s) => StageGroups.In(a.Status, s);
 
-    var items = catalogue.All()
-        .Where(a => state?.ToLowerInvariant() switch
-        {
-            null or "" or "all" => true,
-            "upcoming" => a.Status == "Scheduled" && a.StartsAt > now,
-            "live" => a.Status == "Live",
-            "closed" => a.Status is "Closed" or "PendingAward" or "Unsold",
-            _ => true
-        })
+    // Searched on the server, Arabic- and English-name, with the same folding of
+    // أ/إ/آ, ة and ى that «طلباتي» uses (EAuction.Core.ArabicText).
+    var needle = ArabicText.Normalise(q);
+    bool Found(AuctionEntry a) =>
+        needle.Length == 0
+        || ArabicText.Normalise(a.NameAr).Contains(needle)
+        || ArabicText.Normalise(a.NameEn).Contains(needle);
+
+    var all = catalogue.All().ToArray();
+    var items = all
+        .Where(a => InState(a, state) && Found(a))
         .OrderBy(a => a.StartsAt)
         .Select(AuctionSummary.From)
         .ToArray();
 
-    return Results.Ok(new { count = items.Length, items });
+    // Each status chip's count under the current search.
+    var counts = StageGroups.Public
+        .ToDictionary(k => k, k => all.Count(a => InState(a, k) && Found(a)));
+
+    return Results.Ok(new { count = items.Length, items, counts });
 }).AllowAnonymous();
+
+// ---------------------------------------------------------------------------
+// Every auction that is open right now, in one request.
+//
+// For the operations screen (§7.2's fan-out serves one auction to one bidder; this
+// serves every auction to one watcher). A monitor built on the per-auction endpoints
+// would open a stream or a poll each, and six of those is where a browser's
+// per-origin connection limit starts refusing — the screen would silently stop
+// updating the seventh auction rather than fail in any visible way.
+//
+// Anonymous like its neighbours, and that is not an oversight: every field here is
+// already served per auction by /auctions/{id}/price to anyone who asks, and the
+// auctions themselves are listed publicly by /auctions?state=live. This is those
+// calls folded into one, so it discloses nothing new. The leader label in
+// particular goes through LeaderLabels, so a masked auction is masked here too.
+// ---------------------------------------------------------------------------
+app.MapGet("/auctions/live", (CatalogueState catalogue, LeaderLabels labels) =>
+{
+    var rows = catalogue.All()
+        .Where(a => a.Status == "Live")
+        .OrderBy(a => a.EffectiveEndsAt ?? a.EndsAt)
+        .Select(a => MonitorRow.From(a, labels.For(a)))
+        .ToArray();
+
+    return Results.Ok(new { count = rows.Length, items = rows, asOf = DateTimeOffset.UtcNow });
+}).AllowAnonymous();
+
+// ---------------------------------------------------------------------------
+// Who leads, by id — staff only. The one endpoint here that reveals identity, and
+// so the one that is not anonymous: the people running the auction need to know
+// who is winning a running auction and who won a closed one, whatever the public
+// view masks (D-22). The id only; the portal asks the participant service for the
+// name, which is where names live.
+// ---------------------------------------------------------------------------
+app.MapGet("/staff/leaders", (CatalogueState catalogue) =>
+{
+    var rows = catalogue.All()
+        .Where(a => a.LeaderBidderId is not null)
+        .Select(a => new
+        {
+            auctionId = a.AuctionId,
+            leaderBidderId = a.LeaderBidderId,
+            priceMinorUnits = a.PriceMinorUnits,
+            status = a.Status,
+        })
+        .ToArray();
+    return Results.Ok(new { items = rows });
+}).RequireAuthorization(Policies.StaffOnTheFloor);
+
+// «التوضيحات العامة» (الخاصية 10): what staff published, after approval, for
+// everyone reading the auction — anonymous, like the auction itself.
+app.MapGet("/auctions/{id:guid}/clarifications", (Guid id, Clarifications store) =>
+    Results.Ok(new { items = store.For(id) })).AllowAnonymous();
 
 app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
     catalogue.TryGet(id, out var a)

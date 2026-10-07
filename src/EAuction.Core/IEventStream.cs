@@ -35,5 +35,10 @@ public interface IEventStream : IAsyncDisposable
     Task<long> LatestOffsetAsync(string topic, CancellationToken ct);
 }
 
+/// <param name="Timestamp">
+/// When the broker recorded it — for consumers whose events carry no time of their
+/// own and must not stamp a replayed history with the moment of the replay.
+/// </param>
 public readonly record struct StreamEvent(
-    string Topic, string Key, string Payload, string EventType, long Offset);
+    string Topic, string Key, string Payload, string EventType, long Offset,
+    DateTimeOffset? Timestamp = null);

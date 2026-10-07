@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  AppHeader, ApplicationsIcon, GavelIcon, ProfileIcon,
   ApiError,
   api,
   config,
@@ -13,6 +14,10 @@ import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
 import { Notifications } from './Notifications'
+import { LiveBids } from './LiveBids'
+import { Profile } from './Profile'
+import { MyApplications } from './MyApplications'
+import { BiddingRoom } from './BiddingRoom'
 
 
 export function App() {
@@ -24,6 +29,11 @@ export function App() {
   const [auctions, setAuctions] = useState<AuctionSummary[]>([])
   const [openAuction, setOpenAuction] = useState<AuctionDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showProfile, setShowProfile] = useState(false)
+  const [showApplications, setShowApplications] = useState(false)
+  const [showLive, setShowLive] = useState(false)
+  /** The auction whose bidding screen is open, if any. */
+  const [inRoom, setInRoom] = useState(false)
 
   // Whether this page load followed a second-factor confirmation.
   //
@@ -47,6 +57,10 @@ export function App() {
     async (id: string) => {
       try {
         setOpenAuction(await publicClient.get<AuctionDetail>(`/auctions/${id}`))
+        setShowProfile(false)
+        setShowApplications(false)
+        setShowLive(false)
+        setInRoom(false)
         setError(null)
       } catch (e) {
         setError(describe(e))
@@ -102,24 +116,66 @@ export function App() {
 
   return (
     <>
-      <header className="bar">
-        <h1>مزادات الأراضي</h1>
-        <span className="grow" />
-        {session ? (
+      <AppHeader
+        title="مزادات الأراضي"
+        session={session}
+        onSignIn={signIn}
+        signInLabel="الدخول بنفاذ"
+        onSignOut={signOut}
+        actions={
           <>
-            {isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
-            <span className="who">
-              {session.nameAr ?? session.name}
-              {session.nationalId && <span className="ltr"> · {session.nationalId}</span>}
-            </span>
-            <button onClick={signOut}>خروج</button>
+              {session && isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
+              {isBidder && (
+                <button
+                  className={`icon-btn${showLive ? ' on' : ''}`}
+                  aria-label="مزاداتي الجارية"
+                  title="مزاداتي الجارية"
+                  aria-pressed={showLive}
+                  onClick={() => {
+                    setOpenAuction(null)
+                    setShowProfile(false)
+                    setShowApplications(false)
+                    setShowLive(true)
+                  }}
+                >
+                  <GavelIcon />
+                </button>
+              )}
+              {isBidder && (
+                <button
+                  className={`icon-btn${showApplications ? ' on' : ''}`}
+                  aria-label="طلباتي"
+                  title="طلباتي"
+                  aria-pressed={showApplications}
+                  onClick={() => {
+                    setOpenAuction(null)
+                    setShowProfile(false)
+                    setShowLive(false)
+                    setShowApplications(true)
+                  }}
+                >
+                  <ApplicationsIcon />
+                </button>
+              )}
+              {isBidder && (
+                <button
+                  className={`icon-btn${showProfile ? ' on' : ''}`}
+                  aria-label="ملفي"
+                  title="ملفي"
+                  aria-pressed={showProfile}
+                  onClick={() => {
+                    setOpenAuction(null)
+                    setShowApplications(false)
+                    setShowLive(false)
+                    setShowProfile(true)
+                  }}
+                >
+                  <ProfileIcon />
+                </button>
+              )}
           </>
-        ) : (
-          <button className="primary" onClick={signIn}>
-            الدخول بنفاذ
-          </button>
-        )}
-      </header>
+        }
+      />
 
       <div className="app">
         {authError && <div className="notice error">{authError}</div>}
@@ -132,13 +188,50 @@ export function App() {
         )}
 
         {session && !isBidder && (
-          <div className="notice info">
-            هذا الحساب لا يحمل دور <code>bidder</code>، فلا يمكنه المزايدة. المزادات
-            معروضة للعرض فقط.
+          <div className="notice info staff-redirect">
+            <span className="grow">
+              هذا حساب موظف، وهذه بوابة المزايدين — يمكنك مشاهدة المزادات فقط. التقارير وسجل
+              المراجعة وإدارة المزادات في بوابة الموظفين.
+            </span>
+            <a className="button primary" href={staffPortalUrl()}>
+              فتح بوابة الموظفين ←
+            </a>
           </div>
         )}
 
-        {openAuction ? (
+        {showLive && session ? (
+          <LiveBids
+            session={session}
+            auctions={auctions}
+            onOpenRoom={(id) => void open(id).then(() => setInRoom(true))}
+            onBack={() => setShowLive(false)}
+          />
+        ) : showApplications && session ? (
+          <MyApplications
+            session={session}
+            auctions={auctions}
+            onOpen={(id) => void open(id)}
+            onOpenRoom={(id) => void open(id).then(() => setInRoom(true))}
+            onBack={() => setShowApplications(false)}
+          />
+        ) : showProfile && session ? (
+          <Profile session={session} onBack={() => setShowProfile(false)} />
+        ) : openAuction ? (
+          inRoom && session ? (
+            <BiddingRoom
+              auction={openAuction}
+              session={session}
+              onBack={() => setInRoom(false)}
+              // A quiet refresh: re-reading the auction must not leave the room, or
+              // every bid would drop the bidder out of the screen they bid from.
+              onRefresh={() =>
+                void publicClient
+                  .get<AuctionDetail>(`/auctions/${openAuction.id}`)
+                  .then(setOpenAuction)
+                  .catch(() => undefined)
+              }
+            />
+          ) : (
           <AuctionPage
             auction={openAuction}
             session={session}
@@ -149,7 +242,9 @@ export function App() {
             }}
             onSignIn={signIn}
             onRefresh={() => open(openAuction.id)}
+            onEnterRoom={() => setInRoom(true)}
           />
+          )
         ) : (
           <Catalogue auctions={auctions} onOpen={open} signedIn={session !== null} />
         )}
@@ -171,4 +266,10 @@ function describe(e: unknown): string {
     return e.message
   }
   return e instanceof Error ? e.message : String(e)
+}
+
+/** The staff portal: set at build, else the same host on its default port. */
+function staffPortalUrl(): string {
+  const configured = import.meta.env.VITE_STAFF_PORTAL as string | undefined
+  return configured || `${window.location.protocol}//${window.location.hostname}:3001/`
 }

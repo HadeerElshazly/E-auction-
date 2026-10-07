@@ -1,13 +1,32 @@
 # Local development stack.
 #
-# NOT YET RUN: the development container used to author this has no Docker
-# daemon, so this file is unexercised. Treat the first `docker compose up` as
-# part of the work, not as a regression.
-#
 #   docker compose -f deploy/compose/docker-compose.yml up -d
 #
 # Configuration is env-var only (12-factor) so Compose and Helm share one
 # source of truth.
+#
+# HOST PORTS ARE NOT THE CONTAINER PORTS. Four are shifted so this stack can run
+# beside a local Kafka, Postgres or MinIO that already holds the usual ones:
+#
+#   Kafka      host 9192  ->  kafka:9092
+#   Postgres   host 5433  ->  postgres:5432
+#   MinIO      host 9010  ->  minio:9000        console host 9011 -> minio:9001
+#   Connect    host 8084  ->  kafka-connect:8083
+#
+# Worth knowing before you debug: `psql -p 5432` reaches your own Postgres and not
+# this one, and finds none of this stack's data. Keycloak (8080), the portals (3000,
+# 3001) and the services (5080, 5090, 5094-5099) are unshifted, because the browser
+# calls those by the addresses baked into the portal bundles below.
+#
+# EVERY SERVICE HERE RUNS AS PRODUCTION. ASPNETCORE_ENVIRONMENT is deliberately not
+# set, so each service's startup guards are armed and a missing key is a crash with
+# a message rather than a silent fallback. That is why the keys below are spelled
+# out: without them the services do not degrade, they do not start.
+#
+# THE KEYS BELOW ARE FIXED DEV VALUES AND NOTHING ELSE. They are in git, so they are
+# public. Deployment takes them from the cluster's secret store (see deploy/helm);
+# the one thing that must never happen is this file being copied to an environment
+# that holds real citizens' bids.
 
 name: e-auction
 
@@ -16,7 +35,7 @@ services:
     image: apache/kafka:3.8.1
     container_name: eauction-kafka
     ports:
-      - "9092:9092"
+      - "9192:9092"   # host 9092 is taken; containers still use kafka:9092
     environment:
       # KRaft: no ZooKeeper. Single broker for development only — deployment
       # runs 3 brokers with RF=3 and min.insync.replicas=2 (D-10).
@@ -43,7 +62,7 @@ services:
     image: postgres:16-alpine
     container_name: eauction-postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"   # host 5432 is the local Postgres; containers still use postgres:5432
     environment:
       POSTGRES_USER: eauction
       POSTGRES_PASSWORD: eauction
@@ -66,12 +85,17 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    # minio/minio is no longer published on Docker Hub; quay.io is the remaining
+    # source. Pinned, like every other image here: `latest` makes the stack's
+    # behaviour a function of the day it was pulled, and MinIO has since dropped the
+    # web console from the community image — so an unpinned tag eventually takes away
+    # the console on 9011 and the `mc` binary the healthcheck below runs.
+    image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
     container_name: eauction-minio
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9010:9000"
+      - "9011:9001"
     environment:
       MINIO_ROOT_USER: eauction
       MINIO_ROOT_PASSWORD: eauction123
@@ -101,10 +125,13 @@ services:
       # Checks the eauction realm, not master. Master answers before the import has
       # finished, which would let the services start against a realm that does not
       # exist yet and fail every token for the first few seconds.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/eauction HTTP/1.1\\nHost: localhost\\n\\n' >&3 && cat <&3 | head -1 | grep 200"]
+      # Connection: close, or `cat` waits on the kept-alive socket until the timeout.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/eauction HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep 200"]
       interval: 15s
       timeout: 10s
       retries: 10
+      # The realm import takes over a minute on first boot.
+      start_period: 120s
 
   # Kafka Connect with Debezium, for the auction-admin outbox. The service can
   # also run its own polling relay instead — run one or the other, never both.
@@ -112,7 +139,7 @@ services:
     image: debezium/connect:2.7.3.Final
     container_name: eauction-connect
     ports:
-      - "8083:8083"
+      - "8084:8083"
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: eauction-connect
@@ -182,6 +209,8 @@ services:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=eauction"
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       # The two portals run on :3000 and :3001. Default is no origins at all.
@@ -189,6 +218,11 @@ services:
       Kafka__BootstrapServers: kafka:9092
       Kafka__ReplicationFactor: "1"
       Award__ComplianceWindowDays: "5"
+      # Must match the participant's and the catcher's: a clerk's on-site bid is
+      # signed with a key derived from it.
+      Admin__BidderMasterKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      # Mints award-letter grants the document service verifies. Must match it.
+      Documents__GrantKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
     depends_on:
       provision-migrate:
         condition: service_completed_successfully
@@ -208,6 +242,8 @@ services:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       # The two portals run on :3000 and :3001. Default is no origins at all.
@@ -238,6 +274,8 @@ services:
       ASPNETCORE_URLS: http://+:8080
       Kafka__BootstrapServers: kafka:9092
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       # The two portals run on :3000 and :3001. Default is no origins at all.
@@ -269,6 +307,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
@@ -316,6 +356,16 @@ services:
       # everything without taking a riyal, which is why the service refuses to
       # start on it in Production unless this says so explicitly.
       Payments__AllowSimulatedGateway: "true"
+      # The console over that simulator, so a demonstration can see the booklet fee
+      # and the deposit being taken and can reach the non-payment path on purpose.
+      # Only has any effect where the line above is already set.
+      Payments__Sandbox: "true"
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      # Published only so `curl localhost:5093/health/ready` works while debugging.
+      # The sandbox console reads this service over the Compose network, not from
+      # the browser — it configures no CORS, because it is not browser-facing.
+      - "5093:8080"
     depends_on:
       provision-migrate:
         condition: service_completed_successfully
@@ -337,6 +387,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       Storage__ServiceUrl: http://minio:9000
@@ -349,7 +401,12 @@ services:
       # the booklet they paid for.
       Documents__GrantKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
       Cors__AllowedOrigins: "http://localhost:3000,http://localhost:3001"
+      # Every document read is published for the audit trail.
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ReplicationFactor: "1"
     depends_on:
+      kafka:
+        condition: service_healthy
       minio:
         condition: service_healthy
       keycloak:
@@ -371,6 +428,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
@@ -397,6 +456,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
@@ -425,6 +486,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       Jwt__Authority: http://keycloak:8080/realms/eauction
+      # The browser logs in at localhost:8080, so that is the iss its tokens carry.
+      Jwt__Issuer: http://localhost:8080/realms/eauction
       Jwt__Audience: eauction
       Jwt__RequireHttpsMetadata: "false"
       Kafka__BootstrapServers: kafka:9092
@@ -493,6 +556,38 @@ services:
       - "3001:8080"
     depends_on:
       auction-admin:
+        condition: service_started
+
+  # صندوق التجارب — the two external systems the platform does not have yet.
+  #
+  # Nafath needs a contract with Elm/NIC (P-1) and the payment gateway needs merchant
+  # accounts (P-3), so the platform stands in for both. That substitution is fine in
+  # a test and invisible in a room: the step-up gate on registration asks for a
+  # six-digit code that only the test suite could produce, which makes the first
+  # thing a person tries by hand — registering as a bidder — the one thing they
+  # cannot do. This serves that code, and a console over the payment simulator.
+  #
+  # NOT part of the platform. It is absent from the Helm chart on purpose, and the
+  # service refuses to start unless Sandbox:Enabled says so.
+  sandbox:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile.sandbox
+    container_name: eauction-sandbox
+    ports:
+      # The same port the local runner gives it, so docs/DEMO.md names one address
+      # whichever way the stack was started.
+      - "5111:8080"
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      Sandbox__Enabled: "true"
+      # The secret the realm seeds on the dev bidders. Already public — it is in
+      # deploy/keycloak/eauction-realm.json, which is in git — and this service may
+      # never be given any other kind.
+      Sandbox__TotpSecret: "eauctiondevsecret1234567890"
+      Sandbox__PaymentsBaseUrl: "http://payments:8080"
+    depends_on:
+      payments:
         condition: service_started
 
 volumes:

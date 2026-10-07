@@ -32,6 +32,7 @@ public sealed class ControlPlane(
             ConsumeAsync(Topics.Upcoming, ApplyAuction, stoppingToken),
             ConsumeAsync(Topics.Participants, ApplyParticipant, stoppingToken),
             ConsumeAsync(Topics.CurrentWinner, ApplyPrice, stoppingToken),
+            ConsumeAsync(Topics.Lifecycle, ApplyLifecycle, stoppingToken),
             MarkWarmAsync(stoppingToken));
     }
 
@@ -76,6 +77,17 @@ public sealed class ControlPlane(
             try { await Task.Delay(TimeSpan.FromMilliseconds(250), ct); }
             catch (OperationCanceledException) { return; }
         }
+    }
+
+    /// <summary>
+    /// Only a cancellation. The rest of the lifecycle is the processor's to act on;
+    /// this service screens by the published window, and a withdrawn auction is the
+    /// one case where that window stops meaning anything.
+    /// </summary>
+    private void ApplyLifecycle(StreamEvent record)
+    {
+        if (record.EventType != "AuctionCancelled") return;
+        if (Guid.TryParse(record.Key, out var auctionId)) state.CancelAuction(auctionId);
     }
 
     private void ApplyAuction(StreamEvent record)

@@ -28,6 +28,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         Factory = new SimpleDbContextFactory(options);
 
         await using var db = await Factory.CreateDbContextAsync();
+        EAuction.TestSupport.TestDatabases.EnsureDisposable(db.Database.GetDbConnection().Database);
         await db.Database.EnsureDeletedAsync();
         await db.Database.MigrateAsync();
     }

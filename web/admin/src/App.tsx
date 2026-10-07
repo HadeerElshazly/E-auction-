@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  AppHeader,
   ApiError,
   api,
   config,
@@ -14,9 +15,13 @@ import type { Auction, AuctionListItem } from './types'
 import { AuctionList } from './AuctionList'
 import { AuctionEditor } from './AuctionEditor'
 import { AwardPanel } from './AwardPanel'
+import { Applicants } from './Applicants'
 import { ClerkTerminal } from './ClerkTerminal'
 import { Reports } from './Reports'
 import { AuditTrail } from './AuditTrail'
+import { FollowUp } from './FollowUp'
+import { Inquiries } from './Inquiries'
+import { Monitor } from './Monitor'
 
 /**
  * Which screen is open.
@@ -26,7 +31,7 @@ import { AuditTrail } from './AuditTrail'
  * a dependency plus the redirect-URI registration every Keycloak client here
  * already pins to one path.
  */
-type View = 'auctions' | 'reports' | 'audit'
+type View = 'auctions' | 'monitor' | 'followup' | 'inquiries' | 'reports' | 'audit'
 
 
 export function App() {
@@ -55,8 +60,44 @@ export function App() {
   // rather than a missing permission.
   const canReport = has(session, Roles.reporting) || isAdmin || isCommittee
   const canAudit = has(session, Roles.auditor)
+  // The inquiries desk: its own role, so administrators and the committee are not it.
+  const canInquire = has(session, Roles.inquiries)
 
-  const [view, setView] = useState<View>('auctions')
+  // المتابعة المباشرة is operational: who is running auctions right now. The three
+  // roles that run them see it. Not `reporting`, whose screens are all after the
+  // fact, and emphatically not `auditor`, which reads the trail and nothing else
+  // by design (§34).
+  const canWatch = isAdmin || isCommittee || isClerk
+
+  // Back where the decision was being made, after the second-factor round trip.
+  // The side menu, open or folded to its icons. A per-browser preference, so it is
+  // remembered where the browser allows and simply open where it does not.
+  const [menuOpen, setMenuOpen] = useState(() => {
+    try {
+      return localStorage.getItem('admin.menu') !== 'collapsed'
+    } catch {
+      return true
+    }
+  })
+  const toggleMenu = () =>
+    setMenuOpen((open) => {
+      try {
+        localStorage.setItem('admin.menu', open ? 'collapsed' : 'open')
+      } catch {
+        // Not remembered; still toggles.
+      }
+      return !open
+    })
+
+  const [view, setView] = useState<View>(() => (confirmed === 'followup-decision' ? 'followup' : 'auctions'))
+
+  // A reader lands on their own screen, not on an auction list they cannot use:
+  // the auditor on سجل المراجعة, reporting on التقارير.
+  const readerOnly = !!session && !isAdmin && !isCommittee && !isClerk
+  useEffect(() => {
+    if (readerOnly)
+      setView(canInquire ? 'inquiries' : canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
+  }, [readerOnly, canInquire, canAudit, canReport])
 
   const refreshList = useCallback(async () => {
     if (!session) return
@@ -152,7 +193,7 @@ export function App() {
     )
   }
 
-  if (!isAdmin && !isCommittee && !isClerk && !canReport && !canAudit) {
+  if (!isAdmin && !isCommittee && !isClerk && !canReport && !canAudit && !canInquire) {
     return (
       <div className="centre">
         <div className="notice error">
@@ -160,7 +201,7 @@ export function App() {
           <div className="small" style={{ marginTop: 8 }}>
             هذا الحساب لا يحمل أيًّا من الأدوار: <code>auction-admin</code>،{' '}
             <code>award-committee</code>، <code>operator</code>،{' '}
-            <code>reporting</code>، <code>auditor</code>.
+            <code>reporting</code>، <code>auditor</code>، <code>inquiries</code>.
           </div>
         </div>
         <button onClick={signOut}>تسجيل الخروج</button>
@@ -170,65 +211,103 @@ export function App() {
 
   return (
     <>
-      <header className="bar">
-        <h1>إدارة المزادات</h1>
-        <span className="grow" />
-        <span className="who">
-          {session.name}
-          {' · '}
-          {isAdmin && 'إدارة'}
-          {isAdmin && isCommittee && ' + '}
-          {isCommittee && 'لجنة الترسية'}
-          {(isAdmin || isCommittee) && isClerk && ' + '}
-          {isClerk && 'قاعة المزاد'}
-          {has(session, Roles.reporting) && ' التقارير'}
-          {canAudit && ' المراجعة'}
-        </span>
+      <AppHeader
+        title="إدارة المزادات"
+        session={session}
+        onSignOut={signOut}
+        onToggleMenu={toggleMenu}
+        menuOpen={menuOpen}
+        extra={
+          isClerk && (
+            // A clerk's own id, where they can read it out before they have been
+            // assigned to anything: an administrator needs it to put them on the
+            // floor, and nothing here can list municipal staff (§29).
+            <span className="muted small ltr-id">
+              معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
+            </span>
+          )
+        }
+      />
 
-        {isClerk && (
-          // A clerk's own id, where they can read it out before they have been
-          // assigned to anything. An administrator has to be given it to put them
-          // on the floor, and nothing in this system can list municipal staff — so
-          // a clerk who could only see it from inside an auction they are already
-          // running could never be assigned to their first one.
-          <span className="muted small ltr-id">
-            معرّفك: <code className="ltr" data-testid="clerk-user-id">{session.subject}</code>
-          </span>
-        )}
-        <button onClick={signOut}>خروج</button>
-      </header>
-
-      <div className="app">
-        {(canReport || canAudit) && (
-          <div className="row" style={{ margin: '0 0 16px' }} data-testid="nav">
+      <div className="shell">
+        {/* The navigation rail from the proposal. Always present, even for an
+            account that holds only one of these — a single item still tells a
+            reader where they are, and a rail that appears and disappears with the
+            signed-in role makes the product look like two different products. */}
+        <nav className={`rail${menuOpen ? '' : ' collapsed'}`} data-testid="nav">
+          <button
+              title={menuOpen ? undefined : 'المزادات'}
+            className={view === 'auctions' ? 'on' : ''}
+            data-testid="nav-auctions"
+            onClick={() => setView('auctions')}
+          >
+            <span className="icon" aria-hidden="true">⌂</span>
+            <span className="label">المزادات</span>
+            <span className="chevron" aria-hidden="true">‹</span>
+          </button>
+          {canWatch && (
             <button
-              className={view === 'auctions' ? 'primary' : ''}
-              data-testid="nav-auctions"
-              onClick={() => setView('auctions')}
+              title={menuOpen ? undefined : 'المتابعة المباشرة'}
+              className={view === 'monitor' ? 'on' : ''}
+              data-testid="nav-monitor"
+              onClick={() => setView('monitor')}
             >
-              المزادات
+              <span className="icon" aria-hidden="true">◉</span>
+            <span className="label">المتابعة المباشرة</span>
+              <span className="chevron" aria-hidden="true">‹</span>
             </button>
-            {canReport && (
-              <button
-                className={view === 'reports' ? 'primary' : ''}
-                data-testid="nav-reports"
-                onClick={() => setView('reports')}
-              >
-                التقارير
-              </button>
-            )}
-            {canAudit && (
-              <button
-                className={view === 'audit' ? 'primary' : ''}
-                data-testid="nav-audit"
-                onClick={() => setView('audit')}
-              >
-                سجل المراجعة
-              </button>
-            )}
-          </div>
-        )}
+          )}
+          {canReport && (
+            <button
+              title={menuOpen ? undefined : 'متابعة الترسية'}
+              className={view === 'followup' ? 'on' : ''}
+              data-testid="nav-followup"
+              onClick={() => setView('followup')}
+            >
+              <span className="icon" aria-hidden="true">✓</span>
+            <span className="label">متابعة الترسية</span>
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
+          {(canInquire || isAdmin || isCommittee) && (
+            <button
+              title={menuOpen ? undefined : 'الاستفسارات'}
+              className={view === 'inquiries' ? 'on' : ''}
+              data-testid="nav-inquiries"
+              onClick={() => setView('inquiries')}
+            >
+              <span className="icon" aria-hidden="true">?</span>
+            <span className="label">الاستفسارات</span>
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
+          {canReport && (
+            <button
+              title={menuOpen ? undefined : 'التقارير'}
+              className={view === 'reports' ? 'on' : ''}
+              data-testid="nav-reports"
+              onClick={() => setView('reports')}
+            >
+              <span className="icon" aria-hidden="true">◴</span>
+            <span className="label">التقارير</span>
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
+          {canAudit && (
+            <button
+              title={menuOpen ? undefined : 'سجل المراجعة'}
+              className={view === 'audit' ? 'on' : ''}
+              data-testid="nav-audit"
+              onClick={() => setView('audit')}
+            >
+              <span className="icon" aria-hidden="true">☰</span>
+            <span className="label">سجل المراجعة</span>
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
+        </nav>
 
+        <main>
         {error && <div className="notice error">{error}</div>}
 
         {confirmed && (
@@ -237,7 +316,23 @@ export function App() {
           </div>
         )}
 
-        {view === 'reports' ? (
+        {view === 'monitor' ? (
+          <Monitor session={session} />
+        ) : view === 'followup' ? (
+          <FollowUp
+            session={session}
+            canRecord={isAdmin}
+            canDecide={isCommittee}
+            committeeUserId={session.subject}
+            runDecision={(work) => stepUp.run('followup-decision', work)}
+            onOpenAuction={(id) => {
+              setView('auctions')
+              void open(id)
+            }}
+          />
+        ) : view === 'inquiries' ? (
+          <Inquiries session={session} canAct={canInquire} />
+        ) : view === 'reports' ? (
           <Reports session={session} />
         ) : view === 'audit' ? (
           <AuditTrail session={session} />
@@ -248,7 +343,7 @@ export function App() {
           <div className="card">
             <h2>المزادات</h2>
             <p className="muted small">
-              هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من الأعلى.
+              هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من القائمة الجانبية.
             </p>
           </div>
         ) : selected ? (
@@ -267,6 +362,10 @@ export function App() {
               onAct={act}
             />
 
+            {isAdmin && session && (
+              <Applicants auction={selected} session={session} busy={busy} onAct={act} />
+            )}
+
             {isClerk && selected.channel === 'Onsite' && (
               <ClerkTerminal
                 auction={selected}
@@ -278,6 +377,7 @@ export function App() {
             )}
 
             <AwardPanel
+              session={session}
               auction={selected}
               client={client}
               busy={busy}
@@ -288,6 +388,7 @@ export function App() {
           </>
         ) : (
           <AuctionList
+            session={session}
             auctions={auctions}
             canCreate={isAdmin}
             busy={busy}
@@ -304,6 +405,7 @@ export function App() {
             }
           />
         )}
+        </main>
       </div>
     </>
   )

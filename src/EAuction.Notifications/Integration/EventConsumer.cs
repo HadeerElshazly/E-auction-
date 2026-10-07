@@ -54,7 +54,7 @@ public sealed class EventConsumer(
     ///
     /// Built here rather than held in a field because a field initialiser cannot
     /// reference an instance method — and one list is what makes the first-run
-    /// drain and the ordinary follow provably cover the same six topics, rather
+    /// drain and the ordinary follow provably cover the same topics, rather
     /// than two lists that drift the first time a seventh is added.
     ///
     /// The auction catalogue is first on purpose: a notice that cannot name its
@@ -69,6 +69,7 @@ public sealed class EventConsumer(
         (Core.Topics.Lifecycle, ApplyLifecycleAsync),
         (Core.Topics.CurrentWinner, ApplyCurrentWinnerAsync),
         (Core.Topics.Deposits, ApplyDepositsAsync),
+        (Core.Topics.Inquiries, ApplyInquiriesAsync),
     ];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -292,6 +293,23 @@ public sealed class EventConsumer(
 
     private async Task ApplyEligibilityAsync(StreamEvent record, bool notify, CancellationToken ct)
     {
+        if (record.EventType == InboundEvents.BankGuaranteeRejected)
+        {
+            var rejected = JsonSerializer.Deserialize<GuaranteeRejectedPayload>(record.Payload, Json);
+            if (rejected is null) return;
+
+            await using var gdb = await dbFactory.CreateDbContextAsync(ct);
+            var auction = await NameOf(gdb, rejected.AuctionId, ct);
+            var (gTitle, gBody) = Messages.GuaranteeRejected(auction, rejected.Reason);
+
+            // One notice per refusal: a bidder refused twice was refused twice.
+            await RaiseAsync(
+                rejected.BidderId, rejected.AuctionId, NotificationKind.GuaranteeRejected,
+                gTitle, gBody, DateTimeOffset.UtcNow, notify, ct,
+                dedup: rejected.At.ToUnixTimeMilliseconds().ToString());
+            return;
+        }
+
         if (record.EventType != InboundEvents.ParticipantEligibilityChanged) return;
 
         var payload = JsonSerializer.Deserialize<EligibilityPayload>(record.Payload, Json);
@@ -375,6 +393,36 @@ public sealed class EventConsumer(
                 return;
             }
 
+            // Every way an auction ends unawarded reaches auction-admin's MarkUnsold,
+            // which emits this once — so one notice, whichever path got there.
+            case InboundEvents.AuctionUnsold:
+            {
+                var payload = JsonSerializer.Deserialize<AuctionIdPayload>(record.Payload, Json);
+                if (payload is null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+                var (title, body) = Messages.AuctionUnsold(name);
+
+                await RaiseForAudienceAsync(
+                    db, payload.AuctionId, NotificationKind.AuctionUnsold,
+                    title, body, now, notify, ct);
+                return;
+            }
+
+            case InboundEvents.AuctionCancelled:
+            {
+                var payload = JsonSerializer.Deserialize<AuctionCancelledPayload>(record.Payload, Json);
+                if (payload is null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+                var (title, body) = Messages.AuctionCancelled(name, payload.Reason);
+
+                await RaiseForAudienceAsync(
+                    db, payload.AuctionId, NotificationKind.AuctionCancelled,
+                    title, body, now, notify, ct);
+                return;
+            }
+
             case InboundEvents.AuctionClosed:
             {
                 var payload = JsonSerializer.Deserialize<AuctionIdPayload>(record.Payload, Json);
@@ -423,6 +471,36 @@ public sealed class EventConsumer(
                 await RaiseAsync(
                     payload.BidderId, payload.AuctionId, NotificationKind.Disqualified,
                     title, body, now, notify, ct, dedup: payload.Reason);
+                return;
+            }
+
+            // A snapshot after every step staff record, and republished whole when
+            // auction-admin starts — so deduped on the state it reports, never on
+            // the record: the same paid total is the same notice however often it
+            // arrives, and each new payment moves the total and is news.
+            case InboundEvents.AwardFollowUpUpdated:
+            {
+                var payload = JsonSerializer.Deserialize<AwardFollowUpPayload>(record.Payload, Json);
+                if (payload is null || payload.DisqualifiedAt is not null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+
+                if (payload.PaidMinorUnits > 0)
+                {
+                    var (title, body) = Messages.AwardPaymentRecorded(
+                        name, payload.PaidMinorUnits, payload.RemainingMinorUnits);
+                    await RaiseAsync(
+                        payload.WinnerBidderId, payload.AuctionId, NotificationKind.AwardPaymentRecorded,
+                        title, body, now, notify, ct, dedup: payload.PaidMinorUnits.ToString());
+                }
+
+                if (payload.TransferStatus == "Completed")
+                {
+                    var (title, body) = Messages.TransferCompleted(name);
+                    await RaiseAsync(
+                        payload.WinnerBidderId, payload.AuctionId, NotificationKind.TransferCompleted,
+                        title, body, now, notify, ct);
+                }
                 return;
             }
         }
@@ -507,6 +585,44 @@ public sealed class EventConsumer(
     {
         var name = await db.AuctionNames.FindAsync(new object?[] { auctionId }, ct);
         return string.IsNullOrWhiteSpace(name?.NameAr) ? Messages.UnnamedAuction : name.NameAr;
+    }
+
+    /// <summary>
+    /// «الاستفسارات والإجابات»: the asker is told a reply arrived — not what it says,
+    /// which they read in the portal — and the auction's bidders that a clarification
+    /// was published.
+    /// </summary>
+    private async Task ApplyInquiriesAsync(StreamEvent record, bool notify, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+
+        switch (record.EventType)
+        {
+            case "InquiryAnswered":
+            {
+                var p = JsonSerializer.Deserialize<InquiryAnsweredPayload>(record.Payload, Json);
+                if (p is null) return;
+                var (title, body) = Messages.InquiryAnswered(await NameOf(db, p.AuctionId, ct));
+                await RaiseAsync(p.BidderId, p.AuctionId, NotificationKind.InquiryAnswered,
+                    title, body, now, notify, ct, dedup: p.InquiryId.ToString());
+                return;
+            }
+            case "ClarificationPublished":
+            {
+                var p = JsonSerializer.Deserialize<ClarificationPublishedPayload>(record.Payload, Json);
+                if (p is null || !notify) return;
+                var (title, body) = Messages.ClarificationPublished(await NameOf(db, p.AuctionId, ct));
+                var audience = await db.Audience
+                    .Where(a => a.AuctionId == p.AuctionId && a.Eligible)
+                    .Select(a => a.BidderId)
+                    .ToListAsync(ct);
+                foreach (var bidder in audience)
+                    await RaiseAsync(bidder, p.AuctionId, NotificationKind.ClarificationPublished,
+                        title, body, now, notify, ct, dedup: p.ClarificationId.ToString());
+                return;
+            }
+        }
     }
 
     private async Task RaiseForAudienceAsync(

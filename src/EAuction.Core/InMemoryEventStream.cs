@@ -28,7 +28,7 @@ public sealed class InMemoryEventStream : IEventStream
         List<Channel<StreamEvent>> subscribers;
         lock (t.Gate)
         {
-            record = new StreamEvent(topic, key, payload, eventType, t.Records.Count);
+            record = new StreamEvent(topic, key, payload, eventType, t.Records.Count, DateTimeOffset.UtcNow);
             t.Records.Add(record);
             subscribers = t.Subscribers.ToList();
         }

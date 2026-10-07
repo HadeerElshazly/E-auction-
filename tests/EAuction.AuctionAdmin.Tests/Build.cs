@@ -56,4 +56,12 @@ internal static class Build
         auction.NotifyWinner(now);
         return auction;
     }
+
+    /// <summary>
+    /// Records the winner's full payment against a receipt — settlement refuses an
+    /// award with anything still owed (الخاصية 11).
+    /// </summary>
+    public static void PayInFull(Auction auction, DateTimeOffset now) =>
+        auction.RecordAwardPayment(
+            auction.CurrentAward!.RemainingMinorUnits, now, "RCPT-0001", null, Committee, now);
 }

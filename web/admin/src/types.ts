@@ -1,3 +1,4 @@
+import { stageLabels } from '@eauction/shared'
 /** Mirrors the records in src/EAuction.AuctionAdmin/Program.cs. */
 
 export interface AuctionListItem {
@@ -14,6 +15,12 @@ export interface AuctionListItem {
   depositMinorUnits: number
   plotCount: number
   createdAt: string
+  bookletPriceMinorUnits: number
+  /** A Public document — the same cover the citizen's catalogue shows. */
+  coverImageDocumentId: string | null
+  totalAreaSqm: number
+  /** The awarded bidder (or the candidate before the committee). Staff only. */
+  winnerBidderId: string | null
 }
 
 export interface Award {
@@ -26,6 +33,10 @@ export interface Award {
   letterDocumentId: string | null
   signedLetterDocumentId: string | null
   winnerNotifiedAt: string | null
+  /** Receipted so far, and what is still owed — recorded on متابعة الترسية. */
+  paidMinorUnits: number
+  remainingMinorUnits: number
+  overdue: boolean
 }
 
 export interface Auction {
@@ -48,12 +59,20 @@ export interface Auction {
   maxExtensions: number
   bookletDocumentId: string | null
   coverImageDocumentId: string | null
+  /** Public documents for the catalogue — plans, photographs. Never the booklet. */
+  attachments: { documentId: string; titleAr: string }[]
   plotCount: number
   totalAreaSqm: number
   rejectionReason: string | null
+  cancellationReason: string | null
+  cancelledAt: string | null
+  /** Why the committee refused the preliminary result, when it did. */
+  resultRejectionReason: string | null
   pendingCandidateBidderId: string | null
   pendingCandidateAmountMinorUnits: number | null
   currentAward: Award | null
+  /** The open award, or the settled one whose title transfer is still tracked. */
+  followUpAward: Award | null
 }
 
 export type AuctionStatus =
@@ -69,22 +88,11 @@ export type AuctionStatus =
   | 'WinnerDisqualified'
   | 'Unsold'
   | 'Settled'
+  | 'Cancelled'
 
 /** The Arabic label and the visual weight each status gets. */
-export const statusLabels: Record<string, { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' }> = {
-  Draft: { ar: 'مسودة', tone: 'done' },
-  PendingReview: { ar: 'بانتظار الاعتماد', tone: 'wait' },
-  Rejected: { ar: 'مرفوض', tone: 'bad' },
-  Approved: { ar: 'معتمد', tone: 'live' },
-  Scheduled: { ar: 'مجدول', tone: 'live' },
-  Live: { ar: 'جارٍ الآن', tone: 'live' },
-  PendingEligibilityReview: { ar: 'مراجعة الأهلية', tone: 'wait' },
-  PendingAward: { ar: 'بانتظار الترسية', tone: 'wait' },
-  Awarded: { ar: 'تمت الترسية', tone: 'live' },
-  WinnerDisqualified: { ar: 'سُحب الفوز', tone: 'bad' },
-  Unsold: { ar: 'لم يُبع', tone: 'bad' },
-  Settled: { ar: 'مُسدَّد', tone: 'done' },
-}
+// One vocabulary for both portals: see shared/src/stages.ts.
+export const statusLabels = stageLabels
 
 export function label(status: string): { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' } {
   return statusLabels[status] ?? { ar: status, tone: 'done' }

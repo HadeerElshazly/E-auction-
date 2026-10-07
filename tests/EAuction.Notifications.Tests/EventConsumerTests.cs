@@ -106,6 +106,26 @@ public class EventConsumerTests : IAsyncLifetime, IAsyncDisposable
     }
 
     [Fact]
+    public async Task An_auction_that_ends_unawarded_tells_its_bidders_once_and_cancellation_too()
+    {
+        await ApproveAsync("مخطط السعيد");
+        await StartAsync();
+        await EligibleAsync(_sara, true);
+        await EligibleAsync(_khalid, true);
+        await WaitForAsync(_khalid, NotificationKind.Eligible);
+
+        await LifecycleAsync("AuctionUnsold", new { auctionId = _auction });
+        var unsold = await WaitForAsync(_sara, NotificationKind.AuctionUnsold);
+        Assert.Contains("دون ترسية", unsold.TitleAr);
+        await WaitForAsync(_khalid, NotificationKind.AuctionUnsold);
+
+        // Redelivered: still one notice.
+        await LifecycleAsync("AuctionUnsold", new { auctionId = _auction });
+        await Settle();
+        Assert.Single(await AllFor(_sara, NotificationKind.AuctionUnsold));
+    }
+
+    [Fact]
     public async Task A_revocation_is_its_own_notice_and_eligibility_again_is_news_again()
     {
         await ApproveAsync("مخطط السعيد");
@@ -245,9 +265,41 @@ public class EventConsumerTests : IAsyncLifetime, IAsyncDisposable
         var awarded = await WaitForAsync(_sara, NotificationKind.Awarded);
 
         Assert.Contains("رُسي عليك", awarded.BodyAr);
-        Assert.Contains("2026-10-11", awarded.BodyAr);
+        // Hijri, in Riyadh time: 2026-10-11T00:00Z is 30 Rabi' al-Akhir 1448.
+        Assert.Contains("30 ربيع الآخر 1448 هـ", awarded.BodyAr);
 
         Assert.Empty(await AllFor(_khalid, NotificationKind.Awarded));
+    }
+
+    [Fact]
+    public async Task Each_recorded_payment_tells_the_winner_once_and_a_republished_snapshot_none()
+    {
+        await ApproveAsync("مخطط الملقا");
+        await StartAsync();
+
+        object Snapshot(long paid, string transfer = "NotStarted") => new
+        {
+            auctionId = _auction,
+            winnerBidderId = _sara,
+            paidMinorUnits = paid,
+            remainingMinorUnits = 960_000_00L - paid,
+            transferStatus = transfer,
+        };
+
+        // Confirmation's own snapshot: nothing paid, nothing to say.
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(0));
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(48_000_00));
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(960_000_00));
+        // auction-admin restarting republishes the same state.
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(960_000_00));
+        await LifecycleAsync("AwardFollowUpUpdated", Snapshot(960_000_00, "Completed"));
+
+        await WaitForAsync(_sara, NotificationKind.TransferCompleted);
+        var paid = await AllFor(_sara, NotificationKind.AwardPaymentRecorded);
+
+        Assert.Equal(2, paid.Count);
+        Assert.Contains(paid, n => n.TitleAr == "تم سداد مبلغ الترسية");
+        Assert.Contains(paid, n => n.BodyAr.Contains("المتبقي"));
     }
 
     [Fact]

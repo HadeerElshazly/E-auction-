@@ -46,6 +46,13 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                         .HasPrecision(5, 2)
                         .HasColumnType("numeric(5,2)");
 
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("Channel")
                         .HasColumnType("integer");
 
@@ -112,6 +119,10 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                     b.Property<long>("ReservePriceMinorUnits")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("ResultRejectionReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.Property<DateTimeOffset?>("StartsAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -171,6 +182,22 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
 
                     b.Property<Guid?>("SignedLetterDocumentId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("TransferCompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("TransferDocumentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TransferReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("TransferStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("TransferUpdatedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("WinnerNotifiedAt")
                         .HasColumnType("timestamp with time zone");
@@ -268,6 +295,38 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                     b.ToTable("outbox", (string)null);
                 });
 
+            modelBuilder.Entity("EAuction.AuctionAdmin.Domain.Auction", b =>
+                {
+                    b.OwnsMany("EAuction.AuctionAdmin.Domain.PublicAttachment", "Attachments", b1 =>
+                        {
+                            b1.Property<Guid>("AuctionId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<int>("Id")
+                                .ValueGeneratedOnAdd()
+                                .HasColumnType("integer");
+
+                            b1.Property<Guid>("DocumentId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<string>("TitleAr")
+                                .IsRequired()
+                                .HasMaxLength(200)
+                                .HasColumnType("character varying(200)");
+
+                            b1.HasKey("AuctionId", "Id");
+
+                            b1.ToTable("auction");
+
+                            b1.ToJson("attachments");
+
+                            b1.WithOwner()
+                                .HasForeignKey("AuctionId");
+                        });
+
+                    b.Navigation("Attachments");
+                });
+
             modelBuilder.Entity("EAuction.AuctionAdmin.Domain.Award", b =>
                 {
                     b.HasOne("EAuction.AuctionAdmin.Domain.Auction", null)
@@ -275,6 +334,53 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                         .HasForeignKey("AuctionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.OwnsMany("EAuction.AuctionAdmin.Domain.AwardReceipt", "Receipts", b1 =>
+                        {
+                            b1.Property<Guid>("AwardId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<int>("Id")
+                                .ValueGeneratedOnAdd()
+                                .HasColumnType("integer");
+
+                            b1.Property<long>("AmountMinorUnits")
+                                .HasColumnType("bigint");
+
+                            b1.Property<Guid?>("DocumentId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<string>("Kind")
+                                .IsRequired()
+                                .HasColumnType("text");
+
+                            b1.Property<DateTimeOffset>("PaidOn")
+                                .HasColumnType("timestamp with time zone");
+
+                            b1.Property<Guid>("ReceiptId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<DateTimeOffset>("RecordedAt")
+                                .HasColumnType("timestamp with time zone");
+
+                            b1.Property<Guid>("RecordedByUserId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<string>("Reference")
+                                .IsRequired()
+                                .HasColumnType("text");
+
+                            b1.HasKey("AwardId", "Id");
+
+                            b1.ToTable("award");
+
+                            b1.ToJson("receipts");
+
+                            b1.WithOwner()
+                                .HasForeignKey("AwardId");
+                        });
+
+                    b.Navigation("Receipts");
                 });
 
             modelBuilder.Entity("EAuction.AuctionAdmin.Domain.Plot", b =>

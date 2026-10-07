@@ -34,6 +34,77 @@ public sealed class Award
 
     public bool IsOpen => DisqualifiedAt is null && SettledAt is null;
 
+    // --- follow-up (الخاصية 11) ---------------------------------------------
+
+    private readonly List<AwardReceipt> _receipts = new();
+    public IReadOnlyList<AwardReceipt> Receipts => _receipts;
+
+    public long PaidMinorUnits => _receipts.Sum(r => r.AmountMinorUnits);
+    public long RemainingMinorUnits => Math.Max(0, AmountMinorUnits - PaidMinorUnits);
+
+    public TransferStatus TransferStatus { get; private set; } = TransferStatus.NotStarted;
+
+    /// <summary>The new deed number or the notary's reference. Required to close the transfer.</summary>
+    public string? TransferReference { get; private set; }
+    public Guid? TransferDocumentId { get; private set; }
+    public DateTimeOffset? TransferUpdatedAt { get; private set; }
+    public DateTimeOffset? TransferCompletedAt { get; private set; }
+
+    /// <summary>
+    /// متعثر — past the payment deadline with money still owed. Flagged for a person
+    /// to review rather than acted on: the first phase does not re-award by itself.
+    /// </summary>
+    public bool IsOverdue(DateTimeOffset now) =>
+        IsOpen && RemainingMinorUnits > 0 && now > ComplianceDeadline;
+
+    internal void RecordReceipt(
+        AwardReceiptKind kind, long amountMinorUnits, DateTimeOffset paidOn, string reference,
+        Guid? documentId, Guid recordedByUserId, DateTimeOffset now)
+    {
+        if (!IsOpen)
+            throw new InvalidOperationException("This award is already closed.");
+
+        var problems = new List<string>();
+        if (amountMinorUnits <= 0) problems.Add("المبلغ يجب أن يكون أكبر من صفر.");
+        else if (amountMinorUnits > RemainingMinorUnits)
+            problems.Add("المبلغ أكبر من المتبقي من مبلغ الترسية.");
+        if (string.IsNullOrWhiteSpace(reference)) problems.Add("رقم الإيصال أو المرجع مطلوب.");
+        else if (reference.Trim().Length > 100) problems.Add("المرجع طويل جداً.");
+        if (paidOn > now.AddDays(1)) problems.Add("تاريخ السداد في المستقبل.");
+        if (kind == AwardReceiptKind.DepositCredit && _receipts.Any(r => r.Kind == kind))
+            problems.Add("احتُسب التأمين من قبل.");
+        if (problems.Count > 0) throw new AuctionValidationException(problems);
+
+        _receipts.Add(new AwardReceipt(
+            kind, amountMinorUnits, paidOn, reference.Trim(), documentId, recordedByUserId, now));
+    }
+
+    internal void UpdateTransfer(
+        TransferStatus status, string? reference, Guid? documentId, DateTimeOffset now)
+    {
+        if (DisqualifiedAt is not null)
+            throw new InvalidOperationException("This award was withdrawn.");
+        if (TransferStatus == TransferStatus.Completed)
+            throw new InvalidOperationException("The transfer is already complete.");
+
+        if (status == TransferStatus.Completed)
+        {
+            var problems = new List<string>();
+            // «يتطلب إغلاق … الإفراغ مرجعاً أو إثباتاً»
+            if (string.IsNullOrWhiteSpace(reference) && documentId is null)
+                problems.Add("إغلاق الإفراغ يتطلب رقم الصك الجديد أو إرفاق إثبات.");
+            if (RemainingMinorUnits > 0)
+                problems.Add("لا يكتمل الإفراغ قبل سداد كامل مبلغ الترسية.");
+            if (problems.Count > 0) throw new AuctionValidationException(problems);
+            TransferCompletedAt = now;
+        }
+
+        TransferStatus = status;
+        if (!string.IsNullOrWhiteSpace(reference)) TransferReference = reference.Trim();
+        if (documentId is not null) TransferDocumentId = documentId;
+        TransferUpdatedAt = now;
+    }
+
     private Award() { }
 
     internal Award(Guid auctionId, Guid bidderId, long amountMinorUnits,
@@ -86,6 +157,14 @@ public sealed class Award
         if (WinnerNotifiedAt is null)
             throw new InvalidOperationException(
                 "Cannot settle before the winner has been notified.");
+        // Settling releases every other bidder's deposit, so it must not happen on a
+        // price that has not been paid: the receipts are what say it has.
+        if (RemainingMinorUnits > 0)
+            throw new AuctionValidationException(new[]
+            {
+                "لا يمكن التسوية قبل تسجيل سداد كامل مبلغ الترسية. المتبقي "
+                + $"{RemainingMinorUnits / 100m:N2} ر.س."
+            });
         SettledAt = at;
     }
 }

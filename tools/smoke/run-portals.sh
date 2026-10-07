@@ -119,6 +119,11 @@ if [ "$KEEP_UP" = 1 ]; then
   echo "  admin   :3001  admin-user (prepare)  committee-user (approve + award)"
   echo "                 clerk-user (قاعة المزاد)  reporting-user (التقارير)"
   echo "                 auditor-user (سجل المراجعة — and nothing else, by design)"
+  echo
+  echo "  sandbox :5111  صندوق التجارب — open this one FIRST and keep it open."
+  echo "                 Registering and paying a deposit are behind a second factor,"
+  echo "                 and this is the only place the code can be read. It also has"
+  echo "                 the payment gateway's switch, for the non-payment path."
   say "Ctrl-C to stop."
   wait
   exit 0

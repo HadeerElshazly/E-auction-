@@ -49,6 +49,14 @@ public sealed class AuctionSupervisor(
 
     private readonly ConcurrentDictionary<Guid, RunningAuction> _running = new();
     private readonly ConcurrentDictionary<Guid, RecoveredState> _recovered = new();
+
+    /// <summary>
+    /// Auctions an administrator withdrew before they opened. Kept apart from
+    /// <see cref="_running"/> because the cancellation and the definition arrive on
+    /// different topics in either order, and a cancelled auction must not be started
+    /// by whichever of the two lands second.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, byte> _cancelled = new();
     private volatile bool _resumed;
 
     public bool Resumed => _resumed;
@@ -63,6 +71,9 @@ public sealed class AuctionSupervisor(
     /// </summary>
     public RunningAuction Start(AuctionDefinition definition, CancellationToken ct)
     {
+        // Never registered, so never announced, launched or closed.
+        if (_cancelled.ContainsKey(definition.AuctionId)) return new RunningAuction(definition);
+
         var running = _running.GetOrAdd(definition.AuctionId, _ =>
         {
             var created = new RunningAuction(definition);
@@ -108,6 +119,9 @@ public sealed class AuctionSupervisor(
     {
         if (_resumed) return;
         _resumed = true;
+
+        // Cancellations replayed after their definitions registered the auction.
+        foreach (var id in _cancelled.Keys) Withdraw(id);
 
         foreach (var running in _running.Values)
         {
@@ -399,6 +413,11 @@ public sealed class AuctionSupervisor(
                 return payload is null ? Task.CompletedTask : OnClerkClosedAsync(payload, ct);
             }
 
+            case InboundEvents.AuctionCancelled:
+                _cancelled[auctionId] = 0;
+                Withdraw(auctionId);
+                return Task.CompletedTask;
+
             default:
                 return Task.CompletedTask;
         }
@@ -455,8 +474,34 @@ public sealed class AuctionSupervisor(
         await CloseAsync(running, DateTimeOffset.UtcNow, ct);
     }
 
+    /// <summary>
+    /// Drops a cancelled auction before it opens. Admin refuses to cancel inside the
+    /// last minutes before the start, so an announced auction here means the two
+    /// raced; it is left running and said loudly, because bids may already be on it.
+    /// </summary>
+    private void Withdraw(Guid auctionId)
+    {
+        if (!_running.TryGetValue(auctionId, out var running)) return;
+
+        if (running.Announced)
+        {
+            logger.LogError(
+                "Auction {AuctionId} was cancelled after it opened; it keeps running.", auctionId);
+            return;
+        }
+
+        _running.TryRemove(auctionId, out _);
+        logger.LogInformation("Auction {AuctionId} cancelled before it opened.", auctionId);
+    }
+
     private void RecordDuringRecovery(Guid auctionId, StreamEvent record)
     {
+        if (record.EventType == InboundEvents.AuctionCancelled)
+        {
+            _cancelled[auctionId] = 0;
+            return;
+        }
+
         var state = _recovered.GetOrAdd(auctionId, _ => new RecoveredState());
 
         switch (record.EventType)

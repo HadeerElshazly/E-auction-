@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, riyals, type Session } from '@eauction/shared'
+import { ApiError, api, config, day, riyals, stageLabel, type Session } from '@eauction/shared'
 
 /**
  * التقارير, as a stakeholder reads them.
@@ -343,257 +343,259 @@ function Table({ tab, rows }: { tab: Tab; rows: unknown[] }) {
   switch (tab) {
     case 'revenue':
       return (
-        <table data-testid="report-table">
-          <thead>
-            <tr>
-              <th>المجموعة</th>
-              <th>مزادات مُرسّاة</th>
-              <th>غير مبيعة</th>
-              <th>قيمة الأراضي</th>
-              <th>السعي</th>
-              <th>الكراسات</th>
-              <th>تأمينات محتجزة</th>
-              <th>مصادرة</th>
-              <th>مُعادة</th>
-              <th>إجمالي المتحصّل</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows as RevenueRow[]).map((r) => (
-              <tr key={r.group}>
-                <td>{r.group}</td>
-                <td className="num">{r.auctionsSettled}</td>
-                <td className="num">{r.auctionsUnsold}</td>
-                <td className="num">{riyals(r.saleValueMinorUnits)}</td>
-                <td className="num">{riyals(r.brokerageChargedMinorUnits)}</td>
-                <td className="num">{riyals(r.bookletFeesChargedMinorUnits)}</td>
-                <td className="num">{riyals(r.depositsHeldMinorUnits)}</td>
-                <td className="num">{riyals(r.depositsForfeitedMinorUnits)}</td>
-                <td className="num">{riyals(r.depositsRefundedMinorUnits)}</td>
-                <td className="num">
-                  <strong>{riyals(r.collectedMinorUnits)}</strong>
-                </td>
+        <div className="table-scroll">
+          <table data-testid="report-table">
+            <thead>
+              <tr>
+                <th>المجموعة</th>
+                <th>مزادات مُرسّاة</th>
+                <th>غير مبيعة</th>
+                <th>قيمة الأراضي</th>
+                <th>السعي</th>
+                <th>الكراسات</th>
+                <th>تأمينات محتجزة</th>
+                <th>مصادرة</th>
+                <th>مُعادة</th>
+                <th>إجمالي المتحصّل</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(rows as RevenueRow[]).map((r) => (
+                <tr key={r.group}>
+                  <td>{r.group}</td>
+                  <td className="num">{r.auctionsSettled}</td>
+                  <td className="num">{r.auctionsUnsold}</td>
+                  <td className="num">{riyals(r.saleValueMinorUnits)}</td>
+                  <td className="num">{riyals(r.brokerageChargedMinorUnits)}</td>
+                  <td className="num">{riyals(r.bookletFeesChargedMinorUnits)}</td>
+                  <td className="num">{riyals(r.depositsHeldMinorUnits)}</td>
+                  <td className="num">{riyals(r.depositsForfeitedMinorUnits)}</td>
+                  <td className="num">{riyals(r.depositsRefundedMinorUnits)}</td>
+                  <td className="num">
+                    <strong>{riyals(r.collectedMinorUnits)}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )
 
     case 'auctions':
       return (
-        <table data-testid="report-table">
-          <thead>
-            <tr>
-              <th>المزاد</th>
-              <th>المخطط</th>
-              <th>القناة</th>
-              <th>الحالة</th>
-              <th>القطع</th>
-              <th>المساحة م²</th>
-              <th>العروض</th>
-              <th>المزايدون</th>
-              <th>السعر النهائي</th>
-              <th>ر.س/م²</th>
-              <th>السعي</th>
-              <th>الفائز</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows as AuctionRow[]).map((r) => (
-              <tr key={r.auctionId}>
-                <td>{r.nameAr}</td>
-                <td className="small muted">{r.phase ?? '—'}</td>
-                <td>{r.channel === 'Onsite' ? 'في الموقع' : 'إلكتروني'}</td>
-                <td>
-                  <Outcome outcome={r.outcome} />
-                  {r.cascadeStep > 1 && (
-                    <span className="small muted"> (ترسية {r.cascadeStep})</span>
-                  )}
-                </td>
-                <td className="num">{r.plotCount}</td>
-                <td className="num">{r.totalAreaSqm}</td>
-                <td className="num">{r.bidCount}</td>
-                <td className="num">{r.eligibleBidders}</td>
-                <td className="num">
-                  {r.finalPriceMinorUnits === null ? '—' : riyals(r.finalPriceMinorUnits)}
-                </td>
-                <td className="num">
-                  {r.pricePerSqmMinorUnits ? riyals(r.pricePerSqmMinorUnits) : '—'}
-                </td>
-                <td className="num">
-                  {r.brokerageDueMinorUnits === null ? '—' : riyals(r.brokerageDueMinorUnits)}
-                </td>
-                {/* Null on a masked auction, because the topic never carried a name
-                    (D-22). Shown as مزايد مجهول rather than blank so nobody reads it
-                    as missing data. */}
-                <td className="small">{r.winnerNameAr ?? (r.finalPriceMinorUnits ? 'مزايد مُقنَّع' : '—')}</td>
+        <div className="table-scroll">
+          <table data-testid="report-table">
+            <thead>
+              <tr>
+                <th>المزاد</th>
+                <th>المخطط</th>
+                <th>القناة</th>
+                <th>الحالة</th>
+                <th>القطع</th>
+                <th>المساحة م²</th>
+                <th>العروض</th>
+                <th>المزايدون</th>
+                <th>السعر النهائي</th>
+                <th>ر.س/م²</th>
+                <th>السعي</th>
+                <th>الفائز</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(rows as AuctionRow[]).map((r) => (
+                <tr key={r.auctionId}>
+                  <td>{r.nameAr}</td>
+                  <td className="small muted">{r.phase ?? '—'}</td>
+                  <td>{r.channel === 'Onsite' ? 'في الموقع' : 'إلكتروني'}</td>
+                  <td>
+                    <Outcome outcome={r.outcome} />
+                    {r.cascadeStep > 1 && (
+                      <span className="small muted"> (ترسية {r.cascadeStep})</span>
+                    )}
+                  </td>
+                  <td className="num">{r.plotCount}</td>
+                  <td className="num">{r.totalAreaSqm}</td>
+                  <td className="num">{r.bidCount}</td>
+                  <td className="num">{r.eligibleBidders}</td>
+                  <td className="num">
+                    {r.finalPriceMinorUnits === null ? '—' : riyals(r.finalPriceMinorUnits)}
+                  </td>
+                  <td className="num">
+                    {r.pricePerSqmMinorUnits ? riyals(r.pricePerSqmMinorUnits) : '—'}
+                  </td>
+                  <td className="num">
+                    {r.brokerageDueMinorUnits === null ? '—' : riyals(r.brokerageDueMinorUnits)}
+                  </td>
+                  {/* Null on a masked auction, because the topic never carried a name
+                      (D-22). Shown as مزايد مجهول rather than blank so nobody reads it
+                      as missing data. */}
+                  <td className="small">{r.winnerNameAr ?? (r.finalPriceMinorUnits ? 'مزايد مُقنَّع' : '—')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )
 
     case 'participation':
       return (
-        <table data-testid="report-table">
-          <thead>
-            <tr>
-              <th>المزاد</th>
-              <th>المخطط</th>
-              <th>كراسة مدفوعة</th>
-              <th>تأمين مدفوع</th>
-              <th>دفع مرفوض</th>
-              <th>مؤهّل</th>
-              <th>أُلغي تأهيله</th>
-              <th>عروض</th>
-              <th>إلغاء ترسية</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows as ParticipationRow[]).map((r) => (
-              <tr key={r.auctionId}>
-                <td>{r.nameAr}</td>
-                <td className="small muted">{r.phase ?? '—'}</td>
-                <td className="num">{r.bookletPaid}</td>
-                <td className="num">{r.depositPaid}</td>
-                <td className="num">{r.paymentRefused}</td>
-                <td className="num">{r.eligible}</td>
-                <td className="num">{r.eligibilityEnded}</td>
-                <td className="num">{r.bidCount}</td>
-                <td className="num">{r.disqualified}</td>
+        <div className="table-scroll">
+          <table data-testid="report-table">
+            <thead>
+              <tr>
+                <th>المزاد</th>
+                <th>المخطط</th>
+                <th>كراسة مدفوعة</th>
+                <th>تأمين مدفوع</th>
+                <th>دفع مرفوض</th>
+                <th>مؤهّل</th>
+                <th>أُلغي تأهيله</th>
+                <th>عروض</th>
+                <th>إلغاء ترسية</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(rows as ParticipationRow[]).map((r) => (
+                <tr key={r.auctionId}>
+                  <td>{r.nameAr}</td>
+                  <td className="small muted">{r.phase ?? '—'}</td>
+                  <td className="num">{r.bookletPaid}</td>
+                  <td className="num">{r.depositPaid}</td>
+                  <td className="num">{r.paymentRefused}</td>
+                  <td className="num">{r.eligible}</td>
+                  <td className="num">{r.eligibilityEnded}</td>
+                  <td className="num">{r.bidCount}</td>
+                  <td className="num">{r.disqualified}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )
 
     case 'plots':
       return (
-        <table data-testid="report-table">
-          <thead>
-            <tr>
-              <th>الصك</th>
-              <th>المساحة م²</th>
-              <th>المخطط</th>
-              <th>المزاد</th>
-              <th>الحالة</th>
-              <th>سعر الحزمة</th>
-              <th>ر.س/م²</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows as PlotRow[]).map((r) => (
-              <tr key={r.plotId}>
-                <td className="ltr mono">{r.deedNumber}</td>
-                <td className="num">{r.areaSqm}</td>
-                <td className="small muted">{r.phase ?? '—'}</td>
-                <td className="small">{r.auctionNameAr}</td>
-                <td>
-                  {r.sold ? <span className="pill done">مبيعة</span> : <Outcome outcome={r.outcome} />}
-                </td>
-                <td className="num">
-                  {r.packagePriceMinorUnits === null ? '—' : riyals(r.packagePriceMinorUnits)}
-                </td>
-                <td className="num">
-                  {r.pricePerSqmMinorUnits ? riyals(r.pricePerSqmMinorUnits) : '—'}
-                </td>
+        <div className="table-scroll">
+          <table data-testid="report-table">
+            <thead>
+              <tr>
+                <th>الصك</th>
+                <th>المساحة م²</th>
+                <th>المخطط</th>
+                <th>المزاد</th>
+                <th>الحالة</th>
+                <th>سعر الحزمة</th>
+                <th>ر.س/م²</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(rows as PlotRow[]).map((r) => (
+                <tr key={r.plotId}>
+                  <td className="ltr mono">{r.deedNumber}</td>
+                  <td className="num">{r.areaSqm}</td>
+                  <td className="small muted">{r.phase ?? '—'}</td>
+                  <td className="small">{r.auctionNameAr}</td>
+                  <td>
+                    {r.sold ? <span className="pill done">مبيعة</span> : <Outcome outcome={r.outcome} />}
+                  </td>
+                  <td className="num">
+                    {r.packagePriceMinorUnits === null ? '—' : riyals(r.packagePriceMinorUnits)}
+                  </td>
+                  <td className="num">
+                    {r.pricePerSqmMinorUnits ? riyals(r.pricePerSqmMinorUnits) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )
 
     case 'deposits':
       return (
-        <table data-testid="report-table">
-          <thead>
-            <tr>
-              <th>المزاد</th>
-              <th>المخطط</th>
-              <th>الحالة</th>
-              <th>عدد المزايدين</th>
-              <th>المحتجز</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows as DepositRow[]).map((r) => (
-              <tr key={r.auctionId}>
-                <td>{r.nameAr}</td>
-                <td className="small muted">{r.phase ?? '—'}</td>
-                <td><Outcome outcome={r.outcome} /></td>
-                <td className="num">{r.biddersHolding}</td>
-                <td className="num">
-                  <strong>{riyals(r.heldMinorUnits)}</strong>
-                </td>
+        <div className="table-scroll">
+          <table data-testid="report-table">
+            <thead>
+              <tr>
+                <th>المزاد</th>
+                <th>المخطط</th>
+                <th>الحالة</th>
+                <th>عدد المزايدين</th>
+                <th>المحتجز</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(rows as DepositRow[]).map((r) => (
+                <tr key={r.auctionId}>
+                  <td>{r.nameAr}</td>
+                  <td className="small muted">{r.phase ?? '—'}</td>
+                  <td><Outcome outcome={r.outcome} /></td>
+                  <td className="num">{r.biddersHolding}</td>
+                  <td className="num">
+                    <strong>{riyals(r.heldMinorUnits)}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )
 
     case 'disqualifications':
       return (
-        <table data-testid="report-table">
-          <thead>
-            <tr>
-              <th>المزاد</th>
-              <th>المزايد</th>
-              <th>التاريخ</th>
-              <th>السبب</th>
-              <th>التأمين</th>
-              <th>نتيجة المزاد</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows as DisqualificationRow[]).map((r, i) => (
-              <tr key={`${r.auctionId}:${i}`}>
-                <td>{r.nameAr}</td>
-                <td className="small">{r.bidderNameAr ?? 'مزايد مُقنَّع'}</td>
-                <td className="small muted">{date(r.disqualifiedAt)}</td>
-                <td className="small">{r.reason ?? '—'}</td>
-                <td>
-                  {r.depositForfeited ? (
-                    <span className="pill bad">مصادر</span>
-                  ) : (
-                    <span className="pill done">مُعاد</span>
-                  )}
-                </td>
-                <td>
-                  <Outcome outcome={r.outcome} />
-                  {r.finalPriceMinorUnits !== null && (
-                    <span className="small muted"> {riyals(r.finalPriceMinorUnits)}</span>
-                  )}
-                </td>
+        <div className="table-scroll">
+          <table data-testid="report-table">
+            <thead>
+              <tr>
+                <th>المزاد</th>
+                <th>المزايد</th>
+                <th>التاريخ</th>
+                <th>السبب</th>
+                <th>التأمين</th>
+                <th>نتيجة المزاد</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(rows as DisqualificationRow[]).map((r, i) => (
+                <tr key={`${r.auctionId}:${i}`}>
+                  <td>{r.nameAr}</td>
+                  <td className="small">{r.bidderNameAr ?? 'مزايد مُقنَّع'}</td>
+                  <td className="small muted">{date(r.disqualifiedAt)}</td>
+                  <td className="small">{r.reason ?? '—'}</td>
+                  <td>
+                    {r.depositForfeited ? (
+                      <span className="pill bad">مصادر</span>
+                    ) : (
+                      <span className="pill done">مُعاد</span>
+                    )}
+                  </td>
+                  <td>
+                    <Outcome outcome={r.outcome} />
+                    {r.finalPriceMinorUnits !== null && (
+                      <span className="small muted"> {riyals(r.finalPriceMinorUnits)}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )
   }
 }
 
 /** The outcome as a label somebody can read, in the colour it deserves. */
 function Outcome({ outcome }: { outcome: string }) {
-  const labels: Record<string, [string, string]> = {
-    Scheduled: ['مجدول', 'wait'],
-    Live: ['مفتوح', 'live'],
-    Closed: ['مغلق', 'wait'],
-    PendingAward: ['بانتظار الترسية', 'wait'],
-    Awarded: ['مُرسّى', 'live'],
-    Settled: ['تم البيع', 'done'],
-    Unsold: ['غير مبيع', 'bad'],
-    Rejected: ['مرفوض', 'bad'],
-  }
-  const [label, tone] = labels[outcome] ?? [outcome, 'done']
-  return <span className={`pill ${tone}`}>{label}</span>
+  // The same words as every other screen (shared/src/stages.ts): a report that
+  // called an auction «مُرسّى» while its own page said «تمت الترسية» is two truths.
+  const { ar, tone } = stageLabel(outcome)
+  return <span className={`pill ${tone}`}>{ar}</span>
 }
 
 function date(value: string | null): string {
-  if (!value) return '—'
-  // en-GB rather than ar-SA: the reports pair a Gregorian date with Arabic labels
-  // throughout, and a Hijri column beside a Gregorian CSV is how two dates for one
-  // event end up in a meeting.
-  return new Date(value).toLocaleDateString('en-GB')
+  // Hijri on screen, like every other date in the portals. The CSV export keeps
+  // ISO-8601 Gregorian: it is read by spreadsheets and other systems, not people.
+  return day(value)
 }
 
 function describe(e: unknown): string {
