@@ -576,6 +576,48 @@ tbody tr:hover { background: var(--surface-sunken); }
   .quick-raise { grid-template-columns: 1fr; }
 }
 
+/* --- مزاداتي الجارية ---------------------------------------------------------
+ *
+ * One card per running auction. The edge says where the bidder stands at a glance
+ * — green leading, amber behind — so a row of cards can be scanned for the one
+ * that needs a raise without reading any of them. */
+
+.live-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+.live-card {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-inline-start: 5px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.live-card.lead { border-inline-start-color: var(--ok); }
+.live-card.behind { border-inline-start-color: var(--warn); }
+.live-card.closing { background: var(--danger-weak); }
+
+.live-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.live-card-name { flex: 1; margin: 0; font-weight: 700; font-size: 16px; }
+.live-card-clock { font-size: 22px; font-weight: 700; color: var(--text); }
+.live-card-clock.urgent { color: var(--danger); }
+
+.live-card-price { display: grid; gap: 2px; min-height: 54px; align-content: center; }
+.live-card-figure { font-size: 28px; font-weight: 700; color: var(--accent-dark); line-height: 1.2; }
+
+.live-card-standing { font-weight: 600; color: var(--warn); }
+.live-card-standing.lead { color: var(--ok); }
+
+.live-card-raises { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.live-card-raises .quick-raise-btn { padding: 10px 6px; }
+.live-card-raises .quick-raise-amount { font-size: 14px; }
+.live-card-more { justify-self: start; padding-inline: 0; color: var(--muted); }
+
 /* Search and status filter above the catalogue. */
 .catalogue-tools {
   display: flex;

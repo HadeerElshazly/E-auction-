@@ -13,7 +13,8 @@ import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
 import { Notifications } from './Notifications'
-import { ApplicationsIcon, ProfileIcon, SignOutIcon } from './Icons'
+import { ApplicationsIcon, GavelIcon, ProfileIcon, SignOutIcon } from './Icons'
+import { LiveBids } from './LiveBids'
 import { Profile } from './Profile'
 import { MyApplications } from './MyApplications'
 import { BiddingRoom } from './BiddingRoom'
@@ -30,6 +31,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null)
   const [showProfile, setShowProfile] = useState(false)
   const [showApplications, setShowApplications] = useState(false)
+  const [showLive, setShowLive] = useState(false)
   /** The auction whose bidding screen is open, if any. */
   const [inRoom, setInRoom] = useState(false)
 
@@ -57,6 +59,7 @@ export function App() {
         setOpenAuction(await publicClient.get<AuctionDetail>(`/auctions/${id}`))
         setShowProfile(false)
         setShowApplications(false)
+        setShowLive(false)
         setInRoom(false)
         setError(null)
       } catch (e) {
@@ -121,6 +124,22 @@ export function App() {
             {isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
             {isBidder && (
               <button
+                className={`icon-btn${showLive ? ' on' : ''}`}
+                aria-label="مزاداتي الجارية"
+                title="مزاداتي الجارية"
+                aria-pressed={showLive}
+                onClick={() => {
+                  setOpenAuction(null)
+                  setShowProfile(false)
+                  setShowApplications(false)
+                  setShowLive(true)
+                }}
+              >
+                <GavelIcon />
+              </button>
+            )}
+            {isBidder && (
+              <button
                 className={`icon-btn${showApplications ? ' on' : ''}`}
                 aria-label="طلباتي"
                 title="طلباتي"
@@ -128,6 +147,7 @@ export function App() {
                 onClick={() => {
                   setOpenAuction(null)
                   setShowProfile(false)
+                  setShowLive(false)
                   setShowApplications(true)
                 }}
               >
@@ -143,6 +163,7 @@ export function App() {
                 onClick={() => {
                   setOpenAuction(null)
                   setShowApplications(false)
+                  setShowLive(false)
                   setShowProfile(true)
                 }}
               >
@@ -181,7 +202,14 @@ export function App() {
           </div>
         )}
 
-        {showApplications && session ? (
+        {showLive && session ? (
+          <LiveBids
+            session={session}
+            auctions={auctions}
+            onOpenRoom={(id) => void open(id).then(() => setInRoom(true))}
+            onBack={() => setShowLive(false)}
+          />
+        ) : showApplications && session ? (
           <MyApplications
             session={session}
             auctions={auctions}

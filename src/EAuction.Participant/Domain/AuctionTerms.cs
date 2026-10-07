@@ -37,6 +37,24 @@ public sealed class AuctionTerms
 
     public DateTimeOffset UpdatedAt { get; private set; } = DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// When auction-admin withdrew the auction, from the lifecycle topic. Without it
+    /// this service went on taking enrolments and deposits for an auction that would
+    /// never open — and a deposit paid after the cancellation released the others was
+    /// held for good, because nothing would ever release it.
+    /// </summary>
+    public DateTimeOffset? CancelledAt { get; private set; }
+
+    public void Cancel(DateTimeOffset at) => CancelledAt ??= at;
+
+    /// <summary>Refuses any enrolment or money step on a cancelled auction.</summary>
+    public void RequireOpen()
+    {
+        if (CancelledAt is not null)
+            throw new ParticipantValidationException(
+                new[] { "أُلغي هذا المزاد ولا تُقبل فيه اشتراكات أو مدفوعات." });
+    }
+
     private AuctionTerms() { }
 
     public AuctionTerms(

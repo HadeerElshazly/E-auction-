@@ -45,6 +45,13 @@ public enum NotificationKind
 
     /// <summary>أُلغي المزاد — withdrawn before it opened; deposits go back.</summary>
     AuctionCancelled = 10,
+
+    /// <summary>
+    /// لم يُرسَ المزاد — it ended without an award: nobody met the reserve, the
+    /// committee refused the result, or ended it after a disqualification. Without it
+    /// a bidder's last word was «ستُعلن النتيجة» and no result ever came.
+    /// </summary>
+    AuctionUnsold = 11,
 }
 
 /// <summary>

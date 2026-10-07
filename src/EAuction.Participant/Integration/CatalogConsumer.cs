@@ -28,7 +28,39 @@ public sealed class CatalogConsumer(
     {
         await Task.WhenAll(
             ConsumeAsync(Topics.Upcoming, ApplyAuctionAsync, stoppingToken),
-            ConsumeAsync(Topics.Deposits, ApplyDepositsAsync, stoppingToken));
+            ConsumeAsync(Topics.Deposits, ApplyDepositsAsync, stoppingToken),
+            ConsumeAsync(Topics.Lifecycle, ApplyLifecycleAsync, stoppingToken));
+    }
+
+    /// <summary>
+    /// Cancellations that arrived before the auction's terms. The two topics are read
+    /// concurrently, so on a replay the cancellation can come first; it is applied
+    /// the moment the terms are written instead of being lost.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, DateTimeOffset> _cancelledEarly = new();
+
+    /// <summary>
+    /// Only a cancellation: it is the one lifecycle fact that changes what this
+    /// service may accept. The rest — open, closed, awarded — reaches it as
+    /// deposit releases, or does not concern enrolment.
+    /// </summary>
+    private async Task ApplyLifecycleAsync(StreamEvent record, CancellationToken ct)
+    {
+        if (record.EventType != "AuctionCancelled") return;
+        if (!Guid.TryParse(record.Key, out var auctionId)) return;
+
+        var at = DateTimeOffset.UtcNow;
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+        if (terms is null)
+        {
+            _cancelledEarly[auctionId] = at;
+            return;
+        }
+
+        terms.Cancel(at);
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Auction {AuctionId} cancelled: no further enrolment or deposits.", auctionId);
     }
 
     private async Task ApplyAuctionAsync(StreamEvent record, CancellationToken ct)
@@ -56,6 +88,9 @@ public sealed class CatalogConsumer(
                 DateTimeOffset.UtcNow, Visibility(payload.BidderVisibility),
                 payload.BookletDocumentId);
         }
+
+        if (_cancelledEarly.TryRemove(payload.AuctionId, out var cancelledAt))
+            (existing ?? db.AuctionTerms.Local.First(t => t.AuctionId == payload.AuctionId)).Cancel(cancelledAt);
 
         await db.SaveChangesAsync(ct);
     }

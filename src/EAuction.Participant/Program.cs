@@ -222,8 +222,11 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions", async (
 
     await using var db = await f.CreateDbContextAsync(ct);
 
-    if (await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct) is null)
+    var terms = await db.AuctionTerms.FindAsync(new object?[] { auctionId }, ct);
+    if (terms is null)
         return Results.NotFound(new { error = "Unknown auction." });
+    if (terms.CancelledAt is not null)
+        return Results.BadRequest(new { problems = new[] { "أُلغي هذا المزاد ولا تُقبل فيه اشتراكات." } });
 
     var existing = await db.Subscriptions
         .FirstOrDefaultAsync(s => s.AuctionId == auctionId && s.BidderId == r.BidderId, ct);

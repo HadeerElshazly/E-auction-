@@ -33,6 +33,10 @@ public sealed class CatalogueState
             ExtensionsUsed = existing.ExtensionsUsed
         });
 
+        // A price that replayed before its definition.
+        if (_pendingPrices.TryRemove(entry.AuctionId, out var p))
+            SetPrice(entry.AuctionId, p.Price, p.Leader, p.LeaderClientBidId, p.EffectiveEndsAt, p.Extensions);
+
         // Lifecycle that replayed before its definition, applied now and in order.
         if (_deferred.TryRemove(entry.AuctionId, out var events))
             lock (events)
@@ -50,6 +54,12 @@ public sealed class CatalogueState
     /// auction as upcoming until the next event happened to come along.
     /// </summary>
     private readonly ConcurrentDictionary<Guid, List<string>> _deferred = new();
+
+    /// <summary>The latest price for each auction whose definition has not replayed yet.</summary>
+    private readonly ConcurrentDictionary<Guid, PendingPrice> _pendingPrices = new();
+
+    private sealed record PendingPrice(
+        long Price, Guid? Leader, Guid? LeaderClientBidId, DateTimeOffset EffectiveEndsAt, int Extensions);
 
     /// <summary>
     /// Moves an auction's stage by one lifecycle event, through the one rule both
@@ -98,7 +108,17 @@ public sealed class CatalogueState
         Guid auctionId, long price, Guid? leader, Guid? leaderClientBidId,
         DateTimeOffset effectiveEndsAt, int extensions)
     {
-        if (!_auctions.TryGetValue(auctionId, out var entry)) return null;
+        if (!_auctions.TryGetValue(auctionId, out var entry))
+        {
+            // Held, not dropped, and not shown: the auction stays out of the
+            // catalogue until its definition arrives (no shell entries), but its
+            // price is applied then. Dropping it lost every running auction's price
+            // on each restart — the topics replay concurrently, prices often first —
+            // and the catalogue said «لا مزايدات بعد» over an auction at 640,000
+            // until somebody happened to bid again.
+            _pendingPrices[auctionId] = new PendingPrice(price, leader, leaderClientBidId, effectiveEndsAt, extensions);
+            return null;
+        }
 
         var updated = entry with
         {

@@ -132,6 +132,7 @@ public sealed class Subscription
     public void RequestBooklet(AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.Draft, "request a booklet for");
+        terms.RequireOpen();
 
         BookletRequestedAt = now;
         ClearPaymentFailure();
@@ -203,6 +204,7 @@ public sealed class Subscription
     public void ChooseDeposit(DepositMethod method, AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.TermsAccepted, "choose a deposit method for");
+        terms.RequireOpen();
         if (now >= terms.EndsAt)
             throw new ParticipantValidationException(
                 new[] { "This auction has already ended." });
@@ -220,6 +222,7 @@ public sealed class Subscription
     public void AuthoriseDeposit(AuctionTerms terms, DateTimeOffset now)
     {
         Require(SubscriptionStatus.AwaitingDeposit, "authorise a deposit for");
+        terms.RequireOpen();
         if (DepositMethod != Domain.DepositMethod.Payment)
             throw new ParticipantValidationException(
                 new[] { "This subscription is settling by bank guarantee, not payment." });
@@ -295,6 +298,7 @@ public sealed class Subscription
         Guid documentId, DateTimeOffset expiresAt, AuctionTerms terms)
     {
         Require(SubscriptionStatus.AwaitingDeposit, "submit a bank guarantee for");
+        terms.RequireOpen();
         if (DepositMethod != Domain.DepositMethod.BankGuarantee)
             throw new ParticipantValidationException(
                 new[] { "This subscription is settling by payment, not bank guarantee." });

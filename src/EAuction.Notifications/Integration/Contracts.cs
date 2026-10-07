@@ -12,6 +12,7 @@ public static class InboundEvents
     public const string ParticipantEligibilityChanged = "ParticipantEligibilityChanged";
     public const string BankGuaranteeRejected = "BankGuaranteeRejected";
     public const string AuctionCancelled = "AuctionCancelled";
+    public const string AuctionUnsold = "AuctionUnsold";
     public const string PaymentSettled = "PaymentSettled";
     public const string AuctionStarted = "AuctionStarted";
     public const string AuctionClosed = "AuctionClosed";

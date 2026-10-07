@@ -106,6 +106,26 @@ public class EventConsumerTests : IAsyncLifetime, IAsyncDisposable
     }
 
     [Fact]
+    public async Task An_auction_that_ends_unawarded_tells_its_bidders_once_and_cancellation_too()
+    {
+        await ApproveAsync("مخطط السعيد");
+        await StartAsync();
+        await EligibleAsync(_sara, true);
+        await EligibleAsync(_khalid, true);
+        await WaitForAsync(_khalid, NotificationKind.Eligible);
+
+        await LifecycleAsync("AuctionUnsold", new { auctionId = _auction });
+        var unsold = await WaitForAsync(_sara, NotificationKind.AuctionUnsold);
+        Assert.Contains("دون ترسية", unsold.TitleAr);
+        await WaitForAsync(_khalid, NotificationKind.AuctionUnsold);
+
+        // Redelivered: still one notice.
+        await LifecycleAsync("AuctionUnsold", new { auctionId = _auction });
+        await Settle();
+        Assert.Single(await AllFor(_sara, NotificationKind.AuctionUnsold));
+    }
+
+    [Fact]
     public async Task A_revocation_is_its_own_notice_and_eligibility_again_is_news_again()
     {
         await ApproveAsync("مخطط السعيد");

@@ -74,4 +74,22 @@ public class LifecycleConsistencyTests
         Assert.True(state.TryGet(id, out var entry));
         Assert.Equal("Awarded", entry.Status);
     }
+
+    [Fact]
+    public void A_price_that_replays_before_the_definition_is_kept_not_lost()
+    {
+        // The restart that showed «لا مزايدات بعد» over an auction at 640,000.
+        var state = new CatalogueState();
+        var id = Guid.NewGuid();
+        var leader = Guid.NewGuid();
+
+        Assert.Null(state.SetPrice(id, 640_000_00, leader, Guid.NewGuid(), DateTimeOffset.UtcNow.AddHours(1), 0));
+        Assert.Equal(0, state.Count);          // still not shown without its definition
+
+        state.Upsert(Definition(id));
+
+        Assert.True(state.TryGet(id, out var entry));
+        Assert.Equal(640_000_00, entry.PriceMinorUnits);
+        Assert.Equal(leader, entry.LeaderBidderId);
+    }
 }

@@ -52,3 +52,15 @@ export function SignOutIcon() {
     </svg>
   )
 }
+
+export function GavelIcon() {
+  return (
+    <svg {...props}>
+      <path d="M14.5 3.5l6 6" />
+      <path d="M11 7l6 6" />
+      <path d="M12.75 5.25l-4.5 4.5 6 6 4.5-4.5" />
+      <path d="M10.5 12L4 18.5a1.4 1.4 0 0 0 2 2l6.5-6.5" />
+      <path d="M3 21h8" />
+    </svg>
+  )
+}

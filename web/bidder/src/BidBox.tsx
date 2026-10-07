@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  ApiError,
-  api,
-  buildBidFrame,
   clock,
-  config,
-  newClientBidId,
-  newNonce,
   parseRiyals,
   riyals,
   finishedStages,
@@ -15,9 +9,9 @@ import {
   type Session,
   when,
 } from '@eauction/shared'
+import type { AuctionDetail, BidVerdict, LivePrice } from './types'
 import { reasons } from './reasons'
-import type { AuctionDetail, BidReceipt, BidVerdict, LivePrice } from './types'
-import { useSigningKey } from './useSigningKey'
+import { useBidSender } from './useBidSender'
 import { Certificate } from './Certificate'
 
 interface Props {
@@ -61,6 +55,11 @@ function loadSubmitted(auctionId: string, bidderId: string): Submitted[] {
   } catch {
     return []
   }
+}
+
+/** Adds one bid to a bidder's list for an auction — from the live cards as well. */
+export function recordSubmitted(auctionId: string, bidderId: string, bid: Submitted): void {
+  saveSubmitted(auctionId, bidderId, [bid, ...loadSubmitted(auctionId, bidderId)].slice(0, KEEP))
 }
 
 function saveSubmitted(auctionId: string, bidderId: string, rows: Submitted[]): void {
@@ -109,13 +108,11 @@ function outcome(bid: Submitted, price: LivePrice | null, verdicts: BidVerdict[]
 
 
 export function BidBox({ auction, session, price, verdicts, participant, onBid }: Props) {
-  const key = useSigningKey(participant, auction.id, session.subject)
-  const catcher = api({ baseUrl: config.catcherApi, session })
+  const sender = useBidSender(auction.id, session, participant)
+  const { busy, problem, setProblem, catcher } = sender
 
   const minimum = price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits
   const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [problem, setProblem] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState<Submitted[]>(() =>
     loadSubmitted(auction.id, session.subject),
   )
@@ -171,46 +168,13 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
       setProblem('أدخل مبلغاً صحيحاً.')
       return
     }
-
-    setBusy(true)
-    setProblem(null)
-
-    try {
-      // Fetched on first use, held in memory only. See useSigningKey.
-      const secretHex = await key.get()
-
-      const clientBidId = newClientBidId()
-      const frame = await buildBidFrame({
-        auctionId: auction.id,
-        // The bidder id in the frame must be this caller's own subject: the catcher
-        // compares the two and refuses a mismatch with 403.
-        bidderId: session.subject,
-        amountMinorUnits: value,
-        clientBidId,
-        clientTimestampMs: Date.now(),
-        nonce: newNonce(),
-        signingSecretHex: secretHex,
-      })
-
-      const receipt = await catcher.postFrame<BidReceipt>('/bids', frame)
-
-      // 202, not 200: recorded, not yet judged. The processor's verdict arrives
-      // separately, which is why this says "recorded" and not "you are winning".
-      setSubmitted((prior) => [
-        { clientBidId, amount: value, offset: receipt.offset, at: new Date() },
-        ...prior.slice(0, KEEP - 1),
-      ])
-      setText('')
-      onBid()
-    } catch (e) {
-      if (e instanceof ApiError && e.reason) {
-        setProblem(reasons[e.reason] ?? `رُفضت المزايدة: ${e.reason}`)
-      } else {
-        setProblem(e instanceof Error ? e.message : String(e))
-      }
-    } finally {
-      setBusy(false)
-    }
+    const sent = await sender.send(value)
+    if (!sent) return
+    // 202, not 200: recorded, not yet judged. The processor's verdict arrives
+    // separately, which is why this says "recorded" and not "you are winning".
+    setSubmitted((prior) => [sent, ...prior.slice(0, KEEP - 1)])
+    setText('')
+    onBid()
   }
 
   return (

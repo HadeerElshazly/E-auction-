@@ -392,6 +392,22 @@ public sealed class EventConsumer(
                 return;
             }
 
+            // Every way an auction ends unawarded reaches auction-admin's MarkUnsold,
+            // which emits this once — so one notice, whichever path got there.
+            case InboundEvents.AuctionUnsold:
+            {
+                var payload = JsonSerializer.Deserialize<AuctionIdPayload>(record.Payload, Json);
+                if (payload is null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+                var (title, body) = Messages.AuctionUnsold(name);
+
+                await RaiseForAudienceAsync(
+                    db, payload.AuctionId, NotificationKind.AuctionUnsold,
+                    title, body, now, notify, ct);
+                return;
+            }
+
             case InboundEvents.AuctionCancelled:
             {
                 var payload = JsonSerializer.Deserialize<AuctionCancelledPayload>(record.Payload, Json);

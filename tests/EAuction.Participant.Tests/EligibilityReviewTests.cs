@@ -120,4 +120,25 @@ public class EligibilityReviewTests
         Assert.Equal(Eligibility.Rejected, s.Eligibility.State);
         Assert.Equal("مخالفة شروط المزاد", s.Eligibility.Reason);
     }
+
+    [Fact]
+    public void A_cancelled_auction_takes_no_booklet_request_and_no_deposit()
+    {
+        var auctionId = Guid.NewGuid();
+        var terms = Build.Terms(auctionId);
+        var bidder = Build.VerifiedBidder();
+
+        var paying = Subscription.Start(auctionId, bidder.Id);
+        Build.PayForBooklet(paying, terms);
+        paying.AcceptTerms(Now);
+        paying.ChooseDeposit(DepositMethod.Payment, terms, Now);
+
+        var fresh = Subscription.Start(auctionId, Build.VerifiedBidder().Id);
+
+        terms.Cancel(Now);
+
+        Assert.Throws<ParticipantValidationException>(() => fresh.RequestBooklet(terms, Now));
+        Assert.Throws<ParticipantValidationException>(() => paying.AuthoriseDeposit(terms, Now));
+        Assert.Empty(paying.Events.OfType<DepositRequested>());
+    }
 }

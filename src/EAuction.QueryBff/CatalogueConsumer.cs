@@ -188,7 +188,8 @@ public sealed class CatalogueConsumer(
             p.EffectiveEndsAt, p.ExtensionsUsed);
 
         // Null while this topic is replaying ahead of auctions.upcoming, which is
-        // normal on a cold start: the definition arrives and brings its own push.
+        // normal on a cold start: the state holds the price and applies it when the
+        // definition arrives, which brings its own push.
         if (updated is not null) Push(updated);
     }
 
