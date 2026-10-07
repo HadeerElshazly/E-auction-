@@ -292,6 +292,23 @@ public sealed class EventConsumer(
 
     private async Task ApplyEligibilityAsync(StreamEvent record, bool notify, CancellationToken ct)
     {
+        if (record.EventType == InboundEvents.BankGuaranteeRejected)
+        {
+            var rejected = JsonSerializer.Deserialize<GuaranteeRejectedPayload>(record.Payload, Json);
+            if (rejected is null) return;
+
+            await using var gdb = await dbFactory.CreateDbContextAsync(ct);
+            var auction = await NameOf(gdb, rejected.AuctionId, ct);
+            var (gTitle, gBody) = Messages.GuaranteeRejected(auction, rejected.Reason);
+
+            // One notice per refusal: a bidder refused twice was refused twice.
+            await RaiseAsync(
+                rejected.BidderId, rejected.AuctionId, NotificationKind.GuaranteeRejected,
+                gTitle, gBody, DateTimeOffset.UtcNow, notify, ct,
+                dedup: rejected.At.ToUnixTimeMilliseconds().ToString());
+            return;
+        }
+
         if (record.EventType != InboundEvents.ParticipantEligibilityChanged) return;
 
         var payload = JsonSerializer.Deserialize<EligibilityPayload>(record.Payload, Json);
@@ -371,6 +388,20 @@ public sealed class EventConsumer(
 
                 await RaiseForAudienceAsync(
                     db, payload.AuctionId, NotificationKind.AuctionStarted,
+                    title, body, now, notify, ct);
+                return;
+            }
+
+            case InboundEvents.AuctionCancelled:
+            {
+                var payload = JsonSerializer.Deserialize<AuctionCancelledPayload>(record.Payload, Json);
+                if (payload is null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+                var (title, body) = Messages.AuctionCancelled(name, payload.Reason);
+
+                await RaiseForAudienceAsync(
+                    db, payload.AuctionId, NotificationKind.AuctionCancelled,
                     title, body, now, notify, ct);
                 return;
             }

@@ -41,6 +41,10 @@ public sealed class ParticipantDbContext(DbContextOptions<ParticipantDbContext> 
             e.Property(x => x.Status).HasConversion<int>();
             e.Property(x => x.DepositMethod).HasConversion<int?>();
             e.Property(x => x.BookletPaymentRef).HasMaxLength(200);
+            e.Property(x => x.GuaranteeRejectionReason).HasMaxLength(1000);
+            e.Ignore(x => x.Eligibility);
+            e.Ignore(x => x.DepositSettlement);
+            e.Property(x => x.DepositClosureReference).HasMaxLength(100);
             e.Property(x => x.DepositPaymentRef).HasMaxLength(200);
             e.Property(x => x.RevocationReason).HasMaxLength(2000);
             e.Property(x => x.PaymentFailurePurpose).HasMaxLength(40);

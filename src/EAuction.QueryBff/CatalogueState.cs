@@ -19,7 +19,8 @@ public sealed class CatalogueState
 
     public int Count => _auctions.Count;
 
-    public void Upsert(AuctionEntry entry) =>
+    public void Upsert(AuctionEntry entry)
+    {
         _auctions.AddOrUpdate(entry.AuctionId, entry, (_, existing) => entry with
         {
             // The definition is replaced; the live state is not, because
@@ -31,6 +32,34 @@ public sealed class CatalogueState
             EffectiveEndsAt = existing.EffectiveEndsAt,
             ExtensionsUsed = existing.ExtensionsUsed
         });
+
+        // A cancellation that replayed before its definition.
+        if (_cancelled.ContainsKey(entry.AuctionId)) ApplyCancellation(entry.AuctionId);
+    }
+
+    public const string Cancelled = "Cancelled";
+
+    /// <summary>
+    /// Withdrawn auctions, remembered apart from the entries: the lifecycle and the
+    /// definitions replay concurrently, and a cancellation that arrived first would
+    /// otherwise be dropped and the auction shown as upcoming after a restart.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, string> _cancelled = new();
+
+    public AuctionEntry? MarkCancelled(Guid auctionId, string reason)
+    {
+        _cancelled[auctionId] = reason;
+        return ApplyCancellation(auctionId);
+    }
+
+    private AuctionEntry? ApplyCancellation(Guid auctionId)
+    {
+        if (!_auctions.TryGetValue(auctionId, out var entry)) return null;
+        if (!_cancelled.TryGetValue(auctionId, out var reason)) return entry;
+        var updated = entry with { Status = Cancelled, CancellationReason = reason };
+        _auctions[auctionId] = updated;
+        return updated;
+    }
 
     /// <summary>Returns the updated entry, or null if the auction is not known yet.</summary>
     public AuctionEntry? SetPrice(
@@ -106,10 +135,22 @@ public sealed record AuctionEntry
     public required long MinIncrementMinorUnits { get; init; }
     public required long DepositMinorUnits { get; init; }
     public required long BookletPriceMinorUnits { get; init; }
+
+    /// <summary>السعي — charged to the winner on the price won. Public: a bidder weighs it before paying a deposit.</summary>
+    public decimal BrokerageFeePercent { get; init; }
     public int? QuietPeriodSeconds { get; init; }
     public required int MaxExtensions { get; init; }
     public required decimal TotalAreaSqm { get; init; }
     public required IReadOnlyList<PlotEntry> Plots { get; init; }
+
+    /// <summary>Public in the document service; shown on the catalogue card and the plot page.</summary>
+    public Guid? CoverImageDocumentId { get; init; }
+
+    /// <summary>Plans, photographs — documents anyone may read. Never the booklet.</summary>
+    public IReadOnlyList<PublicDocumentEntry> Attachments { get; init; } = [];
+
+    /// <summary>Why an administrator withdrew it — public, as the cancellation is.</summary>
+    public string? CancellationReason { get; init; }
 
     /// <summary>From auctions.lifecycle. "Scheduled" until the processor says otherwise.</summary>
     public string Status { get; init; } = "Scheduled";
@@ -135,6 +176,8 @@ public sealed record AuctionEntry
             ? OpeningPriceMinorUnits
             : PriceMinorUnits.Value + MinIncrementMinorUnits;
 }
+
+public sealed record PublicDocumentEntry(Guid DocumentId, string TitleAr);
 
 public sealed record PlotEntry(
     Guid Id, string DeedNumber, decimal AreaSqm,

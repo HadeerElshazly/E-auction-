@@ -92,6 +92,13 @@ public class AwardWorkflowTests
 
         var second = Guid.NewGuid();
         auction.OfferCandidate(second, 1_700_000_00);
+
+        // Suggested, not advanced: a defaulting winner goes to the committee first.
+        Assert.Equal(AuctionStatus.WinnerDisqualified, auction.Status);
+        Assert.Throws<InvalidAuctionTransitionException>(
+            () => auction.ConfirmAward(Build.Committee, Now.AddDays(7), Compliance));
+
+        auction.ReferToNextBidder();
         var secondAward = auction.ConfirmAward(Build.Committee, Now.AddDays(7), Compliance);
 
         Assert.Equal(2, auction.Awards.Count);
@@ -130,6 +137,7 @@ public class AwardWorkflowTests
 
         Assert.Empty(auction.Events.OfType<DepositsReleasable>());
 
+        Build.PayInFull(auction, Now.AddDays(2));
         auction.Settle(Now.AddDays(3));
 
         var release = Assert.Single(auction.Events.OfType<DepositsReleasable>());
@@ -147,10 +155,12 @@ public class AwardWorkflowTests
 
         var second = Guid.NewGuid();
         auction.OfferCandidate(second, 1_700_000_00);
+        auction.ReferToNextBidder();
         auction.ConfirmAward(Build.Committee, Now.AddDays(7), Compliance);
         auction.GenerateAwardLetter(Guid.NewGuid());
         auction.UploadSignedAwardLetter(Guid.NewGuid());
         auction.NotifyWinner(Now.AddDays(8));
+        Build.PayInFull(auction, Now.AddDays(8));
         auction.Settle(Now.AddDays(9));
 
         var release = auction.Events.OfType<DepositsReleasable>().Last();

@@ -453,7 +453,71 @@ tbody tr:hover { background: var(--surface-sunken); }
 .section-head h2 { margin: 0; }
 .card .lede { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
 
-.table-wrap { overflow-x: auto; margin-inline: -4px; }
+
+/* The auction's cover image, across the top of its card. */
+.auction-hero .hero-cover {
+  display: block;
+  width: calc(100% + 52px);
+  max-height: 260px;
+  object-fit: cover;
+  margin: -26px -26px 20px;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+@media (max-width: 640px) {
+  .auction-hero .hero-cover { width: calc(100% + 36px); margin: -18px -18px 16px; }
+}
+
+/* Public documents: a plain list of downloads. */
+.doc-list { list-style: none; margin: 0; padding: 0; }
+.doc-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-list li:last-child { border-bottom: 0; }
+.doc-list a { font-weight: 500; }
+
+/* Search and status filter above the catalogue. */
+.catalogue-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.catalogue-tools input[type="search"] {
+  flex: 1 1 260px;
+  font: inherit;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 7px 14px; border-radius: 999px; font-size: 14px; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.on:hover:not(:disabled) { color: #fff; }
+
+/* متابعة الترسية: an overdue award stands out, and a row opens into its record. */
+tr.row-alert td { background: var(--danger-weak); }
+tr.detail-row:hover { background: none; }
+tr.detail-row > td { background: var(--surface-sunken); }
+.followup-detail {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  padding: 6px 2px;
+}
+.followup-detail h3 { margin-top: 0; }
+.followup-detail input { font: inherit; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+
+/* A refusal typed in place, in the row it refuses. */
+.refuse { display: grid; gap: 8px; min-width: 220px; }
+.refuse input { font: inherit; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
 
 @media (max-width: 640px) {
   .auction-hero { padding: 18px; }
@@ -511,6 +575,13 @@ tbody tr:hover { background: var(--surface-sunken); }
   background: linear-gradient(135deg, #d9c9ab, #c6ab83);
   background-size: cover;
   background-position: center;
+}
+.auction-card .cover > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .auction-card .cover .channel {
   position: absolute;

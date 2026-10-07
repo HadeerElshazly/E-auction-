@@ -36,6 +36,9 @@ public abstract record DomainEvent : IDomainEvent
 /// purpose: an event that serialised the entity would carry whatever is added to it
 /// later, which is how internal fields end up on a public topic by accident.
 /// </summary>
+/// <summary>A document anyone may read, named for the catalogue that lists it.</summary>
+public sealed record PublicDocument(Guid DocumentId, string TitleAr);
+
 public sealed record PublicPlot(
     Guid Id, string DeedNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
@@ -89,6 +92,13 @@ public sealed record AuctionApproved : DomainEvent
     public Guid? CoverImageDocumentId { get; init; }
 
     /// <summary>
+    /// The public documents — plans, photographs — listed on the plot page. Public
+    /// in the document service, so the ids here open to anyone, which is the point.
+    /// Empty rather than absent for consumers built before it existed.
+    /// </summary>
+    public IReadOnlyList<PublicDocument> Attachments { get; init; } = [];
+
+    /// <summary>
     /// المخطط — which plan and phase this land belongs to, e.g. "مخطط السعيد — المرحلة الأولى".
     ///
     /// Added for the reporting service (§35), which groups almost everything by it:
@@ -128,6 +138,23 @@ public sealed record AuctionReserveSet : DomainEvent
     public required long ReservePriceMinorUnits { get; init; }
 
     public override string AggregateType => "auction-sealed";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>
+/// An approved auction withdrawn before it opened (المرحلة الأولى، الخاصية 05:
+/// «توثيق الإلغاء المصرح به»). On the lifecycle topic, which every service that
+/// acts on an auction already follows: the processor must not start it, the catcher
+/// must refuse its bids, the catalogue must say so, and its bidders must be told.
+/// </summary>
+public sealed record AuctionCancelled : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required string Reason { get; init; }
+    public required Guid CancelledByUserId { get; init; }
+    public required DateTimeOffset At { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
     public override string AggregateId => AuctionId.ToString();
 }
 

@@ -123,6 +123,7 @@ public class OutboxTests(PostgresFixture pg)
 
             saved.DisqualifyWinner("لم يسدد", forfeitDeposit: true, future.AddDays(6));
             saved.OfferCandidate(Guid.NewGuid(), 1_700_000_00);
+            saved.ReferToNextBidder();
             saved.ConfirmAward(Build.Committee, future.AddDays(7), TimeSpan.FromDays(5));
             await db.SaveChangesAsync();
         }
@@ -178,6 +179,7 @@ public class OutboxTests(PostgresFixture pg)
     {
         var future = DateTimeOffset.UtcNow;
         var auction = Build.AwaitingSettlement(future, out _);
+        Build.PayInFull(auction, future);
         auction.Settle(future.AddDays(1));
 
         await using (var db = await pg.Factory.CreateDbContextAsync())

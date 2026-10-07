@@ -147,6 +147,9 @@ namespace EAuction.Participant.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("AcceptedBookletDocumentId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("AuctionId")
                         .HasColumnType("uuid");
 
@@ -165,6 +168,19 @@ namespace EAuction.Participant.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("DepositAppliedToPurchase")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("DepositClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DepositClosedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DepositClosureReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<bool>("DepositForfeited")
                         .HasColumnType("boolean");
@@ -193,6 +209,13 @@ namespace EAuction.Participant.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("GuaranteeExpiresAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("GuaranteeRejectedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("GuaranteeRejectionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
 
                     b.Property<DateTimeOffset?>("GuaranteeVerifiedAt")
                         .HasColumnType("timestamp with time zone");

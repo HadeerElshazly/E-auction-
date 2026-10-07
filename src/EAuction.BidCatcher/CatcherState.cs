@@ -39,6 +39,16 @@ public sealed class CatcherState(byte[] bidderMasterKey)
     public int EligibilityCount => _eligibility.Count;
     public int ClerkCount => _clerks.Count;
 
+    /// <summary>
+    /// Auctions withdrawn before they opened. A set of its own rather than a removal
+    /// from the definitions, because the definition replays from another topic and
+    /// would put a removed auction straight back.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, byte> _cancelled = new();
+
+    /// <summary>Applied from <c>auctions.lifecycle</c>.</summary>
+    public void CancelAuction(Guid auctionId) => _cancelled[auctionId] = 0;
+
     /// <summary>Applied from <c>auctions.upcoming</c> (compacted).</summary>
     public void UpsertAuction(AuctionDefinition auction) =>
         _auctions[auction.AuctionId] = auction;
@@ -130,6 +140,9 @@ public sealed class CatcherState(byte[] bidderMasterKey)
         var auctionId = BidFrame.AuctionId(frame);
         if (!_auctions.TryGetValue(auctionId, out var auction))
             return RejectionReason.UnknownAuction;
+
+        // A cancelled auction has no window at all.
+        if (_cancelled.ContainsKey(auctionId)) return RejectionReason.OutsideWindow;
 
         var onsite = auction.Channel == BidChannel.Onsite;
 

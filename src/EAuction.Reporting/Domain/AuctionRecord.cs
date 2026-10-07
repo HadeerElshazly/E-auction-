@@ -34,6 +34,9 @@ public enum AuctionOutcome
 
     /// <summary>Rejected at review and never published to bidders.</summary>
     Rejected = 7,
+
+    /// <summary>Withdrawn after approval, before it opened. Terminal; nothing sold.</summary>
+    Cancelled = 8,
 }
 
 /// <summary>
@@ -280,6 +283,9 @@ public sealed class AuctionRecord
         WinnerBidderId = null;
         Reach(AuctionOutcome.Unsold);
     }
+
+    /// <summary>Withdrawn before it opened. Its reason is in the audit trail, not here.</summary>
+    public void Cancelled() => Reach(AuctionOutcome.Cancelled);
 
     public void Rejected(string reason, DateTimeOffset at)
     {

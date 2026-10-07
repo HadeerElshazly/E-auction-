@@ -42,6 +42,9 @@ public static class InboundEvents
 
     /// <summary>The clerk brought the hammer down. The only way an onsite auction ends.</summary>
     public const string AuctionClosedByClerk = "AuctionClosedByClerk";
+
+    /// <summary>Withdrawn by an administrator before it opened. It must never start.</summary>
+    public const string AuctionCancelled = "AuctionCancelled";
 }
 
 /// <summary>

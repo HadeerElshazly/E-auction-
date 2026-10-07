@@ -124,6 +124,7 @@ public sealed class CatalogueConsumer(
             MinIncrementMinorUnits = p.MinIncrementMinorUnits,
             DepositMinorUnits = p.DepositMinorUnits,
             BookletPriceMinorUnits = p.BookletPriceMinorUnits,
+            BrokerageFeePercent = p.BrokerageFeePercent,
             QuietPeriodSeconds = p.QuietPeriodSeconds,
             MaxExtensions = p.MaxExtensions,
             TotalAreaSqm = p.TotalAreaSqm,
@@ -131,6 +132,11 @@ public sealed class CatalogueConsumer(
                 .Select(x => new PlotEntry(
                     x.Id, x.DeedNumber, x.AreaSqm,
                     x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn))
+                .ToArray(),
+            CoverImageDocumentId = p.CoverImageDocumentId,
+            Attachments = (p.Attachments ?? [])
+                .Where(x => x.DocumentId != Guid.Empty && !string.IsNullOrWhiteSpace(x.TitleAr))
+                .Select(x => new PublicDocumentEntry(x.DocumentId, x.TitleAr))
                 .ToArray()
         });
 
@@ -223,6 +229,15 @@ public sealed class CatalogueConsumer(
 
     private void ApplyLifecycle(StreamEvent record)
     {
+        if (record.EventType == "AuctionCancelled")
+        {
+            if (!Guid.TryParse(record.Key, out var cancelledId)) return;
+            var reason = JsonSerializer.Deserialize<CancelledPayload>(record.Payload, Json)?.Reason ?? "";
+            if (state.MarkCancelled(cancelledId, reason) is { } cancelled) Push(cancelled);
+            fanOut.Forget(cancelledId);
+            return;
+        }
+
         var status = record.EventType switch
         {
             "AuctionStarted" => "Live",
@@ -265,10 +280,19 @@ public sealed class CatalogueConsumer(
         public long MinIncrementMinorUnits { get; init; }
         public long DepositMinorUnits { get; init; }
         public long BookletPriceMinorUnits { get; init; }
+        public decimal BrokerageFeePercent { get; init; }
         public int? QuietPeriodSeconds { get; init; }
         public int MaxExtensions { get; init; }
         public decimal TotalAreaSqm { get; init; }
         public PlotPayload[]? Plots { get; init; }
+        public Guid? CoverImageDocumentId { get; init; }
+        public AttachmentPayload[]? Attachments { get; init; }
+    }
+
+    private sealed record AttachmentPayload
+    {
+        public Guid DocumentId { get; init; }
+        public string TitleAr { get; init; } = "";
     }
 
     private sealed record PlotPayload
@@ -307,6 +331,11 @@ public sealed class CatalogueConsumer(
         public Guid BidderId { get; init; }
         public bool Eligible { get; init; }
         public string? DisplayNameAr { get; init; }
+    }
+
+    private sealed record CancelledPayload
+    {
+        public string Reason { get; init; } = "";
     }
 
     private sealed record LifecyclePayload

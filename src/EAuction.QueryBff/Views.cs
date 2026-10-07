@@ -19,14 +19,14 @@ public sealed record AuctionSummary(
     DateTimeOffset StartsAt, DateTimeOffset EndsAt,
     long OpeningPriceMinorUnits, long? PriceMinorUnits, long MinimumNextBidMinorUnits,
     long DepositMinorUnits, long BookletPriceMinorUnits,
-    int PlotCount, decimal TotalAreaSqm)
+    int PlotCount, decimal TotalAreaSqm, Guid? CoverImageDocumentId)
 {
     public static AuctionSummary From(AuctionEntry a) => new(
         a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
         a.StartsAt, a.EndsAt,
         a.OpeningPriceMinorUnits, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
         a.DepositMinorUnits, a.BookletPriceMinorUnits,
-        a.Plots.Count, a.TotalAreaSqm);
+        a.Plots.Count, a.TotalAreaSqm, a.CoverImageDocumentId);
 }
 
 public sealed record AuctionDetail(
@@ -42,7 +42,9 @@ public sealed record AuctionDetail(
     long? PriceMinorUnits, long MinimumNextBidMinorUnits,
     long DepositMinorUnits, long BookletPriceMinorUnits,
     int? QuietPeriodSeconds, int MaxExtensions, int ExtensionsUsed,
-    decimal TotalAreaSqm, IReadOnlyList<PlotEntry> Plots)
+    decimal TotalAreaSqm, IReadOnlyList<PlotEntry> Plots,
+    Guid? CoverImageDocumentId, IReadOnlyList<PublicDocumentEntry> Attachments,
+    decimal BrokerageFeePercent, string? CancellationReason)
 {
     public static AuctionDetail From(AuctionEntry a) => new(
         a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
@@ -51,7 +53,8 @@ public sealed record AuctionDetail(
         a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
         a.DepositMinorUnits, a.BookletPriceMinorUnits,
         a.QuietPeriodSeconds, a.MaxExtensions, a.ExtensionsUsed,
-        a.TotalAreaSqm, a.Plots);
+        a.TotalAreaSqm, a.Plots, a.CoverImageDocumentId, a.Attachments,
+        a.BrokerageFeePercent, a.CancellationReason);
 }
 
 public sealed record LivePrice(

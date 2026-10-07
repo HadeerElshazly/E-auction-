@@ -67,6 +67,10 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
 
   const lifecycle = price?.status ?? auction.status
   const live = lifecycle === 'Live'
+  const cancelled = lifecycle === 'Cancelled'
+  const currentPrice = live
+    ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
+    : auction.openingPriceMinorUnits
   const status = statusAr[lifecycle] ?? { ar: lifecycle, tone: 'done' }
   const endsAt = price?.effectiveEndsAt ?? auction.effectiveEndsAt ?? auction.endsAt
   const eligible = subscription?.status === 'Eligible'
@@ -202,8 +206,31 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
             <div className="stat-value num">{sar(auction.bookletPriceMinorUnits, 'ar')}</div>
             <div className="stat-sub">شرط للتسجيل في المزاد</div>
           </div>
+
+          {/* «عرض التأمين ومبلغ الوساطة» (الخاصية 04): the brokerage is a share of the
+              price won, so its amount is shown at today's price and said to move. */}
+          {auction.brokerageFeePercent > 0 && (
+            <div className="stat">
+              <div className="stat-label">السعي (الوساطة)</div>
+              <div className="stat-value num">
+                {sar(Math.round((currentPrice * auction.brokerageFeePercent) / 100), 'ar')}
+              </div>
+              <div className="stat-sub">
+                <span className="num">{auction.brokerageFeePercent}%</span> من سعر الترسية — يدفعه
+                الفائز، ويتغيّر بتغيّر السعر
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {cancelled && (
+        <div className="notice error" role="status">
+          <strong>أُلغي هذا المزاد قبل بدئه.</strong>
+          {auction.cancellationReason && <> السبب: {auction.cancellationReason}.</>} لا تُقبل
+          اشتراكات أو مزايدات، ويُرد التأمين المدفوع أو يُحرَّر الضمان البنكي.
+        </div>
+      )}
 
       {auction.bidderVisibility === 'Named' && (
         // Said before the deposit, not after. The administrator may run an auction
@@ -214,7 +241,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         </div>
       )}
 
-      {!session && (
+      {!session && !cancelled && (
         <div className="card">
           <h2>للمزايدة</h2>
           <p className="muted">
@@ -226,7 +253,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         </div>
       )}
 
-      {session && canBid && (
+      {session && canBid && !cancelled && (
         <SubscriptionSteps
           auction={auction}
           session={session}
@@ -238,7 +265,7 @@ export function AuctionPage({ auction, session, canBid, onBack, onSignIn, onRefr
         />
       )}
 
-      {session && canBid && eligible && (
+      {session && canBid && eligible && !cancelled && (
         <BidBox
           auction={auction}
           session={session}

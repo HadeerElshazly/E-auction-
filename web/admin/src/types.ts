@@ -26,6 +26,10 @@ export interface Award {
   letterDocumentId: string | null
   signedLetterDocumentId: string | null
   winnerNotifiedAt: string | null
+  /** Receipted so far, and what is still owed — recorded on متابعة الترسية. */
+  paidMinorUnits: number
+  remainingMinorUnits: number
+  overdue: boolean
 }
 
 export interface Auction {
@@ -48,9 +52,15 @@ export interface Auction {
   maxExtensions: number
   bookletDocumentId: string | null
   coverImageDocumentId: string | null
+  /** Public documents for the catalogue — plans, photographs. Never the booklet. */
+  attachments: { documentId: string; titleAr: string }[]
   plotCount: number
   totalAreaSqm: number
   rejectionReason: string | null
+  cancellationReason: string | null
+  cancelledAt: string | null
+  /** Why the committee refused the preliminary result, when it did. */
+  resultRejectionReason: string | null
   pendingCandidateBidderId: string | null
   pendingCandidateAmountMinorUnits: number | null
   currentAward: Award | null
@@ -69,6 +79,7 @@ export type AuctionStatus =
   | 'WinnerDisqualified'
   | 'Unsold'
   | 'Settled'
+  | 'Cancelled'
 
 /** The Arabic label and the visual weight each status gets. */
 export const statusLabels: Record<string, { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' }> = {
@@ -84,6 +95,7 @@ export const statusLabels: Record<string, { ar: string; tone: 'live' | 'wait' | 
   WinnerDisqualified: { ar: 'سُحب الفوز', tone: 'bad' },
   Unsold: { ar: 'لم يُبع', tone: 'bad' },
   Settled: { ar: 'مُسدَّد', tone: 'done' },
+  Cancelled: { ar: 'أُلغي', tone: 'bad' },
 }
 
 export function label(status: string): { ar: string; tone: 'live' | 'wait' | 'done' | 'bad' } {

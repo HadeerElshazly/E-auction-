@@ -40,6 +40,13 @@ export function AuctionEditor({
         <div className="notice error">سبب الرفض: {auction.rejectionReason}</div>
       )}
 
+      {auction.cancellationReason && (
+        <div className="notice error">
+          أُلغي المزاد{auction.cancelledAt && <> في {when(auction.cancelledAt)}</>} — السبب:{' '}
+          {auction.cancellationReason}
+        </div>
+      )}
+
       {open && canEdit ? (
         <Details auction={auction} client={client} busy={busy} onAct={onAct} />
       ) : (
@@ -590,6 +597,108 @@ function Documents({
           }
         />
       </div>
+
+      <PublicAttachments
+        auction={auction}
+        client={client}
+        documentsApi={documents}
+        busy={busy}
+        canEdit={canEdit}
+        onAct={onAct}
+      />
+    </>
+  )
+}
+
+/**
+ * المستندات العامة — plans and photographs anyone may download from the catalogue.
+ * Uploaded as Public, unlike the booklet, so listing them gives nothing paid away.
+ */
+function PublicAttachments({
+  auction,
+  client,
+  documentsApi,
+  busy,
+  canEdit,
+  onAct,
+}: {
+  auction: Auction
+  client: Api
+  documentsApi: Api
+  busy: boolean
+  canEdit: boolean
+  onAct: (work: () => Promise<unknown>) => Promise<void>
+}) {
+  const input = useRef<HTMLInputElement>(null)
+  const [title, setTitle] = useState('')
+  const attachments = auction.attachments ?? []
+
+  const upload = (file: File) =>
+    onAct(async () => {
+      const uploaded = await documentsApi.upload<{ id: string }>('/documents', file, {
+        access: 'Public',
+      })
+      await client.post(`/auctions/${auction.id}/attachments`, {
+        documentId: uploaded.id,
+        titleAr: title.trim() || file.name,
+      })
+      setTitle('')
+    })
+
+  return (
+    <>
+      <h3>المستندات العامة (مخططات، صور القطع…)</h3>
+      {attachments.length === 0 ? (
+        <p className="muted small">لا توجد مستندات عامة.</p>
+      ) : (
+        <ul className="doc-list">
+          {attachments.map((d) => (
+            <li key={d.documentId}>
+              <span>{d.titleAr}</span>
+              {canEdit && (
+                <button
+                  className="ghost"
+                  disabled={busy}
+                  onClick={() =>
+                    void onAct(() =>
+                      client.del(`/auctions/${auction.id}/attachments/${d.documentId}`),
+                    )
+                  }
+                >
+                  حذف
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canEdit && (
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            value={title}
+            placeholder="عنوان المستند — مثل: المخطط المعتمد"
+            aria-label="عنوان المستند العام"
+            style={{ flex: '1 1 260px' }}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <input
+            ref={input}
+            type="file"
+            accept="application/pdf,image/*"
+            aria-label="ملف المستند العام"
+            style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void upload(file)
+              e.target.value = ''
+            }}
+          />
+          <button disabled={busy} onClick={() => input.current?.click()}>
+            إرفاق مستند عام
+          </button>
+        </div>
+      )}
     </>
   )
 }
@@ -675,6 +784,7 @@ function Attach({
 function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) {
   const [problems, setProblems] = useState<string[] | null>(null)
   const [rejectReason, setRejectReason] = useState('')
+  const [cancelReason, setCancelReason] = useState('')
 
   const check = () =>
     onAct(async () => {
@@ -760,6 +870,38 @@ function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) 
             </span>
           ))}
       </div>
+
+      {/* «توثيق الإلغاء المصرح به»: withdrawing an approved auction before it
+          opens, with the reason on record and shown to its bidders. */}
+      {canEdit && (auction.status === 'Approved' || auction.status === 'Scheduled') && (
+        <>
+          <h3>إلغاء المزاد</h3>
+          <p className="muted small" style={{ marginTop: -4 }}>
+            يُتاح قبل بدء المزاد فقط. يُبلَّغ المشتركون، ويُرد التأمين المدفوع أو يُحرَّر الضمان.
+          </p>
+          <div className="row">
+            <input
+              placeholder="سبب الإلغاء (يظهر للمشتركين)"
+              aria-label="سبب الإلغاء"
+              style={{ flex: '1 1 280px' }}
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+            <button
+              className="danger"
+              disabled={busy || cancelReason.trim() === ''}
+              onClick={() => {
+                if (!window.confirm('إلغاء المزاد نهائي ولا يمكن التراجع عنه. متابعة؟')) return
+                void onAct(() =>
+                  client.post(`/auctions/${auction.id}/cancel`, { reason: cancelReason.trim() }),
+                )
+              }}
+            >
+              إلغاء المزاد
+            </button>
+          </div>
+        </>
+      )}
     </>
   )
 }

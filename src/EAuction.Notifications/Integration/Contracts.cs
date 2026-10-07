@@ -10,6 +10,8 @@ public static class InboundEvents
 {
     public const string AuctionApproved = "AuctionApproved";
     public const string ParticipantEligibilityChanged = "ParticipantEligibilityChanged";
+    public const string BankGuaranteeRejected = "BankGuaranteeRejected";
+    public const string AuctionCancelled = "AuctionCancelled";
     public const string PaymentSettled = "PaymentSettled";
     public const string AuctionStarted = "AuctionStarted";
     public const string AuctionClosed = "AuctionClosed";
@@ -50,6 +52,20 @@ public sealed record SettlementPayload
 public sealed record AuctionIdPayload
 {
     public Guid AuctionId { get; init; }
+}
+
+public sealed record GuaranteeRejectedPayload
+{
+    public Guid AuctionId { get; init; }
+    public Guid BidderId { get; init; }
+    public string Reason { get; init; } = "";
+    public DateTimeOffset At { get; init; }
+}
+
+public sealed record AuctionCancelledPayload
+{
+    public Guid AuctionId { get; init; }
+    public string Reason { get; init; } = "";
 }
 
 public sealed record CurrentWinnerPayload

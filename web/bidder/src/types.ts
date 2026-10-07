@@ -16,6 +16,8 @@ export interface AuctionSummary {
   bookletPriceMinorUnits: number
   plotCount: number
   totalAreaSqm: number
+  /** A Public document in the document service, or null for no image. */
+  coverImageDocumentId: string | null
 }
 
 export interface Plot {
@@ -35,6 +37,17 @@ export interface AuctionDetail extends Omit<AuctionSummary, 'plotCount'> {
   maxExtensions: number
   extensionsUsed: number
   plots: Plot[]
+  /** Documents anyone may read — plans, photographs. Never the booklet. */
+  attachments: PublicDocument[]
+  /** السعي, charged to the winner on the price won. */
+  brokerageFeePercent: number
+  /** Set when an administrator withdrew it before it opened. */
+  cancellationReason: string | null
+}
+
+export interface PublicDocument {
+  documentId: string
+  titleAr: string
 }
 
 /** A bidder's own bid outcome, pushed to them and to nobody else. */
@@ -91,6 +104,16 @@ export interface Subscription {
   bookletRequestedAt: string | null
   bookletPurchasedAt: string | null
   termsAcceptedAt: string | null
+  /** The كراسة الشروط that was accepted — the document id is its version. */
+  acceptedBookletDocumentId: string | null
+  /** The booklet cost nothing, so no payment was taken for it. */
+  bookletFree: boolean
+  /** Where the bidder stands, in the words of the requirements. */
+  eligibility: 'Incomplete' | 'UnderReview' | 'Accepted' | 'Rejected'
+  eligibilityReason: string | null
+  /** What is left to do with the deposit once the auction is over. */
+  depositSettlement:
+    | 'None' | 'Held' | 'ToRefund' | 'ToRelease' | 'ToForfeit' | 'AppliedToPurchase' | 'Closed'
   depositMethod: string | null
   depositRequestedAt: string | null
   depositPaidAt: string | null

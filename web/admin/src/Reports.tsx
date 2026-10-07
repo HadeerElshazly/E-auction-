@@ -595,6 +595,7 @@ function Outcome({ outcome }: { outcome: string }) {
     Settled: ['تم البيع', 'done'],
     Unsold: ['غير مبيع', 'bad'],
     Rejected: ['مرفوض', 'bad'],
+    Cancelled: ['أُلغي', 'bad'],
   }
   const [label, tone] = labels[outcome] ?? [outcome, 'done']
   return <span className={`pill ${tone}`}>{label}</span>

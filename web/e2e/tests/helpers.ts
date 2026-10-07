@@ -373,7 +373,7 @@ export async function qualify(page: Page, nameAr: string, email: string): Promis
     page,
     nameAr,
     /دفع مبلغ التأمين/,
-    page.getByRole('heading', { name: 'مؤهّل للمزايدة ✓' }),
+    page.getByRole('heading', { name: 'مؤهّل للمزايدة' }),
     'the deposit',
   )
 }

@@ -831,6 +831,22 @@ try
         n.Fail("brokerage charged to the winner",
             $"wanted {expectedBrokerage} halala, got {brokerage}");
 
+    // The land price is paid outside the platform and recorded here by hand (الخاصية
+    // 11): the deposit counted towards it, then the balance against a receipt.
+    // Settlement refuses an award with anything still owed.
+    await admin.PostAsync($"/auctions/{auctionId}/award/deposit-credit",
+        new { reference = "SMOKE-DEPOSIT" });
+    var owed = (await admin.GetAsync($"/auctions/{auctionId}"))
+        .GetProperty("currentAward").GetProperty("remainingMinorUnits").GetInt64();
+    await admin.PostAsync($"/auctions/{auctionId}/award/receipts", new
+    {
+        amountMinorUnits = owed,
+        paidOn = DateTimeOffset.UtcNow,
+        reference = "SMOKE-SADAD-0001",
+    });
+    n.Step("the award paid in full, recorded against receipts",
+        $"{pendingAmount / 100:N0} SAR, deposit credited and {owed / 100:N0} SAR receipted");
+
     // Settling the award is what releases the deposits — never at the gavel, while
     // the cascade can still reach a losing bidder (§8.3).
     await committee.PostAsync($"/auctions/{auctionId}/settle");

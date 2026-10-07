@@ -47,6 +47,19 @@ public class CatcherPriceFloorTests
     }
 
     [Fact]
+    public void A_cancelled_auction_refuses_every_bid_even_once_its_window_opens()
+    {
+        var (state, auction, bidder, secret) = Ready();
+        state.CancelAuction(auction.AuctionId);
+
+        var frame = TestAuction.Frame(
+            auction.AuctionId, bidder, auction.OpeningPriceMinorUnits,
+            DateTimeOffset.UtcNow, secret: secret);
+
+        Assert.Equal(RejectionReason.OutsideWindow, state.Screen(frame, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
     public void The_opening_price_itself_is_accepted()
     {
         var (state, auction, bidder, secret) = Ready();

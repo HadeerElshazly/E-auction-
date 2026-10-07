@@ -24,6 +24,15 @@ public sealed class Subscription
     public string? BookletPaymentRef { get; private set; }
     public DateTimeOffset? TermsAcceptedAt { get; private set; }
 
+    /// <summary>
+    /// Which كراسة الشروط was accepted, not only when. Documents are immutable — a
+    /// revised booklet is a new upload with a new id — so the id is the version, and
+    /// the document service still holds those exact bytes and their SHA-256. A
+    /// timestamp alone could not say which text a disputed forfeit was agreed under
+    /// once the booklet had been replaced.
+    /// </summary>
+    public Guid? AcceptedBookletDocumentId { get; private set; }
+
     public DepositMethod? DepositMethod { get; private set; }
 
     /// <summary>When the deposit was sent to the payment service, not when it was paid.</summary>
@@ -43,10 +52,20 @@ public sealed class Subscription
     public string? PaymentFailureReason { get; private set; }
     public DateTimeOffset? PaymentFailedAt { get; private set; }
 
+    /// <summary>Stands in for a gateway reference on a booklet that cost nothing.</summary>
+    public const string FreeBookletRef = "FREE";
+
     public Guid? GuaranteeDocumentId { get; private set; }
     public DateTimeOffset? GuaranteeExpiresAt { get; private set; }
     public DateTimeOffset? GuaranteeVerifiedAt { get; private set; }
     public Guid? GuaranteeVerifiedByUserId { get; private set; }
+
+    /// <summary>
+    /// Why staff refused the last guarantee, kept until the bidder submits another.
+    /// The bidder is told the reason rather than left awaiting a review that ended.
+    /// </summary>
+    public string? GuaranteeRejectionReason { get; private set; }
+    public DateTimeOffset? GuaranteeRejectedAt { get; private set; }
 
     /// <summary>
     /// Bumped to rotate this bidder's signing key without touching the master
@@ -61,6 +80,29 @@ public sealed class Subscription
     /// <summary>Set when auction-admin resolves deposits after the award is final (§8.3).</summary>
     public DateTimeOffset? DepositResolvedAt { get; private set; }
     public bool DepositForfeited { get; private set; }
+
+    /// <summary>The winner's paid deposit, which goes towards the price rather than back.</summary>
+    public bool DepositAppliedToPurchase { get; private set; }
+
+    /// <summary>
+    /// When staff recorded the refund, the guarantee's release or the forfeit as
+    /// done, and against what. The requirements (الخاصية 11) will not have one closed
+    /// without a reference or proof — the refund's gateway reference, the bank's
+    /// release letter number.
+    /// </summary>
+    public DateTimeOffset? DepositClosedAt { get; private set; }
+    public string? DepositClosureReference { get; private set; }
+    public Guid? DepositClosedByUserId { get; private set; }
+
+    /// <summary>Where this bidder's deposit stands once there is one.</summary>
+    public DepositSettlement DepositSettlement =>
+        DepositPaidAt is null && GuaranteeVerifiedAt is null ? DepositSettlement.None
+        : DepositClosedAt is not null ? DepositSettlement.Closed
+        : DepositResolvedAt is null ? DepositSettlement.Held
+        : DepositAppliedToPurchase ? DepositSettlement.AppliedToPurchase
+        : DepositForfeited ? DepositSettlement.ToForfeit
+        : DepositMethod == Domain.DepositMethod.BankGuarantee ? DepositSettlement.ToRelease
+        : DepositSettlement.ToRefund;
 
     public DateTimeOffset CreatedAt { get; private set; } = DateTimeOffset.UtcNow;
 
@@ -93,6 +135,17 @@ public sealed class Subscription
 
         BookletRequestedAt = now;
         ClearPaymentFailure();
+
+        // A free booklet (the policy may waive the fee) is obtained, not bought:
+        // there is nothing for the gateway to settle, so waiting on a settlement for
+        // zero riyals would strand the bidder at this step for ever.
+        if (terms.BookletPriceMinorUnits == 0)
+        {
+            BookletPaymentRef = FreeBookletRef;
+            BookletPurchasedAt = now;
+            Status = SubscriptionStatus.BookletPurchased;
+            return;
+        }
 
         _events.Add(new BookletFeeRequested
         {
@@ -130,10 +183,11 @@ public sealed class Subscription
     /// booklet is the contract the cascade and forfeit rules live in — if a
     /// bidder later disputes a forfeited deposit, this is the answer.
     /// </summary>
-    public void AcceptTerms(DateTimeOffset now)
+    public void AcceptTerms(DateTimeOffset now, Guid? bookletDocumentId = null)
     {
         Require(SubscriptionStatus.BookletPurchased, "accept terms for");
         TermsAcceptedAt = now;
+        AcceptedBookletDocumentId = bookletDocumentId;
         Status = SubscriptionStatus.TermsAccepted;
     }
 
@@ -256,7 +310,57 @@ public sealed class Subscription
         GuaranteeExpiresAt = expiresAt;
         GuaranteeVerifiedAt = null;
         GuaranteeVerifiedByUserId = null;
+        GuaranteeRejectionReason = null;
+        GuaranteeRejectedAt = null;
     }
+
+    /// <summary>
+    /// Staff refuse a submitted guarantee — forged, wrong amount, wrong bank. The
+    /// subscription stays awaiting its deposit so the bidder can submit another;
+    /// refusing one piece of paper is not refusing the person.
+    /// </summary>
+    public void RejectBankGuarantee(string reason, DateTimeOffset now)
+    {
+        Require(SubscriptionStatus.AwaitingDeposit, "reject a bank guarantee for");
+        if (GuaranteeDocumentId is null)
+            throw new ParticipantValidationException(new[] { "No guarantee has been submitted." });
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ParticipantValidationException(new[] { "A rejection reason is required." });
+
+        GuaranteeDocumentId = null;
+        GuaranteeExpiresAt = null;
+        GuaranteeRejectionReason = reason.Trim();
+        GuaranteeRejectedAt = now;
+
+        _events.Add(new BankGuaranteeRejected
+        {
+            AuctionId = AuctionId,
+            BidderId = BidderId,
+            Reason = GuaranteeRejectionReason,
+            At = now
+        });
+    }
+
+    /// <summary>
+    /// Where the bidder stands, in the four words the requirements use: still
+    /// completing steps, under review, accepted, or rejected with a reason.
+    ///
+    /// Derived rather than stored, because every one of them is already a fact on
+    /// this row — a second column would be a second place for them to disagree.
+    /// </summary>
+    public (Eligibility State, string? Reason) Eligibility => Status switch
+    {
+        SubscriptionStatus.Eligible => (Domain.Eligibility.Accepted, null),
+        SubscriptionStatus.Revoked => (Domain.Eligibility.Rejected, RevocationReason),
+        SubscriptionStatus.AwaitingDeposit when GuaranteeRejectionReason is not null
+            => (Domain.Eligibility.Rejected, GuaranteeRejectionReason),
+        SubscriptionStatus.AwaitingDeposit when GuaranteeDocumentId is not null
+            => (Domain.Eligibility.UnderReview, null),
+        SubscriptionStatus.AwaitingDeposit when DepositRequestedAt is not null
+                                             && PaymentFailedAt is null
+            => (Domain.Eligibility.UnderReview, null),
+        _ => (Domain.Eligibility.Incomplete, null),
+    };
 
     /// <summary>Manual verification by an administrator — no bank integration in v1.</summary>
     public void VerifyBankGuarantee(
@@ -323,11 +427,39 @@ public sealed class Subscription
     /// gavel: while the cascade can still reach a losing bidder, their deposit
     /// is held through the compliance window of everyone above them (§8.3).
     /// </summary>
-    public void ResolveDeposit(bool forfeited, DateTimeOffset now)
+    public void ResolveDeposit(bool forfeited, DateTimeOffset now, bool appliedToPurchase = false)
     {
         if (DepositResolvedAt is not null) return;   // at-least-once delivery
         DepositResolvedAt = now;
         DepositForfeited = forfeited;
+        DepositAppliedToPurchase = appliedToPurchase && !forfeited;
+    }
+
+    /// <summary>
+    /// Records the deposit as dealt with — refunded, its guarantee released, or its
+    /// forfeit carried out — against a reference. Done by hand: automatic bank
+    /// integration is out of the first phase, and this is the record that stays in it.
+    /// </summary>
+    public void CloseDeposit(string reference, Guid closedByUserId, DateTimeOffset now)
+    {
+        var problems = new List<string>();
+        if (DepositSettlement is DepositSettlement.None)
+            problems.Add("لا يوجد تأمين مسدَّد لهذا المشارك.");
+        else if (DepositSettlement is DepositSettlement.Held)
+            problems.Add("التأمين ما زال محتجزاً — يُحسم بعد التسوية أو عدم البيع.");
+        else if (DepositSettlement is DepositSettlement.Closed)
+            problems.Add("أُغلق التأمين من قبل.");
+        else if (DepositSettlement is DepositSettlement.AppliedToPurchase)
+            problems.Add("التأمين احتُسب من ثمن الترسية ولا يُرد.");
+        if (string.IsNullOrWhiteSpace(reference))
+            problems.Add("رقم المرجع أو الإثبات مطلوب لإغلاق التأمين.");
+        else if (reference.Trim().Length > 100)
+            problems.Add("المرجع طويل جداً.");
+        if (problems.Count > 0) throw new ParticipantValidationException(problems);
+
+        DepositClosedAt = now;
+        DepositClosureReference = reference.Trim();
+        DepositClosedByUserId = closedByUserId;
     }
 
     /// <summary>

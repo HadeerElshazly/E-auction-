@@ -39,6 +39,12 @@ public enum NotificationKind
 
     /// <summary>أُعيد التأمين / حُجز التأمين — the deposit was returned, kept, or applied.</summary>
     DepositResolved = 8,
+
+    /// <summary>رُفض الضمان البنكي — with the reason staff gave; the bidder may submit another.</summary>
+    GuaranteeRejected = 9,
+
+    /// <summary>أُلغي المزاد — withdrawn before it opened; deposits go back.</summary>
+    AuctionCancelled = 10,
 }
 
 /// <summary>

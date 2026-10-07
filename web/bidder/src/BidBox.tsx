@@ -36,6 +36,40 @@ interface Submitted {
   at: Date
 }
 
+/**
+ * The bidder's own submitted bids, kept in this browser per auction and bidder so
+ * «عروض المستخدم المقبولة» survive a reload (الخاصية 06).
+ *
+ * Browser storage, not the server: the platform keeps the latest price per auction,
+ * not each bidder's history, and a durable per-bidder history is a processor change
+ * of its own. So this is per device — honest about it in the panel — and every read
+ * is guarded, because storage can be absent or full.
+ */
+const KEEP = 20
+
+function storageKey(auctionId: string, bidderId: string): string {
+  return `eauction:bids:${auctionId}:${bidderId}`
+}
+
+function loadSubmitted(auctionId: string, bidderId: string): Submitted[] {
+  try {
+    const raw = window.localStorage.getItem(storageKey(auctionId, bidderId))
+    if (!raw) return []
+    const rows = JSON.parse(raw) as Array<Omit<Submitted, 'at'> & { at: string }>
+    return rows.map((r) => ({ ...r, at: new Date(r.at) }))
+  } catch {
+    return []
+  }
+}
+
+function saveSubmitted(auctionId: string, bidderId: string, rows: Submitted[]): void {
+  try {
+    window.localStorage.setItem(storageKey(auctionId, bidderId), JSON.stringify(rows))
+  } catch {
+    // Private mode or a full quota: the list still works for this visit.
+  }
+}
+
 /** What the services call a rejection, in Arabic a bidder can act on. */
 
 /**
@@ -81,7 +115,12 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
-  const [submitted, setSubmitted] = useState<Submitted[]>([])
+  const [submitted, setSubmitted] = useState<Submitted[]>(() =>
+    loadSubmitted(auction.id, session.subject),
+  )
+  useEffect(() => {
+    saveSubmitted(auction.id, session.subject, submitted)
+  }, [auction.id, session.subject, submitted])
 
   /// The log offset whose certificate is open, or null. An offset rather than the
   /// submitted row: the certificate is issued from the record, and the offset is
@@ -141,7 +180,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
       // separately, which is why this says "recorded" and not "you are winning".
       setSubmitted((prior) => [
         { clientBidId, amount, offset: receipt.offset, at: new Date() },
-        ...prior.slice(0, 4),
+        ...prior.slice(0, KEEP - 1),
       ])
       setText('')
       onBid()
@@ -222,7 +261,10 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
 
       {submitted.length > 0 && (
         <>
-          <h3>مزايداتك في هذه الجلسة</h3>
+          <h3>مزايداتك في هذا المزاد</h3>
+          <p className="muted small" style={{ marginTop: -6 }}>
+            محفوظة على هذا الجهاز — لا تظهر إن دخلت من جهاز آخر.
+          </p>
           <div className="table-scroll">
             <table>
               <thead>

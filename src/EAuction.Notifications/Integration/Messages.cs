@@ -50,6 +50,14 @@ public static class Messages
         ("تمت المزايدة عليك",
          $"لم تعد صاحب أعلى مزايدة في «{auction}». السعر الحالي {Riyals(priceMinorUnits)}.");
 
+    public static (string Title, string Body) GuaranteeRejected(string auction, string reason) =>
+        ("رُفض الضمان البنكي",
+         $"رُفض الضمان البنكي المقدَّم لمزاد «{auction}». السبب: {reason}. يمكنك رفع ضمان آخر من صفحة المزاد.");
+
+    public static (string Title, string Body) AuctionCancelled(string auction, string reason) =>
+        ("أُلغي المزاد",
+         $"أُلغي مزاد «{auction}» قبل بدئه. السبب: {reason}. يُرد التأمين المدفوع أو يُحرَّر الضمان البنكي.");
+
     public static (string Title, string Body) AuctionClosed(string auction) =>
         ("أُغلق المزاد",
          $"أُغلق باب المزايدة في «{auction}». ستُعلن النتيجة بعد اعتماد لجنة الترسية.");

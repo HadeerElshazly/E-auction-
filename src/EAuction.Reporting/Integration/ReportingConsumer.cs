@@ -218,6 +218,13 @@ public sealed class ReportingConsumer(
                 break;
             }
 
+            case InboundEvents.AuctionCancelled:
+            {
+                var p = Read<AuctionIdPayload>(record);
+                (await FindAsync(db, p?.AuctionId, ct))?.Cancelled();
+                break;
+            }
+
             case InboundEvents.AuctionRejected:
             {
                 var p = Read<AuctionRejectedPayload>(record);

@@ -14,9 +14,11 @@ import type { Auction, AuctionListItem } from './types'
 import { AuctionList } from './AuctionList'
 import { AuctionEditor } from './AuctionEditor'
 import { AwardPanel } from './AwardPanel'
+import { Applicants } from './Applicants'
 import { ClerkTerminal } from './ClerkTerminal'
 import { Reports } from './Reports'
 import { AuditTrail } from './AuditTrail'
+import { FollowUp } from './FollowUp'
 import { Monitor } from './Monitor'
 
 /**
@@ -27,7 +29,7 @@ import { Monitor } from './Monitor'
  * a dependency plus the redirect-URI registration every Keycloak client here
  * already pins to one path.
  */
-type View = 'auctions' | 'monitor' | 'reports' | 'audit'
+type View = 'auctions' | 'monitor' | 'followup' | 'reports' | 'audit'
 
 
 export function App() {
@@ -233,6 +235,17 @@ export function App() {
           )}
           {canReport && (
             <button
+              className={view === 'followup' ? 'on' : ''}
+              data-testid="nav-followup"
+              onClick={() => setView('followup')}
+            >
+              <span className="icon" aria-hidden="true">✓</span>
+              متابعة الترسية
+              <span className="chevron" aria-hidden="true">‹</span>
+            </button>
+          )}
+          {canReport && (
+            <button
               className={view === 'reports' ? 'on' : ''}
               data-testid="nav-reports"
               onClick={() => setView('reports')}
@@ -266,6 +279,8 @@ export function App() {
 
         {view === 'monitor' ? (
           <Monitor session={session} />
+        ) : view === 'followup' ? (
+          <FollowUp session={session} canRecord={isAdmin} />
         ) : view === 'reports' ? (
           <Reports session={session} />
         ) : view === 'audit' ? (
@@ -295,6 +310,10 @@ export function App() {
               canApprove={isCommittee}
               onAct={act}
             />
+
+            {isAdmin && session && (
+              <Applicants auction={selected} session={session} busy={busy} onAct={act} />
+            )}
 
             {isClerk && selected.channel === 'Onsite' && (
               <ClerkTerminal

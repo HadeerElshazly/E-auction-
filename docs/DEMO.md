@@ -176,8 +176,31 @@ Confirm the award. **This is the one action that needs a second factor from a
 committee member**, because it transfers a parcel of state land to a named person.
 
 Then show the cascade, which is the part worth the time: **disqualify the winner**
-with a reason, and forfeit the deposit. The award moves down the ladder to Khalid
-at his own lower price — not Sara's. Confirm it, and settle.
+with a reason, and forfeit the deposit. The award does **not** move on by itself —
+the requirements send a defaulting winner to manual review. The screen shows Khalid
+as the suggested next bidder, at his own lower price — not Sara's — and two choices:
+**إحالة الترسية للمزايد التالي** or **إنهاء دون ترسية**. Refer it, then confirm it.
+
+> "The system names who is next. A person decides whether they get the land."
+
+### 6.2 Following the award up — `admin-user` (3 min)
+
+Open **متابعة الترسية**. The land price is paid outside the platform and the title
+passes at the notary; neither is integrated in the first phase, so this is where
+staff record them by hand — and nothing closes without a reference.
+
+1. Open Khalid's row → **احتساب التأمين المدفوع من الثمن** with the deposit's
+   gateway reference (the sandbox's payment panel shows it).
+2. **تسجيل السداد** for the balance, with a SADAD or transfer number. The remaining
+   figure drops to zero. Point out that an amount over the remainder is refused.
+3. Back on the committee tab, **اعتماد التسوية** is now enabled — it was disabled
+   while money was owed, because settling releases every other bidder's deposit.
+4. **بدء الإفراغ**, then **إكمال الإفراغ** with the new deed number.
+5. Below, **التأمينات غير المسوّاة** lists Sara's forfeited deposit and the losers'
+   refunds. Close each against its reference.
+
+An award past its payment deadline with money owed turns red as **متعثر — للمراجعة**.
+The platform does not act on it by itself; a person decides.
 
 ## 7. التقارير — `reporting-user` (5 min)
 

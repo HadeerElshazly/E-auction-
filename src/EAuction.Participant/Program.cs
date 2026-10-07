@@ -254,7 +254,7 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/terms", (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
     Mutate(f, auctionId, bidderId, ct,
-        (s, _, _) => s.AcceptTerms(DateTimeOffset.UtcNow), http))
+        (s, _, terms) => s.AcceptTerms(DateTimeOffset.UtcNow, terms.BookletDocumentId), http))
     .RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit-method", (
@@ -306,6 +306,89 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/revoke", (
         (s, bidder, terms) => s.Revoke(r.Reason, bidder, terms, DateTimeOffset.UtcNow),
         http, staffAction: true, audit: "RevokeEligibility", details: r.Reason))
     .RequireAuthorization(Policies.AuctionAdmin);
+
+app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/reject", (
+    HttpContext http, Guid auctionId, Guid bidderId, RevokeRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    Mutate(f, auctionId, bidderId, ct,
+        (s, _, _) => s.RejectBankGuarantee(r.Reason, DateTimeOffset.UtcNow),
+        // Audited like the acceptance: refusing a citizen's guarantee keeps them out
+        // of the auction until they find another, and the reason is what they will
+        // dispute.
+        http, staffAction: true, audit: "RejectBankGuarantee", details: r.Reason))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «صفحة شخصية لمتابعة الحالة» (الخاصية 09): every auction this bidder applied to, and
+// where each stands. Their own only — the subject must be the bidder asked about.
+app.MapGet("/bidders/{bidderId:guid}/subscriptions", async (
+    HttpContext http, Guid bidderId,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    if (http.User.SubjectId() != bidderId) return Results.Forbid();
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Subscriptions
+        .Where(s => s.BidderId == bidderId)
+        .OrderByDescending(s => s.CreatedAt)
+        .ToListAsync(ct);
+
+    return Results.Ok(new { items = rows.Select(SubscriptionResponse.From) });
+}).RequireAuthorization(Policies.Bidder);
+
+// Closing a deposit once the award is final: the refund made, the guarantee released,
+// the forfeit carried out — each against the reference that proves it (الخاصية 11).
+app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit/close", (
+    HttpContext http, Guid auctionId, Guid bidderId, CloseDepositRequest r,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    Mutate(f, auctionId, bidderId, ct,
+        (s, _, _) => s.CloseDeposit(r.Reference, http.User.SubjectId() ?? Guid.Empty,
+            DateTimeOffset.UtcNow),
+        http, staffAction: true, audit: "CloseDeposit", details: $"Reference {r.Reference}."))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «التأمينات غير المسواة» — every deposit, across auctions, that the award has
+// resolved and nobody has yet recorded as refunded, released or forfeited.
+app.MapGet("/deposits/unsettled", async (
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var rows = await db.Subscriptions
+        .Where(s => s.DepositResolvedAt != null && s.DepositClosedAt == null)
+        .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
+        .ToListAsync(ct);
+
+    return Results.Ok(new
+    {
+        items = rows
+            .Where(x => x.s.DepositSettlement is DepositSettlement.ToRefund
+                or DepositSettlement.ToRelease or DepositSettlement.ToForfeit)
+            .OrderBy(x => x.s.DepositResolvedAt)
+            .Select(x => ApplicationEntry.From(x.s, x.NameAr))
+    });
+}).RequireAuthorization(Policies.Reporting);
+
+// Every application to one auction, for the administrator reviewing them — not
+// only the eligible ones the clerk's roster shows. Names and the state of each
+// step; no national id and no payment references, which the review does not need.
+app.MapGet("/auctions/{auctionId:guid}/applications", async (
+    Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var rows = await db.Subscriptions
+        .Where(s => s.AuctionId == auctionId)
+        .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
+        .ToListAsync(ct);
+
+    return Results.Ok(new
+    {
+        items = rows
+            .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
+            .ThenBy(x => x.NameAr)
+            .Select(x => ApplicationEntry.From(x.s, x.NameAr))
+    });
+}).RequireAuthorization(Policies.AuctionAdmin);
 
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key", (
     HttpContext http, Guid auctionId, Guid bidderId,
@@ -534,6 +617,34 @@ public sealed record BidderResponse(
 /// <summary>One eligible bidder, as the clerk's terminal lists them.</summary>
 public sealed record RosterEntry(Guid BidderId, string NameAr, int PaddleNumber);
 
+public sealed record ApplicationEntry(
+    Guid BidderId, string NameAr, string Status,
+    string Eligibility, string? EligibilityReason,
+    DateTimeOffset? BookletPurchasedAt, bool BookletFree,
+    DateTimeOffset? TermsAcceptedAt, Guid? AcceptedBookletDocumentId,
+    string? DepositMethod, DateTimeOffset? DepositPaidAt,
+    Guid? GuaranteeDocumentId, DateTimeOffset? GuaranteeExpiresAt,
+    DateTimeOffset? EligibleAt,
+    Guid AuctionId,
+    // The gateway's reference for the deposit itself — what staff quote when they
+    // count it towards the winner's price.
+    string? DepositPaymentRef,
+    string DepositSettlement, DateTimeOffset? DepositClosedAt, string? DepositClosureReference)
+{
+    public static ApplicationEntry From(Subscription s, string nameAr) => new(
+        s.BidderId, nameAr, s.Status.ToString(),
+        s.Eligibility.State.ToString(), s.Eligibility.Reason,
+        s.BookletPurchasedAt, s.BookletPaymentRef == Subscription.FreeBookletRef,
+        s.TermsAcceptedAt, s.AcceptedBookletDocumentId,
+        s.DepositMethod?.ToString(), s.DepositPaidAt,
+        s.GuaranteeDocumentId, s.GuaranteeExpiresAt,
+        s.EligibleAt,
+        s.AuctionId, s.DepositPaymentRef,
+        s.DepositSettlement.ToString(), s.DepositClosedAt, s.DepositClosureReference);
+}
+
+public sealed record CloseDepositRequest(string Reference);
+
 /// <summary>
 /// Carries the two "requested at" timestamps and the last refusal as well as the
 /// status, because with payment asynchronous the status alone no longer tells a
@@ -544,11 +655,14 @@ public sealed record SubscriptionResponse(
     Guid Id, Guid AuctionId, Guid BidderId, string Status,
     DateTimeOffset? BookletRequestedAt,
     DateTimeOffset? BookletPurchasedAt, DateTimeOffset? TermsAcceptedAt,
+    Guid? AcceptedBookletDocumentId,
     string? DepositMethod,
     DateTimeOffset? DepositRequestedAt, DateTimeOffset? DepositPaidAt,
     Guid? GuaranteeDocumentId, DateTimeOffset? GuaranteeExpiresAt,
     DateTimeOffset? GuaranteeVerifiedAt,
     int KeyEpoch, DateTimeOffset? EligibleAt, string? RevocationReason,
+    string Eligibility, string? EligibilityReason, bool BookletFree,
+    string DepositSettlement,
     DateTimeOffset? DepositResolvedAt, bool DepositForfeited,
     string? PaymentFailurePurpose, string? PaymentFailureReason,
     DateTimeOffset? PaymentFailedAt)
@@ -556,9 +670,13 @@ public sealed record SubscriptionResponse(
     public static SubscriptionResponse From(Subscription s) => new(
         s.Id, s.AuctionId, s.BidderId, s.Status.ToString(),
         s.BookletRequestedAt, s.BookletPurchasedAt, s.TermsAcceptedAt,
+        s.AcceptedBookletDocumentId,
         s.DepositMethod?.ToString(), s.DepositRequestedAt, s.DepositPaidAt,
         s.GuaranteeDocumentId, s.GuaranteeExpiresAt, s.GuaranteeVerifiedAt,
         s.KeyEpoch, s.EligibleAt, s.RevocationReason,
+        s.Eligibility.State.ToString(), s.Eligibility.Reason,
+        s.BookletPaymentRef == Subscription.FreeBookletRef,
+        s.DepositSettlement.ToString(),
         s.DepositResolvedAt, s.DepositForfeited,
         s.PaymentFailurePurpose, s.PaymentFailureReason, s.PaymentFailedAt);
 }

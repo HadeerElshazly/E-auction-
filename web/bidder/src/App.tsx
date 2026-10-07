@@ -13,6 +13,8 @@ import type { AuctionDetail, AuctionSummary } from './types'
 import { Catalogue } from './Catalogue'
 import { AuctionPage } from './AuctionPage'
 import { Notifications } from './Notifications'
+import { Profile } from './Profile'
+import { MyApplications } from './MyApplications'
 
 
 export function App() {
@@ -24,6 +26,8 @@ export function App() {
   const [auctions, setAuctions] = useState<AuctionSummary[]>([])
   const [openAuction, setOpenAuction] = useState<AuctionDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showProfile, setShowProfile] = useState(false)
+  const [showApplications, setShowApplications] = useState(false)
 
   // Whether this page load followed a second-factor confirmation.
   //
@@ -47,6 +51,8 @@ export function App() {
     async (id: string) => {
       try {
         setOpenAuction(await publicClient.get<AuctionDetail>(`/auctions/${id}`))
+        setShowProfile(false)
+        setShowApplications(false)
         setError(null)
       } catch (e) {
         setError(describe(e))
@@ -108,6 +114,28 @@ export function App() {
         {session ? (
           <>
             {isBidder && <Notifications session={session} onOpen={(id) => void open(id)} />}
+            {isBidder && (
+              <button
+                onClick={() => {
+                  setOpenAuction(null)
+                  setShowProfile(false)
+                  setShowApplications(true)
+                }}
+              >
+                طلباتي
+              </button>
+            )}
+            {isBidder && (
+              <button
+                onClick={() => {
+                  setOpenAuction(null)
+                  setShowApplications(false)
+                  setShowProfile(true)
+                }}
+              >
+                ملفي
+              </button>
+            )}
             <span className="who">
               {session.nameAr ?? session.name}
               {session.nationalId && <span className="ltr"> · {session.nationalId}</span>}
@@ -138,7 +166,16 @@ export function App() {
           </div>
         )}
 
-        {openAuction ? (
+        {showApplications && session ? (
+          <MyApplications
+            session={session}
+            auctions={auctions}
+            onOpen={(id) => void open(id)}
+            onBack={() => setShowApplications(false)}
+          />
+        ) : showProfile && session ? (
+          <Profile session={session} onBack={() => setShowProfile(false)} />
+        ) : openAuction ? (
           <AuctionPage
             auction={openAuction}
             session={session}
