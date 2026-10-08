@@ -1,0 +1,408 @@
+# Kafka, PostgreSQL, Keycloak and MinIO for the `e-auctions` demo namespace.
+#
+# Deliberately NOT part of the product chart. In a real install the municipality
+# supplies these, and a chart that shipped its own would be a chart that quietly
+# replaced the client's hardened Postgres with an unbacked one. They live here,
+# under deploy/staging, so that the thing being demonstrated is still the same
+# chart the client would deploy.
+#
+# Three constraints from the namespace, all of them load-bearing:
+#
+#   * Every container declares CPU and memory limits. The LimitRange hands any
+#     container that does not a 1-CPU limit; sixteen of those against a 6-core
+#     cap means nothing schedules. Totals are in values-staging.yaml.
+#   * No Strimzi, no operator, no CRD. The archive tenant runs a Strimzi
+#     operator and a second one would collide with their CRDs — so this is a
+#     plain single-broker Kafka in KRaft mode, which needs no operator at all.
+#   * Pod Security `baseline`: no privileged containers, no hostPath, no
+#     hostPorts, no hostNetwork, no hostPID/hostIPC. Nothing below uses any.
+#
+# Storage is the default `local-path` StorageClass with WaitForFirstConsumer, so
+# each PVC binds when its pod mounts it. Single-node, so ReadWriteOnce is fine
+# and there is nowhere else for a pod to be rescheduled to anyway.
+#
+# Apply before the Helm release: the chart's pre-install hooks create topics and
+# run migrations, and both need these up first.
+---
+# --- PostgreSQL ------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    app.kubernetes.io/part-of: e-auctions-dependencies
+data:
+  # Runs once, on the initialisation of an empty data directory. POSTGRES_DB
+  # creates eauction_admin; these are the other four, plus `eauction` — which is
+  # the fallback database name compiled into the services when no connection
+  # string is configured. It exists so a misconfigured service fails on a
+  # missing table rather than on a missing database, which is a far clearer
+  # error to read in a pod log.
+  01-databases.sql: |
+    CREATE DATABASE eauction OWNER eauction;
+    CREATE DATABASE eauction_participant OWNER eauction;
+    CREATE DATABASE eauction_notifications OWNER eauction;
+    CREATE DATABASE eauction_audit OWNER eauction;
+    CREATE DATABASE eauction_reporting OWNER eauction;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      name: postgres
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: one ReadWriteOnce volume on one node cannot
+    # be mounted by the old and new pod at once, so a rolling update deadlocks.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70          # the postgres user in the alpine image
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: eauction-postgres, key: username } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: eauction-postgres, key: password } }
+            - name: POSTGRES_DB
+              value: eauction_admin
+            - name: PGDATA
+              # A subdirectory, not the mount point: initdb refuses a directory
+              # that already holds lost+found.
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "eauction", "-d", "eauction_admin"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+        - name: init
+          configMap:
+            name: postgres-init
+---
+# --- Kafka (single broker, KRaft) -----------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9092
+      targetPort: kafka
+      name: kafka
+  selector:
+    app: kafka
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: kafka
+          image: apache/kafka:3.8.1
+          ports:
+            - containerPort: 9092
+              name: kafka
+          env:
+            # KRaft: this one pod is both controller and broker, so no
+            # ZooKeeper and no operator.
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@localhost:9093
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:9092,CONTROLLER://:9093
+            - name: KAFKA_ADVERTISED_LISTENERS
+              # The in-cluster DNS name, because this is what the clients
+              # receive in the metadata response and then dial. `localhost`
+              # here is the classic failure: the broker accepts the first
+              # connection and every client then tries to reach itself.
+              value: PLAINTEXT://kafka.e-auctions.svc.cluster.local:9092
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            # One broker, so every replication factor is 1. Left at the default
+            # 3 the internal topics fail to create and the broker never
+            # becomes ready.
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            # The provisioning hook creates every topic with the cleanup policy
+            # it needs. Auto-creation would make a typo in a topic name look
+            # like a working system with a silently empty consumer.
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data
+            - name: CLUSTER_ID
+              value: e-auctions-staging-01
+            - name: KAFKA_HEAP_OPTS
+              value: -Xms512m -Xmx1g
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka
+          readinessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 400m, memory: 1Gi }
+            limits: { cpu: 800m, memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kafka-data
+---
+# --- Keycloak --------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: http
+      nodePort: 30082
+      name: http
+  selector:
+    app: keycloak
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.0
+          # start-dev, not start: no TLS, no production hostname checks, and an
+          # in-memory H2 database. Correct for a firewalled demo and wrong for
+          # anything else — a realm configured here does not survive a restart,
+          # which is why the realm is imported on every boot below.
+          args: ["start-dev", "--import-realm"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom: { secretKeyRef: { name: eauction-keycloak, key: admin-username } }
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: eauction-keycloak, key: admin-password } }
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            # The issuer the services validate tokens against. It must be the
+            # string in the token, so it is the in-cluster name — and the
+            # browser reaches the same Keycloak on the NodePort above, which is
+            # why KC_HOSTNAME_STRICT is off.
+            - name: KC_HOSTNAME
+              value: http://keycloak.e-auctions.svc.cluster.local:8080
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /realms/eauction
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            requests: { cpu: 300m, memory: 768Mi }
+            limits: { cpu: 600m, memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: realm
+          configMap:
+            # Created by the workflow from deploy/keycloak/realm-export.json,
+            # rather than inlined here: the realm is the same file the local
+            # stack uses, and two copies would drift.
+            name: keycloak-realm
+---
+# --- MinIO -----------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+      targetPort: api
+      name: api
+    - port: 9001
+      targetPort: console
+      name: console
+  selector:
+    app: minio
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: { secretKeyRef: { name: eauction-object-store, key: access-key } }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: eauction-object-store, key: secret-key } }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 250m, memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-data
