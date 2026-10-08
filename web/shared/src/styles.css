@@ -1513,3 +1513,15 @@ label.button.disabled { opacity: .55; pointer-events: none; }
 
 /* «قرار الاعتماد» in the auction's side box. */
 .review-decision { display: grid; gap: 8px; margin-top: 12px; }
+
+/* خطاب الترسية — the letter, and only the letter, when printed. */
+.modal.narrow { width: min(560px, 100%); }
+.print-letter { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 28px; line-height: 2; }
+.print-letter h2 { margin: 6px 0 18px; }
+.print-letter .signature { margin-top: 36px; }
+@media print {
+  body * { visibility: hidden; }
+  .print-letter, .print-letter * { visibility: visible; }
+  .print-letter { position: absolute; inset: 0; border: 0; font-size: 18px; }
+  .no-print { display: none !important; }
+}

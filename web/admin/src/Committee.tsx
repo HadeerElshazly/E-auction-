@@ -52,6 +52,10 @@ export function Committee({
   const [refusing, setRefusing] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [bidsFor, setBidsFor] = useState<{ id: string; nameAr: string } | null>(null)
+  // The two dialogs of a card: the award letter to print, the signed one to attach.
+  const [letterFor, setLetterFor] = useState<Awarded | null>(null)
+  const [signedFor, setSignedFor] = useState<Awarded | null>(null)
+  const documents = useMemo(() => api({ baseUrl: config.documentsApi, session }), [session])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Both lists paged by the auction service, ten at a time.
@@ -217,23 +221,22 @@ export function Committee({
               <button className="small" onClick={() => setBidsFor({ id: a.auctionId, nameAr: a.nameAr })}>
                 سجل العروض
               </button>
-              {a.status === 'Awarded' && !w.letterDocumentId && (
-                <button
-                  className="small"
-                  disabled={busy}
-                  onClick={() => void run(() => admin.post(`${base}/letter`, { documentId: crypto.randomUUID() }))}
-                >
-                  <Icon name="file" size={15} /> إصدار خطاب الترسية
-                </button>
-              )}
-              {a.status === 'Awarded' && w.letterDocumentId && !w.signedLetterDocumentId && (
-                <button
-                  className="small"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(() => admin.post(`${base}/signed-letter`, { documentId: crypto.randomUUID() }))
-                  }
-                >
+              <button
+                className="small"
+                disabled={busy}
+                onClick={() =>
+                  // Issued the first time it is opened; after that it is only shown.
+                  w.letterDocumentId || a.status !== 'Awarded'
+                    ? setLetterFor(a)
+                    : void run(() => admin.post(`${base}/letter`, { documentId: crypto.randomUUID() })).then(() =>
+                        setLetterFor(a),
+                      )
+                }
+              >
+                <Icon name="file" size={15} /> خطاب الترسية
+              </button>
+              {a.status === 'Awarded' && !w.signedLetterDocumentId && (
+                <button className="small" disabled={busy} onClick={() => setSignedFor(a)}>
                   رفع الخطاب الموقع
                 </button>
               )}
@@ -262,6 +265,28 @@ export function Committee({
       })}
       <Pager page={awardedPage.page} total={totals.awarded} noun="ترسية" onPage={awardedPage.setPage} />
 
+      {letterFor && (
+        <AwardLetter entry={letterFor} winner={nameOf(letterFor.award.bidderId)} onClose={() => setLetterFor(null)} />
+      )}
+      {signedFor && (
+        <SignedLetter
+          busy={busy}
+          onClose={() => setSignedFor(null)}
+          onSave={(file) =>
+            void run(async () => {
+              // The signed letter is the winner's to read, through a grant once it is
+              // attached — not a public document. Without a file, a placeholder stands
+              // in for it, as the prototype's demonstration does.
+              const documentId = file
+                ? (await documents.upload<{ id: string }>('/documents', file, { access: 'Restricted' })).id
+                : crypto.randomUUID()
+              await admin.post(`/auctions/${signedFor.auctionId}/award/signed-letter`, { documentId })
+              setSignedFor(null)
+            })
+          }
+        />
+      )}
+
       {bidsFor && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setBidsFor(null)}>
           <div className="modal wide-modal" onClick={(e) => e.stopPropagation()}>
@@ -285,5 +310,85 @@ export function Committee({
         </div>
       )}
     </>
+  )
+}
+
+/** خطاب الترسية — the letter as the committee issues it, ready to print. */
+function AwardLetter({ entry, winner, onClose }: { entry: Awarded; winner: string; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="خطاب الترسية" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head no-print">
+          <div className="grow">
+            <h2>خطاب الترسية</h2>
+          </div>
+          <button className="icon-btn" aria-label="إغلاق" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        <div className="print-letter">
+          <div className="eyebrow">أمانة المنطقة — لجنة الترسية</div>
+          <h2>خطاب ترسية {entry.nameAr}</h2>
+          <p>إلى المزايد / {winner}</p>
+          <p>
+            أقرّت لجنة الترسية ترسية {entry.nameAr} بقيمة{' '}
+            <bdi className="num">{riyals(entry.award.amountMinorUnits, 'ar')}</bdi> ريال سعودي.
+          </p>
+          <p>يرجى استكمال إجراءات السداد خلال المهلة المحددة حسب الشروط المعتمدة.</p>
+          <p className="signature">ممثل لجنة الترسية: __________________</p>
+        </div>
+        <div className="row no-print" style={{ justifyContent: 'flex-end', marginTop: 16, gap: 8 }}>
+          <button onClick={onClose}>إغلاق</button>
+          <button className="primary" onClick={() => window.print()}>
+            <Icon name="download" size={16} /> طباعة الخطاب
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** إرفاق الخطاب الموقع — the prototype's dialog: a file, or none for a placeholder. */
+function SignedLetter({
+  busy,
+  onClose,
+  onSave,
+}: {
+  busy: boolean
+  onClose: () => void
+  onSave: (file: File | null) => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const tooBig = !!file && file.size > 5 * 1024 * 1024
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="إرفاق الخطاب الموقع" onClick={onClose}>
+      <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="grow">
+            <h2>إرفاق الخطاب الموقع</h2>
+          </div>
+          <button className="icon-btn" aria-label="إغلاق" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        <label style={{ display: 'block' }}>
+          <span className="strong">الخطاب</span>
+          <input
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg"
+            aria-label="ملف الخطاب الموقع"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            style={{ width: '100%', marginTop: 8 }}
+          />
+          <small className="muted">حتى 5 ميجابايت. اتركه فارغاً لاستخدام خطاب افتراضي.</small>
+        </label>
+        {tooBig && <p className="notice error small">حجم الملف يتجاوز 5 ميجابايت.</p>}
+        <div className="row" style={{ marginTop: 18 }}>
+          <button className="primary" disabled={busy || tooBig} onClick={() => onSave(file)}>
+            حفظ الخطاب
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
