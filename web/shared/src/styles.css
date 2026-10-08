@@ -1558,3 +1558,13 @@ label.button.disabled { opacity: .55; pointer-events: none; }
 .monitor-card.clickable { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
 .monitor-card.clickable:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(0,0,0,.06); }
 .monitor-card.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Side box: the price now beside the opening price. */
+.price-pair { display: grid; grid-template-columns: 1.3fr 1fr; gap: 8px; margin: 10px 0 12px; }
+.price-pair > div { display: grid; gap: 2px; align-content: start; padding: 10px 12px;
+  border: 1px solid var(--line, #e5e7eb); border-radius: var(--radius-sm); }
+.price-pair small { color: var(--muted, #6b7280); font-size: 12px; }
+.price-pair b { font-size: 17px; }
+.price-pair .now { background: var(--accent-weak); border-color: transparent; }
+.price-pair .now b { font-size: 21px; color: var(--accent-dark); }
+.price-pair b.box-price { margin: 0; }

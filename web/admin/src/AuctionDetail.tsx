@@ -9,7 +9,6 @@ import {
   landUseAr,
   api,
   config,
-  riyals,
   sar,
   timestamp,
   when,
@@ -60,7 +59,7 @@ export function AuctionDetail({
   onOpen: (id: string) => void
 }) {
   const l = label(auction.status)
-  const figures = usePublicPrice(auction)
+  const figures = usePublicPrice(auction, session)
   const leaderId = useLeaders(session)[auction.id]
   const award = auction.currentAward ?? auction.followUpAward
   const live = auction.status === 'Live'
@@ -104,7 +103,8 @@ export function AuctionDetail({
       .get<{ read: number }>(`/audit/auctions/${auction.id}/bids?take=1`)
       .then((r) => setBidCount(r.read))
       .catch(() => setBidCount(null))
-  }, [auction.id, auction.status, session])
+    // Re-read whenever the price moves: a new price is a new bid.
+  }, [auction.id, auction.status, session, figures?.priceMinorUnits])
 
   const price = figures?.priceMinorUnits ?? null
   const priceLabel = live
@@ -164,7 +164,7 @@ export function AuctionDetail({
                 <h2>سجل المزايدات</h2>
                 {bidCount != null && <span className="muted">{bidCount} مزايدة</span>}
               </div>
-              <BidHistory session={session} auctionId={auction.id} withDecisions={false} live={live} />
+              <BidHistory session={session} auctionId={auction.id} withDecisions={false} live={live} refreshOn={figures?.priceMinorUnits} />
             </>
           )}
           {current === 'inquiries' && <AuctionQuestions auctionId={auction.id} session={session} />}
@@ -202,12 +202,20 @@ export function AuctionDetail({
       <aside>
         <div className="card auction-box" data-testid="auction-box">
           <div className="kv">
-            <span>{priceLabel}</span>
+            <span>حالة المزاد</span>
             <span className={`pill ${l.tone}`}>{l.ar}</span>
           </div>
-          <div className="summary-price">
-            <small>ر.س</small>
-            <span className="num">{riyals(shown, 'ar')}</span>
+          {/* The price now and where it started, side by side. */}
+          <div className="price-pair">
+            <div className="now">
+              <small>{priceLabel === 'سعر البداية' ? 'السعر الحالي' : priceLabel}</small>
+              <b className="num">{sar(shown, 'ar')}</b>
+              {price == null && !award && <small className="muted">لا مزايدات بعد</small>}
+            </div>
+            <div>
+              <small>سعر البداية</small>
+              <b className="num">{sar(auction.openingPriceMinorUnits, 'ar')}</b>
+            </div>
           </div>
 
           {(auction.status === 'Scheduled' || auction.status === 'Approved') && auction.startsAt && (

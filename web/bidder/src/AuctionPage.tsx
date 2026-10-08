@@ -386,10 +386,21 @@ export function AuctionPage({
         <aside>
           <div className="card auction-box" data-testid="auction-box">
             <div className="kv">
-              <span>{priceLabel}</span>
+              <span>حالة المزاد</span>
               <span className={`pill ${status.tone}`}>{status.ar}</span>
             </div>
-            <div className="box-price num">{shownPrice == null ? <Locked /> : sar(shownPrice, 'ar')}</div>
+            {/* The price now and where it started, side by side. */}
+            <div className="price-pair">
+              <div className="now">
+                <small>{priceLabel === 'سعر البداية' ? 'السعر الحالي' : priceLabel}</small>
+                <b className="num box-price">{shownPrice == null ? <Locked /> : sar(shownPrice, 'ar')}</b>
+                {live && price?.priceMinorUnits == null && <small className="muted">لا مزايدات بعد</small>}
+              </div>
+              <div>
+                <small>سعر البداية</small>
+                <b className="num">{auction.openingPriceMinorUnits == null ? <Locked /> : sar(auction.openingPriceMinorUnits, 'ar')}</b>
+              </div>
+            </div>
             {price?.leaderLabel && (
               <div className="small">
                 {price.leaderIsYou ? (

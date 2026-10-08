@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, config, parseRiyals, riyals, sar, when, type Api, type Session } from '@eauction/shared'
+import { api, config, parseRiyals, readEventStream, riyals, sar, when, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
@@ -191,7 +191,7 @@ export interface PublicPrice {
  * portals read — for an auction that has opened. Polled while it is live; read
  * once after that, when they no longer move.
  */
-export function usePublicPrice(auction: Auction): PublicPrice | null {
+export function usePublicPrice(auction: Auction, session?: Session | null): PublicPrice | null {
   const [figures, setFigures] = useState<PublicPrice | null>(null)
   const opened = !['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Cancelled']
     .includes(auction.status)
@@ -216,6 +216,27 @@ export function usePublicPrice(auction: Auction): PublicPrice | null {
       if (t) window.clearInterval(t)
     }
   }, [auction.id, opened, live])
+
+  // While live, also follow the pushed stream: a bid shows the moment the service
+  // has it, not at the next poll. The poll above stays as the fallback.
+  useEffect(() => {
+    if (!live || !session) return
+    const controller = new AbortController()
+    void readEventStream({
+      url: `${config.queryApi}/auctions/${auction.id}/stream`,
+      token: session.accessToken,
+      signal: controller.signal,
+      onEvent: (event, data) => {
+        if (event !== 'snapshot' && event !== 'price') return
+        try {
+          setFigures(JSON.parse(data) as PublicPrice)
+        } catch {
+          // A frame this page cannot read; the poll still brings the figures.
+        }
+      },
+    })
+    return () => controller.abort()
+  }, [auction.id, live, session])
 
   return figures
 }

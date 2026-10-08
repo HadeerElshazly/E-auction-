@@ -236,6 +236,7 @@ export function BidHistory({
   preview,
   onOpenFull,
   live = false,
+  refreshOn,
 }: {
   session: Session
   auctionId: string
@@ -249,6 +250,8 @@ export function BidHistory({
   onOpenFull?: () => void
   /** While the auction runs: re-read the log every few seconds so new bids appear. */
   live?: boolean
+  /** Re-read at once when this changes — the live price, so a new bid shows as it lands. */
+  refreshOn?: unknown
 }) {
   const audit = useMemo(() => api({ baseUrl: config.auditApi, session }), [session])
   const [page, setPage] = useState<BidHistoryPage | null>(null)
@@ -284,6 +287,15 @@ export function BidHistory({
     }, 3000)
     return () => window.clearInterval(t)
   }, [audit, auctionId, live, paging.query])
+
+  useEffect(() => {
+    if (refreshOn === undefined) return
+    audit
+      .get<BidHistoryPage>(`/audit/auctions/${auctionId}/bids?${paging.query}`)
+      .then(setPage)
+      .catch(() => undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshOn])
 
   const nameOf = (id: string) => bidder(id)?.nameAr ?? `${id.slice(0, 8)}…`
   const actorOf = (payload?: string) => {
