@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, when, type Session } from '@eauction/shared'
+import { ApiError, Pager, api, config, usePage, when, type Session } from '@eauction/shared'
 import type { Auction } from './types'
 
 /** One bidder's application, from the participant service's review list. */
@@ -63,15 +63,22 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
   const [refusing, setRefusing] = useState<{ bidderId: string; kind: 'guarantee' | 'revoke' } | null>(null)
   const [reason, setReason] = useState('')
 
+  const paging = usePage()
+  const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState<Record<string, number>>({})
   const load = useCallback(async () => {
     try {
-      const r = await participant.get<{ items: Application[] }>(`/auctions/${auction.id}/applications`)
+      const r = await participant.get<{ items: Application[]; total: number; counts: Record<string, number> }>(
+        `/auctions/${auction.id}/applications?${paging.query}`,
+      )
       setItems(r.items)
+      setTotal(r.total)
+      setCounts(r.counts)
       setLoadError(null)
     } catch (e) {
       setLoadError(e instanceof ApiError ? `تعذّر تحميل المتقدّمين (${e.status}).` : String(e))
     }
-  }, [participant, auction.id])
+  }, [participant, auction.id, paging.query])
 
   useEffect(() => {
     if (!reviewable.has(auction.status)) void load()
@@ -90,10 +97,6 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
       await load()
     })
 
-  const counts = (items ?? []).reduce<Record<string, number>>((acc, a) => {
-    acc[a.eligibility] = (acc[a.eligibility] ?? 0) + 1
-    return acc
-  }, {})
 
   return (
     <div className="card">
@@ -101,7 +104,7 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
         <h2>المتقدّمون</h2>
         {items && (
           <span className="pill teal plain">
-            {items.length} متقدّم
+            {total} متقدّم
             {counts.UnderReview ? ` · ${counts.UnderReview} قيد المراجعة` : ''}
           </span>
         )}
@@ -281,6 +284,7 @@ export function Applicants({ auction, session, busy, onAct }: Props) {
               })}
             </tbody>
           </table>
+          <Pager page={paging.page} total={total} noun="متقدّم" onPage={paging.setPage} />
         </div>
       )}
     </div>

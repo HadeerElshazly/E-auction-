@@ -9,6 +9,9 @@ import type { Session } from './auth'
  * says "something went wrong" when the service said "BelowOpeningPrice" is a portal
  * whose users cannot tell a mistake from an outage.
  */
+/** Raised on the window when a signed-in request comes back 401. */
+export const SESSION_EXPIRED = 'eauction:session-expired'
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -86,6 +89,11 @@ async function send<T>(
   const parsed = text ? safeJson(text) : null
 
   if (!response.ok) {
+    // A signed-in request refused for its token: the session is over, whatever the
+    // portal thought. Said once, here, so every screen ends up at the sign-in
+    // button rather than at an error with no way forward (useSession listens).
+    if (response.status === 401 && session) window.dispatchEvent(new Event(SESSION_EXPIRED))
+
     const reason = typeof parsed?.reason === 'string' ? parsed.reason : null
     const problems = Array.isArray(parsed?.problems) ? (parsed.problems as string[]) : []
     throw new ApiError(

@@ -324,10 +324,11 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/guarantee/
 // «صفحة شخصية لمتابعة الحالة» (الخاصية 09): every auction this bidder applied to, and
 // where each stands. Their own only — the subject must be the bidder asked about.
 app.MapGet("/bidders/{bidderId:guid}/subscriptions", async (
-    HttpContext http, Guid bidderId, string? stage, string? eligibility, string? q,
+    HttpContext http, Guid bidderId, string? stage, string? eligibility, string? q, int? skip, int? take,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
     if (http.User.SubjectId() != bidderId) return Results.Forbid();
+    var slice = Slice.From(skip, take, Slice.MaxTake);
 
     await using var db = await f.CreateDbContextAsync(ct);
 
@@ -376,7 +377,7 @@ app.MapGet("/bidders/{bidderId:guid}/subscriptions", async (
             k => k, k => rows.Count(x => Matches(x.s, x.t, wantedStage, k == "all" ? null : k))),
     };
 
-    return Results.Ok(new { items, counts });
+    return Results.Ok(new { total = items.Length, skip = slice.Skip, take = slice.Take, items = slice.Of(items), counts });
 }).RequireAuthorization(Policies.Bidder);
 
 // Closing a deposit once the award is final: the refund made, the guarantee released,
@@ -393,22 +394,34 @@ app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/deposit/cl
 // «التأمينات غير المسواة» — every deposit, across auctions, that the award has
 // resolved and nobody has yet recorded as refunded, released or forfeited.
 app.MapGet("/deposits/unsettled", async (
+    int? skip, int? take,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
 
     var rows = await db.Subscriptions
         .Where(s => s.DepositResolvedAt != null && s.DepositClosedAt == null)
         .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
+        .Join(db.AuctionTerms, x => x.s.AuctionId, t => t.AuctionId, (x, t) => new { x.s, x.NameAr, Auction = t.NameAr })
         .ToListAsync(ct);
+
+    // The settlement state is derived (Subscription.DepositSettlement), so the
+    // filter runs here, on the server, before the page is cut.
+    var open = rows
+        .Where(x => x.s.DepositSettlement is DepositSettlement.ToRefund
+            or DepositSettlement.ToRelease or DepositSettlement.ToForfeit)
+        .OrderBy(x => x.s.DepositResolvedAt)
+        .ToList();
 
     return Results.Ok(new
     {
-        items = rows
-            .Where(x => x.s.DepositSettlement is DepositSettlement.ToRefund
-                or DepositSettlement.ToRelease or DepositSettlement.ToForfeit)
-            .OrderBy(x => x.s.DepositResolvedAt)
-            .Select(x => ApplicationEntry.From(x.s, x.NameAr))
+        total = open.Count,
+        skip = slice.Skip,
+        take = slice.Take,
+        // The auction's name with each row, so the screen needs no second list to
+        // say which auction a deposit belongs to.
+        items = slice.Of(open).Select(x => new { application = ApplicationEntry.From(x.s, x.NameAr), auctionNameAr = x.Auction }),
     });
 }).RequireAuthorization(Policies.Reporting);
 
@@ -416,8 +429,9 @@ app.MapGet("/deposits/unsettled", async (
 // only the eligible ones the clerk's roster shows. Names and the state of each
 // step; no national id and no payment references, which the review does not need.
 app.MapGet("/auctions/{auctionId:guid}/applications", async (
-    Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    Guid auctionId, int? skip, int? take, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
 
     var rows = await db.Subscriptions
@@ -425,12 +439,18 @@ app.MapGet("/auctions/{auctionId:guid}/applications", async (
         .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
         .ToListAsync(ct);
 
+    var ordered = rows
+        .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
+        .ThenBy(x => x.NameAr)
+        .ToList();
     return Results.Ok(new
     {
-        items = rows
-            .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
-            .ThenBy(x => x.NameAr)
-            .Select(x => ApplicationEntry.From(x.s, x.NameAr))
+        total = ordered.Count,
+        skip = slice.Skip,
+        take = slice.Take,
+        items = slice.Of(ordered).Select(x => ApplicationEntry.From(x.s, x.NameAr)),
+        // By standing, over every application and not this page.
+        counts = ordered.GroupBy(x => x.s.Eligibility.State.ToString()).ToDictionary(g => g.Key, g => g.Count()),
     });
 }).RequireAuthorization(Policies.AuctionAdmin);
 
@@ -438,27 +458,42 @@ app.MapGet("/auctions/{auctionId:guid}/applications", async (
 // queue: those waiting on a decision first. Eligibility is derived, not stored, so
 // the filter and the counts are applied here rather than in SQL.
 app.MapGet("/applications", async (
-    string? eligibility, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    string? eligibility, string? q, int? skip, int? take,
+    IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
     var rows = await db.Subscriptions
         .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
         .Join(db.AuctionTerms, x => x.s.AuctionId, t => t.AuctionId, (x, t) => new { x.s, x.NameAr, Auction = t.NameAr })
         .ToListAsync(ct);
 
+    // Searched by bidder or auction name, with the same Arabic folding as «طلباتي».
+    var needle = MyApplications.Normalise(q);
+    rows = rows
+        .Where(x => needle.Length == 0
+            || MyApplications.Normalise(x.NameAr).Contains(needle)
+            || MyApplications.Normalise(x.Auction).Contains(needle))
+        .ToList();
+
     var wanted = MyApplications.Standing(eligibility);
     var counts = MyApplications.StandingKeys.ToDictionary(
         k => k, k => rows.Count(x => k == "all" || x.s.Eligibility.State.ToString() == k));
 
+    var matching = rows
+        .Where(x => wanted is null || x.s.Eligibility.State.ToString() == wanted)
+        .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
+        .ThenByDescending(x => x.s.CreatedAt)
+        .ToList();
+
     return Results.Ok(new
     {
         counts,
-        items = rows
-            .Where(x => wanted is null || x.s.Eligibility.State.ToString() == wanted)
-            .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
-            .ThenByDescending(x => x.s.CreatedAt)
-            .Take(300)
-            .Select(x => new { application = ApplicationEntry.From(x.s, x.NameAr), auctionNameAr = x.Auction })
+        total = matching.Count,
+        skip = slice.Skip,
+        take = slice.Take,
+        items = slice.Of(matching)
+            .Select(x => new { application = ApplicationEntry.From(x.s, x.NameAr), auctionNameAr = x.Auction }),
     });
 }).RequireAuthorization(Policies.AuctionAdmin);
 
@@ -678,20 +713,25 @@ app.MapGet("/auctions/{auctionId:guid}/inquiries/mine", async (
 // The bidder's own questions across every auction, newest first, with the auction's
 // name — «الاستفسارات» in the bidder's workspace.
 app.MapGet("/inquiries/mine", async (
-    HttpContext http, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    HttpContext http, int? skip, int? take, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
     var subject = http.User.SubjectId();
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
-    var rows = await db.Inquiries.AsNoTracking()
-        .Where(i => i.BidderId == subject)
+    var mine = db.Inquiries.AsNoTracking().Where(i => i.BidderId == subject);
+    var total = await mine.CountAsync(ct);
+    var rows = await mine
         .OrderByDescending(i => i.AskedAt)
-        .Take(200)
+        .Skip(slice.Skip).Take(slice.Take)
         .ToListAsync(ct);
     var names = await db.AuctionTerms.AsNoTracking()
         .Where(t => rows.Select(r => r.AuctionId).Contains(t.AuctionId))
         .ToDictionaryAsync(t => t.AuctionId, t => t.NameAr, ct);
     return Results.Ok(new
     {
+        total,
+        skip = slice.Skip,
+        take = slice.Take,
         items = rows.Select(i => new { inquiry = InquiryResponse.Mine(i), auctionNameAr = names.GetValueOrDefault(i.AuctionId) })
     });
 }).RequireAuthorization(Policies.Bidder);
@@ -699,18 +739,20 @@ app.MapGet("/inquiries/mine", async (
 // Staff: every question, filtered. The inquiries desk works them; administrators and
 // the committee may read them — only the desk replies or publishes.
 app.MapGet("/inquiries", async (
-    string? status, string? clarification, Guid? auctionId,
+    string? status, string? clarification, Guid? auctionId, int? skip, int? take,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
     var query = db.Inquiries.AsNoTracking();
     if (Enum.TryParse<InquiryStatus>(status, true, out var s)) query = query.Where(i => i.Status == s);
     if (Enum.TryParse<ClarificationStatus>(clarification, true, out var c)) query = query.Where(i => i.Clarification == c);
     if (auctionId is not null) query = query.Where(i => i.AuctionId == auctionId);
 
+    var total = await query.CountAsync(ct);
     var rows = await query
         .OrderBy(i => i.Status).ThenByDescending(i => i.AskedAt)
-        .Take(200)
+        .Skip(slice.Skip).Take(slice.Take)
         .Join(db.Bidders, i => i.BidderId, b => b.Id, (i, b) => new { i, b.NameAr })
         .ToListAsync(ct);
     var auctions = await db.AuctionTerms.AsNoTracking()
@@ -723,6 +765,9 @@ app.MapGet("/inquiries", async (
 
     return Results.Ok(new
     {
+        total,
+        skip = slice.Skip,
+        take = slice.Take,
         items = rows.Select(x => InquiryResponse.ForStaff(
             x.i, x.NameAr, auctions.GetValueOrDefault(x.i.AuctionId))),
         counts = new

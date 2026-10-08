@@ -161,8 +161,9 @@ app.MapGet("/audit/system", async (
 // Staff who decide or check the result read it: the auditor, administrators and
 // the award committee.
 app.MapGet("/audit/auctions/{auctionId:guid}/bids", async (
-    Guid auctionId, IBidLog log, IDbContextFactory<AuditDbContext> f, CancellationToken ct) =>
+    Guid auctionId, int? skip, int? take, IBidLog log, IDbContextFactory<AuditDbContext> f, CancellationToken ct) =>
 {
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
     var refusals = await db.SystemEvents.AsNoTracking()
         .Where(e => e.AuctionId == auctionId && e.Kind == SystemEventKinds.BidRejected && e.ClientBidId != null)
@@ -204,7 +205,12 @@ app.MapGet("/audit/auctions/{auctionId:guid}/bids", async (
         acceptedCount = accepted.Count,
         rejectedCount = bids.Count - accepted.Count,
         leader = accepted.Count == 0 ? null : accepted[^1],
-        items = bids,
+        // The counts above are over every bid; the rows are one page of them, the
+        // latest first — what a reviewer looks at before scrolling back.
+        total = bids.Count,
+        skip = slice.Skip,
+        take = slice.Take,
+        items = slice.Of(Enumerable.Reverse(bids)),
     });
 }).RequireAuthorization(p => p.RequireRole(Roles.Auditor, Roles.AuctionAdmin, Roles.AwardCommittee));
 

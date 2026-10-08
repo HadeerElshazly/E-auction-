@@ -64,6 +64,7 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             e.Property(x => x.PlotNumber).HasMaxLength(100).IsRequired();
             e.Property(x => x.StreetWidthMeters).HasPrecision(8, 2);
             e.Property(x => x.FrontageMeters).HasPrecision(8, 2);
+            e.Property(x => x.Facing).HasConversion<string>().HasMaxLength(20);
             // By name: a stored number would mean something else the day the list is reordered.
             e.Property(x => x.LandUse).HasConversion<string>().HasMaxLength(30);
             e.Property(x => x.AreaSqm).HasPrecision(18, 2);

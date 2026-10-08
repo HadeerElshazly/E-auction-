@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ApiError, PageHead, Stats, api, config, when, type Session } from '@eauction/shared'
+import { ApiError, PageHead, Pager, Stats, api, config, usePage, when, type Session } from '@eauction/shared'
 import type { AuctionSummary, Subscription, WinnerAward } from './types'
 import { statusAr } from './Catalogue'
 
@@ -17,6 +17,7 @@ type StageKey = 'all' | 'live' | 'upcoming' | 'finished' | 'won'
 
 /** The participant service's answer: the filtered rows and each chip's count. */
 interface ApplicationsPage {
+  total: number
   items: Array<{
     subscription: Subscription
     auctionNameAr: string | null
@@ -84,6 +85,8 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
   const [page, setPage] = useState<ApplicationsPage | null>(null)
   const [total, setTotal] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const paging = usePage()
+  useEffect(() => paging.setPage(0), [stage, standing, debounced])
 
   // The search goes to the server a moment after typing stops, not per keystroke.
   useEffect(() => {
@@ -96,20 +99,19 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
     if (stage !== 'all') params.set('stage', stage)
     if (standing !== 'all') params.set('eligibility', standing)
     if (debounced) params.set('q', debounced)
-    const qs = params.toString()
     participant
-      .get<ApplicationsPage>(`/bidders/${session.subject}/subscriptions${qs ? `?${qs}` : ''}`)
+      .get<ApplicationsPage>(`/bidders/${session.subject}/subscriptions?${params.toString()}&${paging.query}`)
       .then((r) => {
         setPage(r)
         setError(null)
         // The unfiltered total, for the heading and the empty states.
-        if (stage === 'all' && standing === 'all' && !debounced) setTotal(r.items.length)
+        if (stage === 'all' && standing === 'all' && !debounced) setTotal(r.total)
         else setTotal((t) => t ?? r.counts.stage.all ?? 0)
       })
       .catch((e) =>
         setError(e instanceof ApiError ? `تعذّر تحميل طلباتك (${e.status}).` : String(e)),
       )
-  }, [participant, session.subject, stage, standing, debounced])
+  }, [participant, session.subject, stage, standing, debounced, paging.query])
 
   const byId = useMemo(() => new Map(auctions.map((a) => [a.id, a])), [auctions])
   const items = page?.items.map((x) => x.subscription) ?? null
@@ -240,6 +242,7 @@ export function MyApplications({ session, auctions, onOpen, onOpenRoom, onBack }
                 })}
               </tbody>
             </table>
+            <Pager page={paging.page} total={page?.total ?? 0} noun="طلب" onPage={paging.setPage} />
           </div>
         )}
       </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, Icon, PageHead, api, config, timestamp, type Session } from '@eauction/shared'
+import { ApiError, Icon, PageHead, api, config, timestamp, type Session , Pager, usePage } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Row {
@@ -46,12 +46,17 @@ export function MyInquiries({
   // Questions are taken while an auction has not finished.
   const askable = auctions.filter((a) => ['Scheduled', 'Approved', 'Live'].includes(a.status))
 
+  const paging = usePage()
+  const [total, setTotal] = useState(0)
   const load = useCallback(() => {
     participant
-      .get<{ items: Row[] }>('/inquiries/mine')
-      .then((r) => setRows(r.items))
+      .get<{ items: Row[]; total: number }>(`/inquiries/mine?${paging.query}`)
+      .then((r) => {
+        setRows(r.items)
+        setTotal(r.total)
+      })
       .catch(() => setRows([]))
-  }, [participant])
+  }, [participant, paging.query])
 
   useEffect(() => load(), [load])
 
@@ -159,6 +164,7 @@ export function MyInquiries({
             )
           })
         )}
+        <Pager page={paging.page} total={total} noun="استفسار" onPage={paging.setPage} />
       </div>
     </>
   )

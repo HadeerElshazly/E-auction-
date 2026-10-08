@@ -12,11 +12,19 @@ public sealed class PublicAttachment
     public Guid DocumentId { get; private set; }
     public string TitleAr { get; private set; } = "";
 
+    /// <summary>
+    /// "Photo" for the gallery, "Document" for a plan or a paper — chosen where it is
+    /// uploaded, so a visitor setting can show one and not the other. Null on
+    /// attachments added before the distinction, which are treated as either.
+    /// </summary>
+    public string? Kind { get; private set; }
+
     private PublicAttachment() { }
 
-    public PublicAttachment(Guid documentId, string titleAr)
+    public PublicAttachment(Guid documentId, string titleAr, string? kind = null)
     {
         DocumentId = documentId;
         TitleAr = titleAr;
+        Kind = kind;
     }
 }

@@ -1388,7 +1388,7 @@ two things the test suite could not have.
 
 ### What the realm defines
 
-Realm `eauction`, bilingual with Arabic as the default locale, 15-minute access
+Realm `eauction`, bilingual with Arabic as the default locale, one-hour access
 tokens, `registrationAllowed: false`, brute-force protection on. Realm roles
 `bidder`, `auction-admin`, `award-committee`, `operator` — realm rather than
 client roles, because a bidder is a bidder across the web portal, the mobile app

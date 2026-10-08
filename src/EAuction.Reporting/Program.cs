@@ -280,8 +280,11 @@ static ReportFilter Filter(HttpContext http)
                   && Enum.IsDefined(outcome)
             ? outcome
             : null,
-        Take = int.TryParse(q["take"], out var take) ? take : 500,
-        Skip = int.TryParse(q["skip"], out var skip) ? skip : 0,
+        // The queries read every row the filters choose, up to the report's ceiling;
+        // the page the screen asked for is cut in Render, which can then say how
+        // many rows there are in all. A CSV is the whole report, never one page.
+        Take = 5000,
+        Skip = 0,
     };
 
     static DateTimeOffset? Date(string? value) =>
@@ -308,7 +311,15 @@ static IResult Render<T>(
     string[] headers, Func<T, object?[]> cells)
 {
     if (!string.Equals(http.Request.Query["format"], "csv", StringComparison.OrdinalIgnoreCase))
-        return Results.Ok(new { count = rows.Count, items = rows });
+    {
+        // One page of the filtered report, as every grid asks for it.
+        var q = http.Request.Query;
+        var slice = Slice.From(
+            int.TryParse(q["skip"], out var skip) ? skip : null,
+            int.TryParse(q["take"], out var take) ? take : null,
+            Slice.MaxTake);
+        return Results.Ok(new { count = rows.Count, total = rows.Count, skip = slice.Skip, take = slice.Take, items = slice.Of(rows) });
+    }
 
     // Comma unless asked otherwise. See the note on Csv: a Windows machine set to
     // Arabic (Saudi Arabia) splits on a semicolon, and opens a comma-separated file

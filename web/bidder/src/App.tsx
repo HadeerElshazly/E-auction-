@@ -184,7 +184,7 @@ export function App() {
       )
     }
   } else {
-    body = <Catalogue auctions={auctions} onOpen={open} signedIn={session !== null} />
+    body = <Catalogue auctions={auctions} onOpen={open} session={session} />
   }
 
   return (

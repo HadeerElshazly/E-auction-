@@ -34,6 +34,8 @@ export interface Plot {
   frontageMeters: number | null
   /** الاستخدام, by name; see shared landUseAr. */
   landUse: string | null
+  /** الواجهة, by name ("NorthEast", …); see shared facingAr. */
+  facing: string | null
   latitude: string | null
   longitude: string | null
   descriptionAr: string | null
@@ -60,6 +62,8 @@ export interface AuctionDetail extends Omit<AuctionSummary, 'plotCount'> {
 export interface PublicDocument {
   documentId: string
   titleAr: string
+  /** "Photo" for the gallery, "Document" for a plan or paper; null on older ones, which are either. */
+  kind: 'Photo' | 'Document' | null
 }
 
 /** A bidder's own bid outcome, pushed to them and to nobody else. */

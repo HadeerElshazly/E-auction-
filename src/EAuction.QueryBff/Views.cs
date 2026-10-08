@@ -79,15 +79,27 @@ public sealed record AuctionDetail(
             a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
             schedule ? a.StartsAt : null, schedule ? a.EndsAt : null, schedule ? a.EffectiveEndsAt : null,
             Shows(PublicFields.OpeningPrice) ? a.OpeningPriceMinorUnits : null,
-            Shows(PublicFields.OpeningPrice) ? a.MinIncrementMinorUnits : null,
+            Shows(PublicFields.MinIncrement) ? a.MinIncrementMinorUnits : null,
             live ? a.PriceMinorUnits : null, live ? a.MinimumNextBidMinorUnits : null,
             a.DepositMinorUnits, AuctionSummary.Booklet(a, Shows(PublicFields.Fees)),
             terms ? a.QuietPeriodSeconds : null, terms ? a.MaxExtensions : null, live ? a.ExtensionsUsed : null,
             a.TotalAreaSqm, a.Plots, a.CoverImageDocumentId,
-            Shows(PublicFields.Attachments) ? a.Attachments : [],
+            VisibleAttachments(a, Shows(PublicFields.Photos), Shows(PublicFields.Documents)),
             Shows(PublicFields.Fees) ? a.BrokerageFeePercent : null, a.CancellationReason,
             visitor?.Hidden() ?? [], a.CancellationRefunds);
     }
+
+    /// <summary>
+    /// The photos and the documents a caller may see. One added before the two were
+    /// told apart is either, so it shows only when both are open.
+    /// </summary>
+    private static IReadOnlyList<PublicDocumentEntry> VisibleAttachments(AuctionEntry a, bool photos, bool documents) =>
+        a.Attachments.Where(x => x.Kind switch
+        {
+            "Photo" => photos,
+            "Document" => documents,
+            _ => photos && documents,
+        }).ToArray();
 }
 
 public sealed record LivePrice(

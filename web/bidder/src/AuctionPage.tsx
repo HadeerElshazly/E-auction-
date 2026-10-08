@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, CountdownPanel, Icon, PageHead, PhotoGallery, PlotMap, landUseAr, timestamp, api, config, sar, when, type Session } from '@eauction/shared'
+import { ApiError, CountdownPanel, Icon, PageHead, PhotoGallery, facingAr, PlotMap, landUseAr, timestamp, api, config, sar, type Session } from '@eauction/shared'
 import type { AuctionDetail, Bidder, Subscription, WinnerAward } from './types'
 import { WinnerPanel } from './WinnerPanel'
 import { BidBox, loadSubmitted } from './BidBox'
@@ -83,9 +83,6 @@ export function AuctionPage({
   const biddingOpen = live || lifecycle === 'Scheduled' || lifecycle === 'Approved'
   const closed = !biddingOpen && !cancelled
   const closingPrice = closed ? price?.priceMinorUnits ?? null : null
-  const currentPrice = live
-    ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
-    : auction.openingPriceMinorUnits
   const status = statusAr[lifecycle] ?? { ar: lifecycle, tone: 'done' }
   const endsAt = price?.effectiveEndsAt ?? auction.effectiveEndsAt ?? auction.endsAt
   const eligible = subscription?.status === 'Eligible'
@@ -99,7 +96,9 @@ export function AuctionPage({
 
   // Which part of the page is open. «المشاركة» first for a signed-in bidder who has
   // started but not finished qualifying, since that is the thing they came back for.
-  const [tab, setTab] = useState<'info' | 'bids' | 'participation' | 'plots' | 'inquiries'>('info')
+  const [tab, setTab] = useState<'info' | 'photos' | 'documents' | 'bids' | 'participation' | 'inquiries'>('info')
+  // «تفاصيل» — everything recorded about the plot, over the page.
+  const [plotOpen, setPlotOpen] = useState(false)
   const canParticipate = !!session && canBid && !cancelled
   useEffect(() => {
     if (canParticipate && subscription && subscription.status !== 'Eligible' && biddingOpen) setTab('participation')
@@ -109,6 +108,12 @@ export function AuctionPage({
   // The land itself, for «تفاصيل الأرض»: the first plot's survey figures, and every
   // use the auction's plots are zoned for.
   const firstPlot = auction.plots[0]
+
+  // The gallery's photos and the documents' list. One attached before the two were
+  // told apart may be either: offered to both, and the gallery drops what is not a
+  // picture it can draw.
+  const photos = auction.attachments.filter((d) => d.kind !== 'Document')
+  const papers = auction.attachments.filter((d) => d.kind !== 'Photo')
   const plotUses =
     [...new Set(auction.plots.map((p) => p.landUse).filter(Boolean))].map((u) => landUseAr(u)).join('، ') ||
     'غير محدد'
@@ -116,14 +121,6 @@ export function AuctionPage({
   // This bidder's own bids on this auction, as the bid box recorded them.
   const myBids = session ? loadSubmitted(auction.id, session.subject) : []
 
-  // The plots that carry a location, as pins on the «قطع الأرض» map.
-  const plotPoints = useMemo(
-    () =>
-      auction.plots
-        .filter((p) => p.latitude && p.longitude && !isNaN(Number(p.latitude)) && !isNaN(Number(p.longitude)))
-        .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude), label: p.descriptionAr ?? undefined })),
-    [auction.plots],
-  )
 
   const shownPrice = live
     ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
@@ -134,9 +131,10 @@ export function AuctionPage({
 
   const tabs: Array<{ key: typeof tab; label: string }> = [
     { key: 'info', label: 'تفاصيل القطعة' },
+    { key: 'photos', label: 'الصور' },
+    { key: 'documents', label: 'المستندات' },
     { key: 'bids', label: 'المزايدات' },
     ...(canParticipate ? [{ key: 'participation' as const, label: 'المشاركة' }] : []),
-    { key: 'plots', label: `قطع الأرض (${auction.plots.length})` },
     { key: 'inquiries', label: 'الاستفسارات' },
   ]
 
@@ -226,22 +224,15 @@ export function AuctionPage({
           <div className="detail-content">
             {tab === 'info' && (
               <>
-                {auction.hidden.length > 0 && (
-                  <div className="notice info signin-notice">
-                    <Icon name="lock" size={18} />
-                    <span className="grow">بعض بيانات المزاد تظهر بعد تسجيل الدخول.</span>
-                    <button className="small" onClick={onSignIn}>الدخول بنفاذ</button>
-                  </div>
-                )}
-                {/* The land first, as the prototype has it: what is being sold, then
-                    what it costs to bid on it. */}
+                {/* As the prototype has it: the land, its six figures, and the papers.
+                    The deposit, the step and the dates are in the box beside it. */}
                 <h2>تفاصيل الأرض</h2>
                 <p className="muted" style={{ margin: '6px 0 0' }}>
-                  {auction.plots.length === 1
-                    ? `قطعة رقم ${firstPlot?.plotNumber} ضمن ${auction.nameAr}.`
-                    : `${auction.plots.length} قطع تُباع كوحدة واحدة.`}
+                  {firstPlot?.descriptionAr ??
+                    (firstPlot ? `قطعة رقم ${firstPlot.plotNumber} ضمن ${auction.nameAr}.` : auction.nameAr)}
                 </p>
                 <div className="spec-grid">
+                  <div><small>رقم القطعة</small><b className="num">{firstPlot?.plotNumber ?? '—'}</b></div>
                   <div><small>المساحة</small><b><span className="num">{area(totalArea)}</span> م²</b></div>
                   <div><small>الاستخدام</small><b>{plotUses}</b></div>
                   <div>
@@ -250,107 +241,45 @@ export function AuctionPage({
                   </div>
                   <div>
                     <small>الواجهة</small>
-                    <b>{firstPlot?.frontageMeters != null ? <><span className="num">{firstPlot.frontageMeters}</span> متر</> : '—'}</b>
+                    <b>{facingAr(firstPlot?.facing)}</b>
                   </div>
                   <div><small>سعر البداية</small><b className="num">{money(auction.openingPriceMinorUnits)}</b></div>
                   <div><small>زيادة المزايدة</small><b className="num">{money(auction.minIncrementMinorUnits)}</b></div>
                 </div>
 
-                {/* معرض الصور: small squares, each opening the photo full size. */}
-                {hidden('attachments') ? (
-                  <>
-                    <h3>معرض الصور</h3>
-                    <p className="muted"><Locked /></p>
-                  </>
+                {firstPlot && (
+                  <div className="document-row">
+                    <span className="doc-icon"><Icon name="pin" /></span>
+                    <div className="grow">
+                      <strong>موقع القطعة</strong>
+                      <small>الموقع على الخريطة ووصف القطعة.</small>
+                    </div>
+                    <button className="ghost small" onClick={() => setPlotOpen(true)} data-testid="plot-details">
+                      عرض
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {tab === 'photos' && (
+              <>
+                <h2>صور القطعة</h2>
+                {hidden('photos') ? (
+                  <p className="muted"><Locked /></p>
+                ) : photos.length === 0 ? (
+                  <p className="muted">لا توجد صور مرفقة لهذا المزاد.</p>
                 ) : (
-                  auction.attachments.length > 0 && (
-                    <>
-                      <h3>معرض الصور</h3>
-                      <PhotoGallery
-                        images={auction.attachments.map((d) => ({
-                          id: d.documentId,
-                          url: documentUrl(d.documentId),
-                          title: d.titleAr,
-                        }))}
-                      />
-                    </>
-                  )
+                  <PhotoGallery
+                    images={photos.map((d) => ({ id: d.documentId, url: documentUrl(d.documentId), title: d.titleAr }))}
+                  />
                 )}
+              </>
+            )}
 
-                <h3>بيانات المزاد</h3>
-                <div className="spec-grid">
-                  <div><small>مبلغ التأمين</small><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
-                  <div><small>قيمة كراسة الشروط</small><b className="num">{auction.bookletPriceMinorUnits === 0 ? 'مجانية' : money(auction.bookletPriceMinorUnits)}</b></div>
-                  {/* «عرض التأمين ومبلغ الوساطة» (الخاصية 04): a share of the price won,
-                      shown at today's price and said to move. */}
-                  {auction.brokerageFeePercent == null ? (
-                    <div><small>السعي (الوساطة)</small><b><Locked /></b></div>
-                  ) : (
-                    auction.brokerageFeePercent > 0 && (
-                      <div>
-                        <small>السعي (الوساطة) — {auction.brokerageFeePercent}%</small>
-                        <b className="num">
-                          {currentPrice == null
-                            ? `${auction.brokerageFeePercent}% من سعر الترسية`
-                            : sar(Math.round((currentPrice * auction.brokerageFeePercent) / 100), 'ar')}
-                        </b>
-                      </div>
-                    )
-                  )}
-                  <div><small>يبدأ</small><b>{auction.startsAt ? when(auction.startsAt) : <Locked />}</b></div>
-                  <div><small>ينتهي</small><b>{endsAt ? when(endsAt) : <Locked />}</b></div>
-                  <div>
-                    <small>التمديد عند المزايدة المتأخرة</small>
-                    <b>
-                      {hidden('extensionTerms') ? (
-                        <Locked />
-                      ) : auction.quietPeriodSeconds ? (
-                        `${auction.quietPeriodSeconds} ثانية، حتى ${auction.maxExtensions} مرات`
-                      ) : (
-                        'دون تمديد'
-                      )}
-                    </b>
-                  </div>
-                </div>
-
-                {onsite && !cancelled && (
-                  // Before the deposit: a bidder about to commit a hundred thousand
-                  // riyals needs to know they must be in the room on the day.
-                  <div className="notice info">
-                    مزاد حضوري — تُقدّم المزايدات في قاعة المزاد ويُسجّلها موظف القاعة برقم مجدافك.
-                    التأهّل — الكراسة والتأمين — يتم من هنا، أما المزايدة نفسها فلا تُقبل إلا من القاعة.
-                  </div>
-                )}
-                {auction.bidderVisibility === 'Named' && (
-                  // Said before the deposit, not after (D-22).
-                  //
-                  // «وللعامة» was dropped from this sentence when anonymous
-                  // visitors stopped receiving any bidder label: it promised the
-                  // public would see the name, and the public no longer does. The
-                  // notice has to describe what the system actually does — a
-                  // citizen reads it before committing a deposit.
-                  <div className="notice info">في هذا المزاد يظهر اسم المزايد الأعلى لبقية المزايدين المشاركين في المزاد.</div>
-                )}
-
-                {!hidden('attachments') && auction.attachments.length > 0 && (
-                  <>
-                    <h3>المستندات العامة</h3>
-                    {auction.attachments.map((d) => (
-                      // Public: no token or grant, and the service answers with
-                      // Content-Disposition: attachment.
-                      <div key={d.documentId} className="document-row">
-                        <span className="doc-icon"><Icon name="file" /></span>
-                        <div className="grow">
-                          <strong>{d.titleAr}</strong>
-                          <small>مستند عام متاح للجميع</small>
-                        </div>
-                        <a className="button small" href={documentUrl(d.documentId)} rel="noreferrer noopener">
-                          <Icon name="download" size={16} /> تنزيل
-                        </a>
-                      </div>
-                    ))}
-                  </>
-                )}
+            {tab === 'documents' && (
+              <>
+                <h2>المستندات</h2>
                 <div className="document-row">
                   <span className="doc-icon"><Icon name="file" /></span>
                   <div className="grow">
@@ -358,13 +287,37 @@ export function AuctionPage({
                     <small>
                       {auction.bookletPriceMinorUnits === 0
                         ? 'مجانية — تُتاح للتنزيل بعد الدخول من قسم «المشاركة».'
-                        : 'تُتاح للتنزيل بعد شرائها من قسم «المشاركة».'}
+                        : auction.bookletPriceMinorUnits == null
+                          ? 'تُتاح للتنزيل بعد شرائها من قسم «المشاركة».'
+                          : `${sar(auction.bookletPriceMinorUnits, 'ar')} — تُتاح للتنزيل بعد شرائها من قسم «المشاركة».`}
                     </small>
                   </div>
                   {canParticipate && (
                     <button className="small" onClick={() => setTab('participation')}>المشاركة</button>
                   )}
                 </div>
+
+                {!hidden('documents') &&
+                  papers.map((d) => (
+                    // Public: no token or grant, and the service answers with
+                    // Content-Disposition: attachment.
+                    <div key={d.documentId} className="document-row">
+                      <span className="doc-icon"><Icon name="file" /></span>
+                      <div className="grow">
+                        <strong>{d.titleAr}</strong>
+                        <small>مستند عام متاح للجميع</small>
+                      </div>
+                      <a className="button ghost small" href={documentUrl(d.documentId)} rel="noreferrer noopener">
+                        <Icon name="download" size={16} /> تنزيل
+                      </a>
+                    </div>
+                  ))}
+
+                {hidden('documents') && (
+                  <p className="muted small" style={{ marginTop: 12 }}>
+                    <Locked /> — المستندات المرفقة.
+                  </p>
+                )}
               </>
             )}
 
@@ -425,67 +378,6 @@ export function AuctionPage({
               />
             )}
 
-            {tab === 'plots' && (
-              <>
-                <h2>قطع الأرض</h2>
-                <p className="lede">تُباع القطع كوحدة واحدة لا تُجزَّأ — المزايدة على المزاد كاملاً.</p>
-                {plotPoints.length > 0 && <PlotMap points={plotPoints} height={280} />}
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>رقم القطعة</th>
-                        <th>المساحة</th>
-                        <th>عرض الشارع</th>
-                        <th>الواجهة</th>
-                        <th>الاستخدام</th>
-                        <th>الموقع</th>
-                        <th>الوصف</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {auction.plots.map((p) => (
-                        <tr key={p.id}>
-                          <td><span className="num strong">{p.plotNumber}</span></td>
-                          <td><span className="num">{area(p.areaSqm)}</span> م²</td>
-                          <td>
-                            {p.streetWidthMeters === null ? (
-                              <span className="muted">غير محدد</span>
-                            ) : (
-                              <><span className="num">{area(p.streetWidthMeters)}</span> م</>
-                            )}
-                          </td>
-                          <td>
-                            {p.frontageMeters === null ? (
-                              <span className="muted">غير محدد</span>
-                            ) : (
-                              <><span className="num">{area(p.frontageMeters)}</span> م</>
-                            )}
-                          </td>
-                          <td>{landUseAr(p.landUse)}</td>
-                          <td>
-                            {p.latitude && p.longitude ? (
-                              <a
-                                href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
-                                target="_blank"
-                                rel="noreferrer noopener"
-                                title={`${p.latitude}, ${p.longitude}`}
-                              >
-                                عرض على الخريطة ↗
-                              </a>
-                            ) : (
-                              <span className="muted">غير محدد</span>
-                            )}
-                          </td>
-                          <td>{p.descriptionAr ?? <span className="muted">لا يوجد وصف</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-
             {tab === 'inquiries' && (
               <>
                 <AuctionInquiries
@@ -538,11 +430,20 @@ export function AuctionPage({
             ) : null}
 
             <div className="kv"><span>تأمين المشاركة</span><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
-            <div className="kv"><span>زيادة المزايدة</span><b className="num">{money(auction.minIncrementMinorUnits)}</b></div>
+            <div className="kv"><span>الحد الأدنى للزيادة</span><b className="num">{money(auction.minIncrementMinorUnits)}</b></div>
             {price && price.extensionsUsed > 0 && (
               <div className="kv"><span>التمديد</span><b className="num">{price.extensionsUsed} من {price.maxExtensions}</b></div>
             )}
             <hr className="divider" />
+
+            {/* Said before the deposit, not after: where the bidding happens (§29),
+                and whether the leader's name is shown to the other bidders (D-22). */}
+            {onsite && !cancelled && (
+              <p className="box-help">مزاد حضوري — المزايدة في قاعة المزاد، والتأهّل (الكراسة والتأمين) من هنا.</p>
+            )}
+            {auction.bidderVisibility === 'Named' && (
+              <p className="box-help">يظهر اسم المزايد الأعلى لبقية المزايدين المشاركين.</p>
+            )}
 
             {/* The one thing to do next, by where this person stands. */}
             {!session && !cancelled && biddingOpen ? (
@@ -604,7 +505,45 @@ export function AuctionPage({
           </div>
         </aside>
       </div>
+      {plotOpen && firstPlot && <PlotDialog plot={firstPlot} onClose={() => setPlotOpen(false)} />}
     </>
+  )
+}
+
+/** «تفاصيل» — the plot in full: its figures, its description and its place on the map. */
+function PlotDialog({ plot, onClose }: { plot: AuctionDetail['plots'][number]; onClose: () => void }) {
+  const located = !!plot.latitude && !!plot.longitude && !isNaN(Number(plot.latitude)) && !isNaN(Number(plot.longitude))
+  const metres = (v: number | null) => (v != null ? <><span className="num">{v}</span> متر</> : 'غير محدد')
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="تفاصيل القطعة" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <button className="icon-btn" aria-label="إغلاق النافذة" onClick={onClose}>✕</button>
+          <div className="grow" style={{ textAlign: 'start' }}>
+            <h2>قطعة رقم {plot.plotNumber}</h2>
+            <p>تفاصيل القطعة</p>
+          </div>
+        </div>
+        <div className="spec-grid" style={{ marginTop: 0 }}>
+          <div><small>المساحة</small><b><span className="num">{area(plot.areaSqm)}</span> م²</b></div>
+          <div><small>الاستخدام</small><b>{landUseAr(plot.landUse)}</b></div>
+          <div><small>عرض الشارع</small><b>{metres(plot.streetWidthMeters)}</b></div>
+          <div><small>الواجهة</small><b>{facingAr(plot.facing)}</b></div>
+          <div><small>طول الواجهة</small><b>{metres(plot.frontageMeters)}</b></div>
+        </div>
+        {plot.descriptionAr && <p>{plot.descriptionAr}</p>}
+        {located && (
+          <>
+            <PlotMap points={[{ lat: Number(plot.latitude), lng: Number(plot.longitude) }]} height={260} />
+            <p className="small" style={{ marginTop: 8 }}>
+              <a href={`https://www.google.com/maps?q=${plot.latitude},${plot.longitude}`} target="_blank" rel="noreferrer noopener">
+                فتح الموقع في خرائط Google ↗
+              </a>
+            </p>
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 

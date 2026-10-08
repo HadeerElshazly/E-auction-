@@ -42,6 +42,12 @@ public sealed class Plot
     /// </summary>
     public LandUse? LandUse { get; private set; }
 
+    /// <summary>
+    /// الواجهة — which way the plot faces («شمالية شرقية»), as the plan states it and
+    /// a bidder reads it. Apart from <see cref="FrontageMeters"/>, the frontage's length.
+    /// </summary>
+    public Facing? Facing { get; private set; }
+
     public string? Latitude { get; private set; }
     public string? Longitude { get; private set; }
     public string? DescriptionAr { get; private set; }
@@ -53,7 +59,7 @@ public sealed class Plot
         string? latitude = null, string? longitude = null,
         string? descriptionAr = null, string? descriptionEn = null,
         decimal? streetWidthMeters = null, decimal? frontageMeters = null,
-        LandUse? landUse = null)
+        LandUse? landUse = null, Facing? facing = null)
     {
         if (string.IsNullOrWhiteSpace(plotNumber))
             throw new ArgumentException("رقم القطعة مطلوب.", nameof(plotNumber));
@@ -70,12 +76,16 @@ public sealed class Plot
         StreetWidthMeters = streetWidthMeters;
         FrontageMeters = frontageMeters;
         LandUse = landUse;
+        Facing = facing;
         Latitude = latitude;
         Longitude = longitude;
         DescriptionAr = descriptionAr;
         DescriptionEn = descriptionEn;
     }
 }
+
+/// <summary>الواجهة: the eight directions a plot can face.</summary>
+public enum Facing { North, South, East, West, NorthEast, NorthWest, SouthEast, SouthWest }
 
 /// <summary>الاستخدام: the uses an approved plan zones a plot for.</summary>
 public enum LandUse

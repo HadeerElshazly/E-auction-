@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, config, sar, type Session } from '@eauction/shared'
+import { Pager, api, config, sar, usePage, type Session } from '@eauction/shared'
 import { BidderName, useLeaders } from './winners'
 
 interface Row {
@@ -41,11 +41,14 @@ export function Monitor({ session }: { session: Session }) {
   // the screen feel live rather than like a page that refreshes.
   const [, setNow] = useState(() => Date.now())
 
+  const paging = usePage()
+  const [total, setTotal] = useState(0)
   const load = useCallback(async () => {
     const client = api({ baseUrl: config.queryApi, session })
     try {
-      const page = await client.get<{ items: Row[] }>('/auctions/live')
+      const page = await client.get<{ items: Row[]; total: number }>(`/auctions/live?${paging.query}`)
       setRows(page.items)
+      setTotal(page.total)
       setError(null)
     } catch {
       // Said in Arabic, and the last good rows kept on screen: a watcher in the
@@ -53,7 +56,7 @@ export function Monitor({ session }: { session: Session }) {
       // empty one with an English HTTP message on it.
       setError('تعذّر الاتصال بخدمة المزادات — تُعرض آخر قراءة، وتُعاد المحاولة تلقائياً.')
     }
-  }, [session])
+  }, [session, paging.query])
 
   useEffect(() => {
     let cancelled = false
@@ -105,6 +108,7 @@ export function Monitor({ session }: { session: Session }) {
           <AuctionTile key={r.auctionId} row={r} session={session} leaderId={leaders[r.auctionId]} />
         ))}
       </div>
+      <Pager page={paging.page} total={total} noun="مزاد جارٍ" onPage={paging.setPage} />
     </>
   )
 }

@@ -668,7 +668,8 @@ function PublicAttachments({
 }) {
   const input = useRef<HTMLInputElement>(null)
   const [title, setTitle] = useState('')
-  const attachments = auction.attachments ?? []
+  // The documents; the photos are on «معرض الصور».
+  const attachments = (auction.attachments ?? []).filter((d) => d.kind !== 'Photo')
 
   const upload = (file: File) =>
     onAct(async () => {
@@ -678,6 +679,8 @@ function PublicAttachments({
       await client.post(`/auctions/${auction.id}/attachments`, {
         documentId: uploaded.id,
         titleAr: title.trim() || file.name,
+        // A document: «المستندات المرفقة» in the visitor settings decides who sees it.
+        kind: 'Document',
       })
       setTitle('')
     })

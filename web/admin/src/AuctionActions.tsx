@@ -230,3 +230,82 @@ export function Reoffer({
     </>
   )
 }
+
+/**
+ * «قرار الاعتماد» — the committee's decision on an auction submitted for approval,
+ * in the side box where it cannot be missed: approve, or refuse with a reason the
+ * preparer reads. The auction's data is on the tabs beside it.
+ */
+export function ReviewDecision({
+  auction,
+  client,
+  busy,
+  onAct,
+}: {
+  auction: Auction
+  client: Api
+  busy: boolean
+  onAct: (work: () => Promise<unknown>) => Promise<void>
+}) {
+  const [refusing, setRefusing] = useState(false)
+  const [reason, setReason] = useState('')
+
+  return (
+    <div className="review-decision" data-testid="review-decision">
+      <div className="bid-status">بانتظار قرار لجنة الترسية</div>
+      <button
+        className="primary wide"
+        disabled={busy}
+        onClick={() => void onAct(() => client.post(`/auctions/${auction.id}/approve`))}
+      >
+        اعتماد المزاد
+      </button>
+      <button className="danger wide" disabled={busy} onClick={() => setRefusing(true)}>
+        رفض
+      </button>
+
+      {refusing && (
+        <Dialog>
+          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="رفض المزاد">
+            <div className="modal">
+              <div className="modal-head">
+                <button className="icon-btn" aria-label="إغلاق النافذة" onClick={() => setRefusing(false)}>
+                  ✕
+                </button>
+                <div className="grow" style={{ textAlign: 'start' }}>
+                  <h2>رفض المزاد</h2>
+                  <p>{auction.nameAr}</p>
+                </div>
+              </div>
+              <label style={{ display: 'block' }}>
+                <span>السبب — يظهر لمُعدّ المزاد ليصحّح البيانات</span>
+                <textarea
+                  rows={3}
+                  aria-label="سبب الرفض"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </label>
+              <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16, gap: 8 }}>
+                <button onClick={() => setRefusing(false)}>تراجع</button>
+                <button
+                  className="danger"
+                  disabled={busy || reason.trim() === ''}
+                  onClick={() =>
+                    void onAct(() => client.post(`/auctions/${auction.id}/reject`, { reason: reason.trim() })).then(() => {
+                      setRefusing(false)
+                      setReason('')
+                    })
+                  }
+                >
+                  رفض المزاد
+                </button>
+              </div>
+            </div>
+          </div>
+        </Dialog>
+      )}
+    </div>
+  )
+}

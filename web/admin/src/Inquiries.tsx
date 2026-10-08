@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageHead,ApiError, api, config, timestamp, type Session } from '@eauction/shared'
+import { ApiError, PageHead, Pager, api, config, timestamp, usePage, type Session } from '@eauction/shared'
 
 interface Inquiry {
   id: string
@@ -21,6 +21,7 @@ interface Inquiry {
 
 interface Page {
   items: Inquiry[]
+  total: number
   counts: { open: number; answered: number; closed: number; awaitingApproval: number }
 }
 
@@ -50,18 +51,20 @@ export function Inquiries({ session, canAct }: { session: Session; canAct: boole
   const [page, setPage] = useState<Page | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [refresh, setRefresh] = useState(0)
+  const paging = usePage()
+  useEffect(() => paging.setPage(0), [filter])
 
   useEffect(() => {
     const qs =
-      filter === 'all' ? '' : filter === 'Drafted' ? '?clarification=Drafted' : `?status=${filter}`
+      filter === 'all' ? '' : filter === 'Drafted' ? 'clarification=Drafted&' : `status=${filter}&`
     client
-      .get<Page>(`/inquiries${qs}`)
+      .get<Page>(`/inquiries?${qs}${paging.query}`)
       .then((p) => {
         setPage(p)
         setError(null)
       })
       .catch((e) => setError(describe(e)))
-  }, [client, filter, refresh])
+  }, [client, filter, refresh, paging.query])
 
   const reload = useCallback(() => setRefresh((n) => n + 1), [])
 
@@ -114,6 +117,7 @@ export function Inquiries({ session, canAct }: { session: Session; canAct: boole
           />
         ))}
       </div>
+      <Pager page={paging.page} total={page?.total ?? 0} noun="استفسار" onPage={paging.setPage} />
     </div>
     </>
   )

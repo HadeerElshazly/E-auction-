@@ -66,7 +66,7 @@ app.MapGet("/health/ready", async (
 // place. Staff who need to know whether a notice was sent have the service's logs;
 // staff who need to read a citizen's inbox do not have a reason.
 app.MapGet("/notifications", async (
-    HttpContext http, bool? unreadOnly, int? take,
+    HttpContext http, bool? unreadOnly, int? skip, int? take,
     IDbContextFactory<NotificationsDbContext> f, CancellationToken ct) =>
 {
     var subject = http.User.SubjectId();
@@ -80,9 +80,11 @@ app.MapGet("/notifications", async (
 
     if (unreadOnly == true) query = query.Where(x => x.ReadAt == null);
 
+    var slice = Slice.From(skip, take, 50);
+    var total = await query.CountAsync(ct);
     var items = await query
         .OrderByDescending(x => x.CreatedAt)
-        .Take(Math.Clamp(take ?? 50, 1, 200))
+        .Skip(slice.Skip).Take(slice.Take)
         .Select(x => new NotificationResponse(
             x.Id, x.AuctionId, x.Kind.ToString(), x.TitleAr, x.BodyAr,
             x.Actionable, x.CreatedAt, x.ReadAt))
@@ -93,7 +95,7 @@ app.MapGet("/notifications", async (
     var unread = await db.Notifications
         .CountAsync(x => x.BidderId == subject.Value && x.ReadAt == null, ct);
 
-    return Results.Ok(new { items, unread });
+    return Results.Ok(new { total, skip = slice.Skip, take = slice.Take, items, unread });
 }).RequireAuthorization(Policies.Bidder);
 
 app.MapPost("/notifications/{id:guid}/read", async (

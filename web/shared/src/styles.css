@@ -1485,3 +1485,31 @@ label.button.disabled { opacity: .55; pointer-events: none; }
 /* A table row's buttons, side by side. */
 .row-actions { white-space: nowrap; text-align: end; }
 .row-actions button + button { margin-inline-start: 6px; }
+
+/* «إضافة مزاد» — the prototype's single form, wider and in three columns. */
+.modal.wide { width: min(980px, 100%); }
+.form-row-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 14px; }
+.form-row-3 label { display: grid; gap: 6px; align-content: start; }
+.form-row-3 input, .form-row-3 select { width: 100%; }
+.form-section { margin: 18px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.form-section:first-of-type { margin-top: 0; }
+@media (max-width: 760px) { .form-row-3 { grid-template-columns: 1fr; } }
+
+/* A page split into tabs above its cards — «التسويات والإفراغ». */
+.page-tabs { margin: 0 0 16px; }
+
+/* Count tiles that sit above a list in a dialog — smaller, so the list shows. */
+.stat-grid.compact { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.stat-grid.compact .stat { padding: 8px 12px; gap: 0; }
+.stat-grid.compact .stat-label { font-size: 12px; }
+.stat-grid.compact .stat-value { font-size: 16px; }
+.stat-grid.compact .stat-sub { font-size: 12px; }
+
+/* «إضافة مزاد» — the prototype's short form, two fields to a row. */
+.form-row-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; }
+.form-row-2 label { display: grid; gap: 6px; align-content: start; }
+.form-row-2 input { width: 100%; }
+@media (max-width: 620px) { .form-row-2 { grid-template-columns: 1fr; } }
+
+/* «قرار الاعتماد» in the auction's side box. */
+.review-decision { display: grid; gap: 8px; margin-top: 12px; }

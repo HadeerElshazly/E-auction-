@@ -3,6 +3,7 @@ import {
   CountdownPanel,
   Icon,
   PhotoGallery,
+  facingAr,
   landUseAr,
   api,
   config,
@@ -21,10 +22,10 @@ import { AwardPanel } from './AwardPanel'
 import { ClerkTerminal } from './ClerkTerminal'
 import { BidHistory } from './AuditViews'
 import { BidderName, useLeaders } from './winners'
-import { EndAuction, Reoffer } from './AuctionActions'
+import { EndAuction, Reoffer, ReviewDecision } from './AuctionActions'
 import { PlotsPanel } from './PlotsPanel'
 
-type Tab = 'info' | 'gallery' | 'bids' | 'inquiries' | 'setup' | 'applicants' | 'award' | 'hall'
+type Tab = 'info' | 'gallery' | 'documents' | 'bids' | 'inquiries' | 'setup' | 'applicants' | 'award' | 'hall'
 
 const opened = (status: string) =>
   !['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Cancelled'].includes(status)
@@ -65,10 +66,11 @@ export function AuctionDetail({
 
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: 'info', label: 'تفاصيل القطعة' },
-    { key: 'gallery', label: 'معرض الصور' },
+    { key: 'gallery', label: 'الصور' },
+    { key: 'documents', label: 'المستندات' },
     ...(opened(auction.status) ? [{ key: 'bids' as const, label: 'المزايدات' }] : []),
     { key: 'inquiries', label: 'الاستفسارات' },
-    ...(isAdmin || isCommittee ? [{ key: 'setup' as const, label: isAdmin ? 'الإعداد والاعتماد' : 'الاعتماد' }] : []),
+    ...(isAdmin ? [{ key: 'setup' as const, label: 'الإعداد والاعتماد' }] : []),
     ...(isAdmin ? [{ key: 'applicants' as const, label: 'المتقدّمون' }] : []),
     ...(isClerk && onsite ? [{ key: 'hall' as const, label: 'القاعة' }] : []),
     { key: 'award', label: 'النتيجة والترسية' },
@@ -79,9 +81,7 @@ export function AuctionDetail({
   const preferred: Tab =
     isAdmin && ['Draft', 'Rejected'].includes(auction.status)
       ? 'setup'
-      : isCommittee && auction.status === 'PendingReview'
-        ? 'setup'
-        : isCommittee && ['PendingAward', 'WinnerDisqualified', 'Awarded'].includes(auction.status)
+      : isCommittee && ['PendingAward', 'WinnerDisqualified', 'Awarded'].includes(auction.status)
           ? 'award'
           : isClerk && onsite
             ? 'hall'
@@ -146,13 +146,13 @@ export function AuctionDetail({
           {current === 'info' && (
             <Info
               auction={auction}
-              endsAt={endsAt}
               client={client}
               busy={busy}
               canEdit={isAdmin && ['Draft', 'Rejected'].includes(auction.status)}
               onAct={onAct}
             />
           )}
+          {current === 'documents' && <Documents auction={auction} />}
           {current === 'gallery' && (
             <Gallery auction={auction} client={client} session={session} busy={busy} canAdd={isAdmin} onAct={onAct} />
           )}
@@ -215,7 +215,17 @@ export function AuctionDetail({
 
           <div className="kv"><span>تأمين المشاركة</span><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
           {bidCount != null && <div className="kv"><span>عدد المزايدات</span><b className="num">{bidCount}</b></div>}
-          <div className="kv"><span>زيادة المزايدة</span><b className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</b></div>
+          <div className="kv"><span>الحد الأدنى للزيادة</span><b className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</b></div>
+          {/* What staff need besides the prototype's three rows, once each. */}
+          <div className="kv"><span>رسوم الكراسة</span><b>{auction.bookletPriceMinorUnits === 0 ? 'مجانية' : sar(auction.bookletPriceMinorUnits, 'ar')}</b></div>
+          <div className="kv"><span>نسبة السعي</span><b className="num">{auction.brokerageFeePercent}%</b></div>
+          <div className="kv">
+            <span>التمديد عند المزايدة المتأخرة</span>
+            <b>{auction.quietPeriodSeconds ? `${auction.quietPeriodSeconds} ث، حتى ${auction.maxExtensions} مرات` : 'بلا تمديد'}</b>
+          </div>
+          {!(auction.status === 'Scheduled' || auction.status === 'Approved' || live) && auction.startsAt && (
+            <div className="kv"><span>الموعد</span><b className="small">{when(auction.startsAt)} ← {endsAt ? when(endsAt) : '—'}</b></div>
+          )}
           {figures && figures.extensionsUsed > 0 && (
             <div className="kv"><span>التمديد</span><b className="num">{figures.extensionsUsed} من {figures.maxExtensions}</b></div>
           )}
@@ -272,6 +282,9 @@ export function AuctionDetail({
           {/* The administrator's way out of a running auction, and back into an
               unsold one. */}
           {isAdmin && live && <EndAuction auction={auction} client={client} busy={busy} onAct={onAct} />}
+          {isCommittee && auction.status === 'PendingReview' && (
+            <ReviewDecision auction={auction} client={client} busy={busy} onAct={onAct} />
+          )}
           {isAdmin && auction.status === 'Unsold' && (
             <Reoffer auction={auction} client={client} busy={busy} onAct={onAct} onOpen={onOpen} />
           )}
@@ -293,14 +306,12 @@ export function AuctionDetail({
  */
 function Info({
   auction,
-  endsAt,
   client,
   busy,
   canEdit,
   onAct,
 }: {
   auction: Auction
-  endsAt: string | null
   client: Api
   busy: boolean
   /** The plots are added and removed here while the auction is a draft. */
@@ -315,14 +326,17 @@ function Info({
           أُلغي المزاد{auction.cancelledAt && <> في {when(auction.cancelledAt)}</>} — السبب: {auction.cancellationReason}
         </div>
       )}
-      {/* The land first, as the prototype has it: what is being sold, then the terms. */}
+      {/* As the prototype has it: the land, its six figures, and the papers. The
+          deposit, the step, the dates and the fees are in the box beside it. */}
       <h2>تفاصيل الأرض</h2>
       <p className="muted">
-        {auction.plots.length === 1
-          ? `قطعة رقم ${auction.plots[0]!.plotNumber} ضمن ${auction.nameAr}.`
-          : `${auction.plots.length} قطع تُباع كوحدة واحدة.`}
+        {auction.plots[0]?.descriptionAr ??
+          (auction.plots[0]
+            ? `قطعة رقم ${auction.plots[0].plotNumber}${auction.phase ? ` ضمن ${auction.phase}` : ''}.`
+            : 'لم تُضف القطعة بعد.')}
       </p>
       <div className="spec-grid">
+        <div><small>رقم القطعة</small><b className="num">{auction.plots[0]?.plotNumber ?? '—'}</b></div>
         <div><small>المساحة</small><b><span className="num">{auction.totalAreaSqm}</span> م²</b></div>
         <div>
           <small>الاستخدام</small>
@@ -337,57 +351,22 @@ function Info({
         </div>
         <div>
           <small>الواجهة</small>
-          <b>{auction.plots[0]?.frontageMeters != null ? <><span className="num">{auction.plots[0].frontageMeters}</span> متر</> : '—'}</b>
+          <b>{facingAr(auction.plots[0]?.facing)}</b>
         </div>
         <div><small>سعر البداية</small><b className="num">{sar(auction.openingPriceMinorUnits, 'ar')}</b></div>
         <div><small>زيادة المزايدة</small><b className="num">{sar(auction.minIncrementMinorUnits, 'ar')}</b></div>
       </div>
 
-      <h3>بيانات المزاد</h3>
-      <p className="muted">
-        {auction.phase ?? 'مزاد أرض'} · {auction.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'} ·{' '}
-        {auction.bidderVisibility === 'Named' ? 'أسماء المزايدين ظاهرة' : 'هوية المزايدين مخفية'}
-      </p>
-      <div className="spec-grid">
-        <div><small>عدد القطع</small><b className="num">{auction.plotCount}</b></div>
-        <div><small>التأمين</small><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
-        <div><small>سعر الكراسة</small><b>{auction.bookletPriceMinorUnits === 0 ? 'مجانية' : sar(auction.bookletPriceMinorUnits, 'ar')}</b></div>
-        <div><small>نسبة السعي</small><b className="num">{auction.brokerageFeePercent}%</b></div>
-        <div><small>يبدأ</small><b>{auction.startsAt ? when(auction.startsAt) : 'لم يُجدول'}</b></div>
-        <div><small>ينتهي</small><b>{endsAt ? when(endsAt) : '—'}</b></div>
-        <div>
-          <small>التمديد عند المزايدة المتأخرة</small>
-          <b>{auction.quietPeriodSeconds ? `${auction.quietPeriodSeconds} ثانية، حتى ${auction.maxExtensions} مرات` : 'بلا تمديد'}</b>
-        </div>
-      </div>
-      {/* The reserve price is deliberately absent: it never leaves the processor (D-23). */}
-
-      <PlotsPanel auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
-
-      <h3>المستندات</h3>
       <div className="document-row">
-        <span className="doc-icon"><Icon name="file" /></span>
+        <span className="doc-icon"><Icon name="pin" /></span>
         <div className="grow">
-          <strong>كراسة الشروط</strong>
-          <small>{auction.bookletDocumentId ? 'مرفقة — تُتاح للمزايد بعد شرائها' : 'لم تُرفق بعد'}</small>
+          <strong>القطعة</strong>
+          <small>
+            {auction.plots[0] ? 'الموقع على الخريطة والوصف وبقية البيانات.' : 'لم تُضف القطعة بعد.'}
+          </small>
         </div>
+        <PlotsPanel auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
       </div>
-      {auction.attachments.map((d) => (
-        <div key={d.documentId} className="document-row">
-          <span className="doc-icon"><Icon name="file" /></span>
-          <div className="grow">
-            <strong>{d.titleAr}</strong>
-            <small>مستند عام متاح للجميع</small>
-          </div>
-          <a
-            className="button small"
-            href={`${config.documentsApi.replace(/\/$/, '')}/documents/${d.documentId}`}
-            rel="noreferrer noopener"
-          >
-            <Icon name="download" size={16} /> تنزيل
-          </a>
-        </div>
-      ))}
     </>
   )
 }
@@ -467,7 +446,9 @@ function Gallery({
   onAct: (work: () => Promise<unknown>) => Promise<void>
 }) {
   // The land's photos; the cover is the picture at the top of the page.
-  const images = auction.attachments.map((d) => ({ id: d.documentId, url: documentUrl(d.documentId), title: d.titleAr }))
+  const images = auction.attachments
+    .filter((d) => d.kind !== 'Document')
+    .map((d) => ({ id: d.documentId, url: documentUrl(d.documentId), title: d.titleAr }))
   const [title, setTitle] = useState('')
   const draft = ['Draft', 'Rejected'].includes(auction.status)
 
@@ -480,13 +461,15 @@ function Gallery({
       await client.post(`/auctions/${auction.id}/attachments`, {
         documentId: uploaded.id,
         titleAr: title.trim() || 'صورة القطعة',
+        // A photo: «معرض الصور» in the visitor settings decides who sees it.
+        kind: 'Photo',
       })
       setTitle('')
     })
 
   return (
     <>
-      <h2>معرض الصور</h2>
+      <h2>صور القطعة</h2>
       <PhotoGallery images={images} empty={<p className="muted">لا توجد صور لهذا المزاد بعد.</p>} />
       {canAdd && draft && (
         <div className="row" style={{ gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
@@ -578,5 +561,42 @@ function CoverPhoto({
         </label>
       )}
     </div>
+  )
+}
+
+/**
+ * المستندات — the booklet and the public documents of the auction, on their own
+ * tab. They are attached under «الإعداد والاعتماد» while the auction is prepared.
+ */
+function Documents({ auction }: { auction: Auction }) {
+  const papers = auction.attachments.filter((d) => d.kind !== 'Photo')
+  return (
+    <>
+      <h2>المستندات</h2>
+      <div className="document-row">
+        <span className="doc-icon"><Icon name="file" /></span>
+        <div className="grow">
+          <strong>كراسة الشروط</strong>
+          <small>{auction.bookletDocumentId ? 'مرفقة — تُتاح للمزايد بعد شرائها' : 'لم تُرفق بعد'}</small>
+        </div>
+      </div>
+      {auction.attachments.filter((d) => d.kind !== 'Photo').map((d) => (
+        <div key={d.documentId} className="document-row">
+          <span className="doc-icon"><Icon name="file" /></span>
+          <div className="grow">
+            <strong>{d.titleAr}</strong>
+            <small>مستند عام متاح للجميع</small>
+          </div>
+          <a
+            className="button small"
+            href={`${config.documentsApi.replace(/\/$/, '')}/documents/${d.documentId}`}
+            rel="noreferrer noopener"
+          >
+            <Icon name="download" size={16} /> تنزيل
+          </a>
+        </div>
+      ))}
+      {papers.length === 0 && <p className="muted small" style={{ marginTop: 12 }}>لا توجد مستندات عامة مرفقة.</p>}
+    </>
   )
 }

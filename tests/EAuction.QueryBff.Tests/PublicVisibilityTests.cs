@@ -23,7 +23,11 @@ public class PublicVisibilityTests
         BrokerageFeePercent = 2.5m,
         MaxExtensions = 3, TotalAreaSqm = 600m,
         Plots = [new PlotEntry(Guid.NewGuid(), "310105", 600m, "24.8", "46.6", null, null, 20m, 30m, "Residential")],
-        Attachments = [new PublicDocumentEntry(Guid.NewGuid(), "مخطط")],
+        Attachments =
+        [
+            new PublicDocumentEntry(Guid.NewGuid(), "صورة جوية", "Photo"),
+            new PublicDocumentEntry(Guid.NewGuid(), "المخطط المعتمد", "Document"),
+        ],
     };
 
     [Fact]
@@ -68,6 +72,23 @@ public class PublicVisibilityTests
         Assert.Equal(1_000_000_00, view.OpeningPriceMinorUnits);
         Assert.Null(view.StartsAt);
         Assert.Contains(PublicFields.Schedule, view.Hidden);
+    }
+
+    [Fact]
+    public void The_opening_price_and_the_step_and_the_photos_and_the_documents_are_set_apart()
+    {
+        var policy = PublicVisibilityPolicy.From(new Dictionary<string, bool>
+        {
+            [PublicFields.OpeningPrice] = true,
+            [PublicFields.MinIncrement] = false,
+            [PublicFields.Photos] = true,
+            [PublicFields.Documents] = false,
+        });
+        var view = AuctionDetail.From(Entry(), policy);
+
+        Assert.NotNull(view.OpeningPriceMinorUnits);
+        Assert.Null(view.MinIncrementMinorUnits);
+        Assert.Equal("Photo", Assert.Single(view.Attachments).Kind);
     }
 
     [Fact]
