@@ -80,7 +80,7 @@ app.MapGet("/health/ready", (CatalogueConsumer c) =>
 // is reachable from here.
 // ---------------------------------------------------------------------------
 
-app.MapGet("/auctions", (string? state, string? q, HttpContext http, CatalogueState catalogue, PublicVisibilityState visibility) =>
+app.MapGet("/auctions", (string? state, string? q, int? skip, int? take, HttpContext http, CatalogueState catalogue, PublicVisibilityState visibility) =>
 {
     // The chips' grouping is shared with the administrators' list (StageGroups), so
     // an auction is "upcoming" or "finished" on both portals alike.
@@ -96,17 +96,18 @@ app.MapGet("/auctions", (string? state, string? q, HttpContext http, CatalogueSt
 
     var all = catalogue.All().ToArray();
     var visitor = visibility.For(http);
-    var items = all
+    var slice = Slice.From(skip, take, Slice.MaxTake);
+    var matching = all
         .Where(a => InState(a, state) && Found(a))
         .OrderBy(a => a.StartsAt)
-        .Select(a => AuctionSummary.From(a, visitor))
         .ToArray();
+    var items = slice.Of(matching).Select(a => AuctionSummary.From(a, visitor)).ToArray();
 
     // Each status chip's count under the current search.
     var counts = StageGroups.Public
         .ToDictionary(k => k, k => all.Count(a => InState(a, k) && Found(a)));
 
-    return Results.Ok(new { count = items.Length, items, counts });
+    return Results.Ok(new { count = matching.Length, total = matching.Length, skip = slice.Skip, take = slice.Take, items, counts });
 }).AllowAnonymous();
 
 // ---------------------------------------------------------------------------
@@ -124,20 +125,21 @@ app.MapGet("/auctions", (string? state, string? q, HttpContext http, CatalogueSt
 // calls folded into one, so it discloses nothing new. The leader label in
 // particular goes through LeaderLabels, so a masked auction is masked here too.
 // ---------------------------------------------------------------------------
-app.MapGet("/auctions/live", (HttpContext http, CatalogueState catalogue, LeaderLabels labels, PublicVisibilityState visibility) =>
+app.MapGet("/auctions/live", (int? skip, int? take, HttpContext http, CatalogueState catalogue, LeaderLabels labels, PublicVisibilityState visibility) =>
 {
     // The live prices, folded together: a visitor gets them only if the setting
     // lets a visitor see a live price at all.
     if (visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.LivePrice))
         return Results.Json(new { signInRequired = true }, statusCode: StatusCodes.Status401Unauthorized);
 
-    var rows = catalogue.All()
+    var slice = Slice.From(skip, take, Slice.MaxTake);
+    var live = catalogue.All()
         .Where(a => a.Status == "Live")
         .OrderBy(a => a.EffectiveEndsAt ?? a.EndsAt)
-        .Select(a => MonitorRow.From(a, labels.For(a)))
         .ToArray();
+    var rows = slice.Of(live).Select(a => MonitorRow.From(a, labels.For(a))).ToArray();
 
-    return Results.Ok(new { count = rows.Length, items = rows, asOf = DateTimeOffset.UtcNow });
+    return Results.Ok(new { count = live.Length, total = live.Length, skip = slice.Skip, take = slice.Take, items = rows, asOf = DateTimeOffset.UtcNow });
 }).AllowAnonymous();
 
 // ---------------------------------------------------------------------------

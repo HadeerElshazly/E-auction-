@@ -18,8 +18,11 @@ public static class PublicFields
     /// <summary>مواعيد المزاد — when it opens and closes, and the countdowns.</summary>
     public const string Schedule = "schedule";
 
-    /// <summary>سعر الافتتاح وزيادة المزايدة.</summary>
+    /// <summary>سعر الافتتاح.</summary>
     public const string OpeningPrice = "openingPrice";
+
+    /// <summary>زيادة المزايدة — the step each bid adds.</summary>
+    public const string MinIncrement = "minIncrement";
 
     /// <summary>السعر الحالي — the live price, the next minimum bid, the leader and the bid count.</summary>
     public const string LivePrice = "livePrice";
@@ -30,8 +33,11 @@ public static class PublicFields
     /// <summary>شروط التمديد — the late-bid extension rule.</summary>
     public const string ExtensionTerms = "extensionTerms";
 
-    /// <summary>الصور والمستندات المرفقة — the gallery and the public attachments.</summary>
-    public const string Attachments = "attachments";
+    /// <summary>معرض الصور — the plot's photographs.</summary>
+    public const string Photos = "photos";
+
+    /// <summary>المستندات المرفقة — plans and the other public documents.</summary>
+    public const string Documents = "documents";
 
     /// <summary>التوضيحات العامة — the published answers to bidders' questions.</summary>
     public const string Clarifications = "clarifications";
@@ -45,11 +51,13 @@ public static class PublicFields
     public static readonly IReadOnlyList<PublicField> Configurable =
     [
         new(Schedule, "مواعيد المزاد", "موعد البدء والإغلاق والعدّ التنازلي.", PublicByDefault: true),
-        new(OpeningPrice, "سعر الافتتاح وزيادة المزايدة", "سعر البداية ومقدار الزيادة في كل مزايدة.", PublicByDefault: false),
+        new(OpeningPrice, "سعر الافتتاح", "السعر الذي تبدأ منه المزايدة.", PublicByDefault: false),
+        new(MinIncrement, "زيادة المزايدة", "المبلغ الذي تضيفه كل مزايدة على السعر الحالي.", PublicByDefault: false),
         new(LivePrice, "السعر الحالي وعدد المزايدات", "أعلى مزايدة أثناء المزاد وبعده، والحد الأدنى للمزايدة التالية.", PublicByDefault: false),
         new(Fees, "الرسوم", "نسبة السعي، وقيمة كراسة الشروط إن لم تكن مجانية.", PublicByDefault: false),
         new(ExtensionTerms, "شروط التمديد", "التمديد عند المزايدة المتأخرة وعدد مراته.", PublicByDefault: false),
-        new(Attachments, "الصور والمستندات المرفقة", "معرض صور القطعة والمخططات المرفقة بالمزاد.", PublicByDefault: false),
+        new(Photos, "معرض الصور", "صور القطعة المرفقة بالمزاد.", PublicByDefault: false),
+        new(Documents, "المستندات المرفقة", "المخططات والمستندات العامة المرفقة بالمزاد.", PublicByDefault: false),
         new(Clarifications, "التوضيحات العامة", "إجابات الاستفسارات المعتمدة للنشر.", PublicByDefault: false),
     ];
 

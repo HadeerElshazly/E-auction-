@@ -210,6 +210,19 @@ public static class StepUpSetup
 
         services.AddSingleton(options);
         services.AddSingleton(TimeProvider.System);
+
+        // StepUp:Enabled=false — a demonstration environment, where being sent to
+        // confirm a code before every payment and award interrupts the walk-through.
+        // The policies then ask for the role alone. On by default: production keeps
+        // the second factor on the actions that commit money or land.
+        if (!configuration.GetValue("StepUp:Enabled", true))
+        {
+            services.AddAuthorizationBuilder()
+                .AddPolicy(Policies.BidderStepUp, p => p.RequireRole(Roles.Bidder))
+                .AddPolicy(Policies.AwardCommitteeStepUp, p => p.RequireRole(Roles.AwardCommittee));
+            return services;
+        }
+
         services.AddSingleton<IAuthorizationHandler, StepUpHandler>();
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, StepUpResultHandler>();
 

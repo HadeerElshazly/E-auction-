@@ -125,10 +125,28 @@ app.MapPost("/auctions", async (
     try
     {
         auction = Auction.CreateDraft(r.CreatedByUserId, r.NameAr, r.NameEn, r.MinIncrementMinorUnits);
+
+        // «إضافة مزاد» in one go: the plot and the terms with the draft, in the same
+        // transaction, so a half-made auction is never left behind by a failed step.
+        if (r.Terms is { } t)
+            auction.UpdateDetails(
+                t.NameAr, t.NameEn, t.Channel, t.BidderVisibility, t.StartsAt, t.EndsAt,
+                t.OpeningPriceMinorUnits, t.ReservePriceMinorUnits, t.MinIncrementMinorUnits,
+                t.DepositMinorUnits, t.BrokerageFeePercent, t.BookletPriceMinorUnits,
+                t.QuietPeriodSeconds, t.MaxExtensions, t.Phase);
+        if (r.Plot is { } p)
+            auction.AddPlot(new Plot(
+                auction.Id, p.PlotNumber, p.AreaSqm, p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn,
+                p.StreetWidthMeters, p.FrontageMeters, p.LandUse, p.Facing));
     }
     catch (AuctionValidationException ex)
     {
         return Results.BadRequest(new { problems = ex.Problems });
+    }
+    catch (ArgumentException ex)
+    {
+        // A plot's own checks — a non-positive area or measurement.
+        return Results.BadRequest(new { problems = new[] { PlainMessage(ex) } });
     }
     db.Auctions.Add(auction);
 
@@ -270,7 +288,17 @@ app.MapPost("/auctions/{id:guid}/plots", (
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "AddPlot", a => a.AddPlot(new Plot(
         id, r.PlotNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn,
-        r.StreetWidthMeters, r.FrontageMeters, r.LandUse)),
+        r.StreetWidthMeters, r.FrontageMeters, r.LandUse, r.Facing)),
+        details: $"Plot {r.PlotNumber}, {r.AreaSqm} m²."))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «تعديل القطعة»: the auction's one plot, replaced as a whole.
+app.MapPut("/auctions/{id:guid}/plot", (
+    Guid id, AddPlotRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "UpdatePlot", a => a.ReplacePlot(new Plot(
+        id, r.PlotNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn,
+        r.StreetWidthMeters, r.FrontageMeters, r.LandUse, r.Facing)),
         details: $"Plot {r.PlotNumber}, {r.AreaSqm} m²."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
@@ -298,7 +326,7 @@ app.MapPost("/auctions/{id:guid}/cover-image", (
 app.MapPost("/auctions/{id:guid}/attachments", (
     Guid id, AttachmentRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
-    Mutate(f, id, ct, http, "AddPublicDocument", a => a.AddAttachment(r.DocumentId, r.TitleAr),
+    Mutate(f, id, ct, http, "AddPublicDocument", a => a.AddAttachment(r.DocumentId, r.TitleAr, r.Kind),
         details: $"Document {r.DocumentId}: {r.TitleAr}."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
@@ -606,8 +634,10 @@ app.MapPost("/auctions/{id:guid}/award/transfer", (
 // Every award still being followed up, overdue first: unpaid, unsettled, or settled
 // with the title not yet transferred. The list «تظهر الترسية غير المسددة» asks for.
 app.MapGet("/awards/follow-up", async (
+    int? skip, int? take,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
     var auctions = await db.Auctions
         .Include(a => a.Awards)
@@ -628,7 +658,17 @@ app.MapGet("/awards/follow-up", async (
         .ThenBy(e => e.Award.ComplianceDeadline)
         .ToArray();
 
-    return Results.Ok(new { items });
+    // Paged after the follow-up state is worked out: it is derived from each
+    // award's deadlines and receipts, not a column to filter on.
+    return Results.Ok(new
+    {
+        total = items.Length,
+        // Over every award, not this page: the warning above the list counts them all.
+        overdue = items.Count(e => e.Award.Overdue),
+        skip = slice.Skip,
+        take = slice.Take,
+        items = slice.Of(items),
+    });
 }).RequireAuthorization(Policies.Reporting);
 
 app.MapGet("/auctions", async (
@@ -785,7 +825,16 @@ static async Task<IResult> Mutate(
     {
         return Results.Conflict(new { error = ex.Message });
     }
+    catch (ArgumentException ex)
+    {
+        // A plot's own checks — a missing number, a non-positive area or measurement.
+        return Results.BadRequest(new { problems = new[] { PlainMessage(ex) } });
+    }
 }
+
+/// <summary>The domain's Arabic sentence, without .NET's appended "(Parameter 'x')".</summary>
+static string PlainMessage(ArgumentException ex) =>
+    ex.ParamName is null ? ex.Message : ex.Message.Replace($" (Parameter '{ex.ParamName}')", "");
 
 // Deliberately not `public partial class Program;` — making it public would
 // collide with the bid-catcher's Program in any test assembly referencing both.
@@ -821,8 +870,13 @@ public sealed record PublicVisibilityView(
     }
 }
 
+/// <summary>
+/// A new draft. With <see cref="Terms"/> and <see cref="Plot"/> it is the whole
+/// auction from one form — «إضافة مزاد»; without them, a name to fill in later.
+/// </summary>
 public sealed record CreateAuctionRequest(
-    Guid CreatedByUserId, string NameAr, string NameEn, long? MinIncrementMinorUnits = null);
+    Guid CreatedByUserId, string NameAr, string NameEn, long? MinIncrementMinorUnits = null,
+    UpdateAuctionRequest? Terms = null, AddPlotRequest? Plot = null);
 
 public sealed record UpdateAuctionRequest(
     string NameAr, string NameEn, BidChannel Channel,
@@ -840,12 +894,13 @@ public sealed record AssignClerkRequest(Guid ClerkUserId);
 public sealed record ExtendRequest(int Seconds);
 public sealed record SigningKeyResponse(string SecretHex, int KeyEpoch);
 
-public sealed record AttachmentRequest(Guid DocumentId, string TitleAr);
+/// <summary>Kind: "Photo" from the gallery, "Document" from the documents section.</summary>
+public sealed record AttachmentRequest(Guid DocumentId, string TitleAr, string? Kind = null);
 
 public sealed record AddPlotRequest(
     string PlotNumber, decimal AreaSqm, string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn,
-    decimal? StreetWidthMeters, decimal? FrontageMeters, LandUse? LandUse = null);
+    decimal? StreetWidthMeters, decimal? FrontageMeters, LandUse? LandUse = null, Facing? Facing = null);
 
 public sealed record DocumentRequest(Guid DocumentId);
 
@@ -884,11 +939,11 @@ public sealed record AuctionListItem(
 
 public sealed record PlotView(
     Guid Id, string PlotNumber, decimal AreaSqm, decimal? StreetWidthMeters, decimal? FrontageMeters, string? LandUse,
-    string? Latitude, string? Longitude, string? DescriptionAr)
+    string? Latitude, string? Longitude, string? DescriptionAr, string? Facing)
 {
     public static PlotView From(Plot p) => new(
         p.Id, p.PlotNumber, p.AreaSqm, p.StreetWidthMeters, p.FrontageMeters, p.LandUse?.ToString(),
-        p.Latitude, p.Longitude, p.DescriptionAr);
+        p.Latitude, p.Longitude, p.DescriptionAr, p.Facing?.ToString());
 }
 
 public sealed record AuctionResponse(
@@ -922,7 +977,7 @@ public sealed record AuctionResponse(
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
             a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
             a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,
-            a.Attachments.Select(x => new PublicDocument(x.DocumentId, x.TitleAr)).ToArray(),
+            a.Attachments.Select(x => new PublicDocument(x.DocumentId, x.TitleAr, x.Kind)).ToArray(),
             a.Plots.Count, a.TotalAreaSqm, a.RejectionReason,
             a.CancellationReason, a.CancelledAt, a.CancellationRefunded,
             a.ResultRejectionReason,

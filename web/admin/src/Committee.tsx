@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, Icon, PageHead, api, config, riyals, type Session } from '@eauction/shared'
+import { ApiError, Icon, PageHead, Pager, api, config, riyals, usePage, type Session } from '@eauction/shared'
 import { useBidders } from './winners'
 import { BidHistory } from './AuditViews'
 
@@ -36,12 +36,15 @@ export function Committee({
   committeeUserId,
   runDecision,
   onOpenAuction,
+  onOpenBids,
 }: {
   session: Session
   committeeUserId: string
   /** The portal's step-up runner: confirming an award asks for a fresh code. */
   runDecision: (work: () => Promise<unknown>) => Promise<unknown>
   onOpenAuction: (id: string) => void
+  /** The whole bid log of an auction, on its own screen. */
+  onOpenBids: (id: string) => void
 }) {
   const admin = useMemo(() => api({ baseUrl: config.adminApi, session }), [session])
   const [pending, setPending] = useState<Pending[] | null>(null)
@@ -51,11 +54,15 @@ export function Committee({
   const [bidsFor, setBidsFor] = useState<{ id: string; nameAr: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Both lists paged by the auction service, ten at a time.
+  const pendingPage = usePage()
+  const awardedPage = usePage()
+  const [totals, setTotals] = useState({ pending: 0, awarded: 0 })
 
   const load = useCallback(async () => {
     try {
-      const waiting = await admin.get<{ items: Array<{ id: string; nameAr: string; nameEn: string }> }>(
-        '/auctions?status=PendingAward&take=50',
+      const waiting = await admin.get<{ items: Array<{ id: string; nameAr: string; nameEn: string }>; total: number }>(
+        `/auctions?status=PendingAward&${pendingPage.query}`,
       )
       setPending(
         await Promise.all(
@@ -72,12 +79,14 @@ export function Committee({
           }),
         ),
       )
-      setAwarded((await admin.get<{ items: Awarded[] }>('/awards/follow-up')).items)
+      const followUp = await admin.get<{ items: Awarded[]; total: number }>(`/awards/follow-up?${awardedPage.query}`)
+      setAwarded(followUp.items)
+      setTotals({ pending: waiting.total, awarded: followUp.total })
       setError(null)
     } catch (e) {
       setError(e instanceof ApiError ? `تعذّر التحميل (${e.status}).` : String(e))
     }
-  }, [admin])
+  }, [admin, pendingPage.query, awardedPage.query])
   useEffect(() => {
     void load()
   }, [load])
@@ -116,7 +125,7 @@ export function Committee({
       </div>
       {error && <div className="notice error">{error}</div>}
       {pending === null && <p className="muted">…</p>}
-      {pending !== null && pending.length === 0 && awarded.length === 0 && (
+      {pending !== null && totals.pending === 0 && totals.awarded === 0 && (
         <div className="card empty-state">
           <h3>لا توجد قرارات بانتظار اللجنة</h3>
           <p className="muted">تظهر هنا المزادات فور إغلاقها وترشيح أعلى مزايد فيها.</p>
@@ -180,6 +189,7 @@ export function Committee({
           )}
         </section>
       ))}
+      <Pager page={pendingPage.page} total={totals.pending} noun="نتيجة" onPage={pendingPage.setPage} />
 
       {awarded.map((a) => {
         const w = a.award
@@ -250,6 +260,7 @@ export function Committee({
           </section>
         )
       })}
+      <Pager page={awardedPage.page} total={totals.awarded} noun="ترسية" onPage={awardedPage.setPage} />
 
       {bidsFor && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setBidsFor(null)}>
@@ -263,7 +274,13 @@ export function Committee({
                 <Icon name="close" size={18} />
               </button>
             </div>
-            <BidHistory session={session} auctionId={bidsFor.id} withDecisions={false} />
+            <BidHistory
+              session={session}
+              auctionId={bidsFor.id}
+              withDecisions={false}
+              preview={5}
+              onOpenFull={() => onOpenBids(bidsFor.id)}
+            />
           </div>
         </div>
       )}

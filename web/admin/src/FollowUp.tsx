@@ -4,10 +4,12 @@ import {
   api,
   config,
   day,
+  Pager,
   parseRiyals,
   riyals,
   sar,
   stageLabel,
+  usePage,
   when,
   type Session,
 } from '@eauction/shared'
@@ -65,6 +67,7 @@ interface Deposit {
   depositMethod: string | null
   depositPaymentRef: string | null
   depositSettlement: 'ToRefund' | 'ToRelease' | 'ToForfeit'
+  auctionNameAr: string | null
 }
 
 const transferAr: Record<Award['transferStatus'], { ar: string; tone: string }> = {
@@ -126,6 +129,13 @@ export function FollowUp({
   const [pending, setPending] = useState<PendingResult[]>([])
   const [reasons, setReasons] = useState<Record<string, string>>({})
   const [deposits, setDeposits] = useState<Deposit[] | null>(null)
+  // Each list paged by its service, ten at a time; the totals are the services'.
+  const awardsPage = usePage()
+  const depositsPage = usePage()
+  const pendingPage = usePage()
+  const [totals, setTotals] = useState({ awards: 0, deposits: 0, pending: 0, overdue: 0 })
+  // «التسويات والإفراغ» in two tabs, so neither list pushes the other off the screen.
+  const [tab, setTab] = useState<'awards' | 'deposits'>('awards')
   const [open, setOpen] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -133,18 +143,24 @@ export function FollowUp({
   const load = useCallback(async () => {
     try {
       const [a, d] = await Promise.all([
-        admin.get<{ items: FollowUpEntry[] }>('/awards/follow-up'),
-        participant.get<{ items: Deposit[] }>('/deposits/unsettled'),
+        admin.get<{ items: FollowUpEntry[]; total: number; overdue: number }>(
+          `/awards/follow-up?${awardsPage.query}`,
+        ),
+        participant.get<{
+          items: Array<{ application: Omit<Deposit, 'auctionNameAr'>; auctionNameAr: string | null }>
+          total: number
+        }>(`/deposits/unsettled?${depositsPage.query}`),
       ])
       setAwards(a.items)
-      setDeposits(d.items)
+      setDeposits(d.items.map((x) => ({ ...x.application, auctionNameAr: x.auctionNameAr })))
       setError(null)
 
       // Results awaiting the committee. The list gives the auctions; each one's
       // candidate and amount come from the auction itself.
-      const waiting = await admin.get<{ items: Array<{ id: string; nameAr: string }> }>(
-        '/auctions?status=PendingAward&take=50',
+      const waiting = await admin.get<{ items: Array<{ id: string; nameAr: string }>; total: number }>(
+        `/auctions?status=PendingAward&${pendingPage.query}`,
       )
+      setTotals({ awards: a.total, deposits: d.total, pending: waiting.total, overdue: a.overdue })
       setPending(
         await Promise.all(
           waiting.items.map(async (x) => {
@@ -164,7 +180,7 @@ export function FollowUp({
     } catch (e) {
       setError(describe(e))
     }
-  }, [admin, participant])
+  }, [admin, participant, awardsPage.query, depositsPage.query, pendingPage.query])
 
   useEffect(() => {
     void load()
@@ -193,19 +209,7 @@ export function FollowUp({
     ...pending.map((p) => p.candidateId),
   ])
 
-  // Every auction's name, not only the awarded ones': a deposit to settle may belong
-  // to an auction that ended unsold or was cancelled.
-  const [names, setNames] = useState<Map<string, string>>(new Map())
-  useEffect(() => {
-    admin
-      .get<{ items: Array<{ id: string; nameAr: string }> }>('/auctions?take=200')
-      .then((r) => setNames(new Map(r.items.map((x) => [x.id, x.nameAr]))))
-      .catch(() => undefined)
-  }, [admin])
-  const auctionName = (id: string) =>
-    names.get(id) ?? awards?.find((a) => a.auctionId === id)?.nameAr ?? id.slice(0, 8)
-
-  const overdue = awards?.filter((a) => a.award.overdue).length ?? 0
+  const overdue = totals.overdue
 
   return (
     <>
@@ -245,7 +249,7 @@ export function FollowUp({
         <div className="card" data-testid="pending-decisions">
           <div className="section-head">
             <h2>بانتظار قرار لجنة الترسية</h2>
-            <span className="pill wait">{pending.length}</span>
+            <span className="pill wait">{totals.pending}</span>
           </div>
           <p className="lede">
             نتائج أُغلقت ورشّح المعالج أعلى مزايد فيها. تأكيد الترسية يطلب التحقق بالرمز؛ رفض النتيجة
@@ -319,13 +323,36 @@ export function FollowUp({
               </tbody>
             </table>
           </div>
+          <Pager page={pendingPage.page} total={totals.pending} noun="نتيجة" onPage={pendingPage.setPage} />
         </div>
       )}
 
+      {!committee && (
+        <div className="tabs page-tabs" role="tablist" aria-label="أقسام التسويات">
+          <button
+            role="tab"
+            aria-selected={tab === 'awards'}
+            className={`tab${tab === 'awards' ? ' active' : ''}`}
+            onClick={() => setTab('awards')}
+          >
+            الترسيات قيد المتابعة <span className="num">{totals.awards}</span>
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'deposits'}
+            className={`tab${tab === 'deposits' ? ' active' : ''}`}
+            onClick={() => setTab('deposits')}
+          >
+            التأمينات غير المسوّاة <span className="num">{totals.deposits}</span>
+          </button>
+        </div>
+      )}
+
+      {(committee || tab === 'awards') && (
       <div className="card">
         <div className="section-head">
           <h2>الترسيات قيد المتابعة</h2>
-          {awards && <span className="pill teal plain">{awards.length}</span>}
+          <span className="pill teal plain">{totals.awards}</span>
         </div>
         <p className="lede">الترسيات غير المسددة، أو المسددة التي لم يكتمل إفراغها.</p>
 
@@ -357,14 +384,16 @@ export function FollowUp({
             })}
           </div>
         )}
+        <Pager page={awardsPage.page} total={totals.awards} noun="ترسية" onPage={awardsPage.setPage} />
       </div>
+      )}
 
-      {!committee && (
+      {!committee && tab === 'deposits' && (
         <>
       <div className="card">
         <div className="section-head">
           <h2>التأمينات غير المسوّاة</h2>
-          {deposits && <span className="pill teal plain">{deposits.length}</span>}
+          <span className="pill teal plain">{totals.deposits}</span>
         </div>
         <p className="lede">
           تأمينات حُسم مصيرها بعد الترسية أو عدم البيع ولم يُسجَّل بعد ردّها أو تحرير ضمانها
@@ -390,7 +419,7 @@ export function FollowUp({
                   <DepositRow
                     key={`${d.auctionId}:${d.bidderId}`}
                     deposit={d}
-                    auctionName={auctionName(d.auctionId)}
+                    auctionName={d.auctionNameAr ?? d.auctionId.slice(0, 8)}
                     canRecord={canRecord}
                     busy={busy}
                     onClose={(reference) =>
@@ -407,6 +436,7 @@ export function FollowUp({
             </table>
           </div>
         )}
+        <Pager page={depositsPage.page} total={totals.deposits} noun="تأمين" onPage={depositsPage.setPage} />
       </div>
         </>
       )}

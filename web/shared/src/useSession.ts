@@ -1,3 +1,4 @@
+import { SESSION_EXPIRED } from './api'
 import { useCallback, useEffect, useState } from 'react'
 import {
   completeLogin,
@@ -79,17 +80,27 @@ export function useSession(config: AuthConfig): SessionState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // The realm issues 15-minute tokens and the services reject an expired one, so
-  // drop the session at expiry rather than letting the user walk into a wall of 401s.
+  // The services reject an expired token, so the session ends at expiry — and on
+  // any 401 a service gives a signed-in request — and the portal goes back to its
+  // sign-in button, saying why, rather than leaving the user facing errors with
+  // no way back in.
   useEffect(() => {
     if (!session) return
+    const expire = () => {
+      setSession(null)
+      setError('انتهت الجلسة. سجّل الدخول مرة أخرى للمتابعة.')
+    }
     const ms = session.expiresAt - Date.now()
     if (ms <= 0) {
-      setSession(null)
+      expire()
       return
     }
-    const timer = window.setTimeout(() => setSession(null), ms)
-    return () => window.clearTimeout(timer)
+    const timer = window.setTimeout(expire, ms)
+    window.addEventListener(SESSION_EXPIRED, expire)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener(SESSION_EXPIRED, expire)
+    }
   }, [session])
 
   const signIn = useCallback(() => {

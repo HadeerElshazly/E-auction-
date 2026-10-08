@@ -163,9 +163,9 @@ public sealed class Auction
         foreach (var p in _plots)
             next._plots.Add(new Plot(
                 next.Id, p.PlotNumber, p.AreaSqm, p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn,
-                p.StreetWidthMeters, p.FrontageMeters, p.LandUse));
+                p.StreetWidthMeters, p.FrontageMeters, p.LandUse, p.Facing));
         foreach (var a in _attachments)
-            next._attachments.Add(new PublicAttachment(a.DocumentId, a.TitleAr));
+            next._attachments.Add(new PublicAttachment(a.DocumentId, a.TitleAr, a.Kind));
         return next;
     }
 
@@ -221,12 +221,24 @@ public sealed class Auction
         Phase = phase;
     }
 
+    /// <summary>
+    /// The auction's land. One plot per auction: each plot is offered, bid on and
+    /// awarded on its own. A second plot is a second auction.
+    /// </summary>
     public void AddPlot(Plot plot)
     {
         RequireDraft("add a plot to");
-        if (_plots.Any(p => p.PlotNumber == plot.PlotNumber))
+        if (_plots.Count > 0)
             throw new AuctionValidationException(
-                new[] { $"القطعة رقم {plot.PlotNumber} مضافة مسبقاً إلى هذا المزاد." });
+                new[] { "المزاد لقطعة واحدة فقط. عدّل القطعة الحالية، أو أنشئ مزاداً آخر للقطعة الجديدة." });
+        _plots.Add(plot);
+    }
+
+    /// <summary>«تعديل القطعة» — the auction's one plot, replaced while it is a draft.</summary>
+    public void ReplacePlot(Plot plot)
+    {
+        RequireDraft("edit the plot of");
+        _plots.Clear();
         _plots.Add(plot);
     }
 
@@ -251,8 +263,10 @@ public sealed class Auction
     /// <summary>A catalogue page is not a file share; this is a backstop, not a policy.</summary>
     public const int MaxAttachments = 20;
 
-    public void AddAttachment(Guid documentId, string titleAr)
+    public void AddAttachment(Guid documentId, string titleAr, string? kind = null)
     {
+        if (kind is not (null or "Photo" or "Document"))
+            throw new AuctionValidationException(new[] { "نوع المرفق يجب أن يكون صورة أو مستنداً." });
         RequireDraft("attach a public document to");
 
         var problems = new List<string>();
@@ -267,7 +281,7 @@ public sealed class Auction
         if (problems.Count > 0) throw new AuctionValidationException(problems);
 
         if (_attachments.Any(a => a.DocumentId == documentId)) return;
-        _attachments.Add(new PublicAttachment(documentId, titleAr.Trim()));
+        _attachments.Add(new PublicAttachment(documentId, titleAr.Trim(), kind));
     }
 
     public void RemoveAttachment(Guid documentId)
@@ -283,7 +297,8 @@ public sealed class Auction
 
         if (string.IsNullOrWhiteSpace(NameAr)) problems.Add("اسم المزاد بالعربي مطلوب.");
         if (string.IsNullOrWhiteSpace(NameEn)) problems.Add("اسم المزاد بالإنجليزي مطلوب.");
-        if (_plots.Count == 0) problems.Add("يجب إضافة قطعة أرض واحدة على الأقل.");
+        if (_plots.Count == 0) problems.Add("يجب إضافة القطعة.");
+        else if (_plots.Count > 1) problems.Add("المزاد لقطعة واحدة فقط.");
         if (BookletDocumentId is null) problems.Add("كراسة الشروط مطلوبة.");
 
         if (StartsAt is null || EndsAt is null)
@@ -378,10 +393,10 @@ public sealed class Auction
                 .Select(p => new PublicPlot(
                     p.Id, p.PlotNumber, p.AreaSqm,
                     p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn,
-                    p.StreetWidthMeters, p.FrontageMeters, p.LandUse?.ToString()))
+                    p.StreetWidthMeters, p.FrontageMeters, p.LandUse?.ToString(), p.Facing?.ToString()))
                 .ToArray(),
             Attachments = _attachments
-                .Select(a => new PublicDocument(a.DocumentId, a.TitleAr))
+                .Select(a => new PublicDocument(a.DocumentId, a.TitleAr, a.Kind))
                 .ToArray()
         });
 

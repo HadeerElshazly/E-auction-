@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CardClock, Icon, PageHead, Stats, api, config, parseRiyals, sar, when, type Session } from '@eauction/shared'
+import { CardClock, Icon, PageHead, Pager, Stats, api, config, sar, usePage, when, type Session } from '@eauction/shared'
 import type { AuctionListItem } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
+import { NewAuction, type NewAuctionBody } from './NewAuction'
 
 interface Props {
   session: Session
@@ -11,7 +12,7 @@ interface Props {
   busy: boolean
   onOpen: (id: string) => void
   /** The bid step in halalas, when given up front; else set later in the details. */
-  onCreate: (nameAr: string, nameEn: string, minIncrementMinorUnits: number | null) => void
+  onCreate: (body: NewAuctionBody) => void
 }
 
 /**
@@ -41,12 +42,7 @@ type FilterKey = (typeof filters)[number]['key']
 export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCreate }: Props) {
   const live = useLiveFigures()
   const leaders = useLeaders(session)
-  const [nameAr, setNameAr] = useState('')
-  const [nameEn, setNameEn] = useState('')
-  const [increment, setIncrement] = useState('')
   const [creating, setCreating] = useState(false)
-  const incrementMinor = increment.trim() === '' ? null : parseRiyals(increment)
-  const incrementInvalid = increment.trim() !== '' && (incrementMinor === null || incrementMinor <= 0)
 
   // Filtered and searched on the server, like the catalogue: every client gets the
   // same list and the chips' counts are real. Re-asked whenever the app reloads its
@@ -55,7 +51,9 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
   const [filter, setFilter] = useState<FilterKey>('all')
-  const [page, setPage] = useState<{ items: AuctionListItem[]; counts: Record<FilterKey, number> } | null>(null)
+  const [page, setPage] = useState<{ items: AuctionListItem[]; total: number; counts: Record<FilterKey, number> } | null>(null)
+  const paging = usePage()
+  useEffect(() => paging.setPage(0), [filter, debounced])
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(query.trim()), 300)
@@ -63,14 +61,16 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
   }, [query])
 
   useEffect(() => {
-    const params = new URLSearchParams({ take: '200' })
+    const params = new URLSearchParams()
     if (filter !== 'all') params.set('state', filter)
     if (debounced) params.set('q', debounced)
     client
-      .get<{ items: AuctionListItem[]; counts: Record<FilterKey, number> }>(`/auctions?${params}`)
+      .get<{ items: AuctionListItem[]; total: number; counts: Record<FilterKey, number> }>(
+        `/auctions?${params}&${paging.query}`,
+      )
       .then(setPage)
       .catch(() => undefined)
-  }, [client, filter, debounced, auctions])
+  }, [client, filter, debounced, auctions, paging.query])
 
   const visible = page?.items ?? auctions
 
@@ -118,87 +118,14 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
       />
 
       {canCreate && creating && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
-          <div className="modal">
-            <div className="modal-head">
-              <button
-                className="icon-btn"
-                aria-label="إغلاق النافذة"
-                onClick={() => setCreating(false)}
-              >
-                ✕
-              </button>
-              <div className="grow" style={{ textAlign: 'start' }}>
-                <h2>إنشاء مزاد جديد</h2>
-                <p>قم بإدخال بيانات المزاد</p>
-              </div>
-            </div>
-
-            {/* No step bar, though the proposal's create dialog has one. Theirs
-                collects the whole auction in four steps; this one names it and
-                hands over to the editor, because an auction cannot be priced or
-                scheduled before it has a plot in it. A progress bar that never
-                reached step two would be decoration claiming to be a flow. */}
-            <p className="muted small" style={{ margin: '0 0 20px' }}>
-              الاسم وزيادة المزايدة الآن. القطع والأسعار والجدولة في شاشة المزاد بعد الحفظ.
-            </p>
-
-            <div className="grid">
-              <label>
-                <span>اسم المزاد (عربي)</span>
-                <input
-                  value={nameAr}
-                  onChange={(e) => setNameAr(e.target.value)}
-                  placeholder="مخطط السعيد — المرحلة الأولى"
-                  aria-label="اسم المزاد بالعربي"
-                />
-              </label>
-              <label>
-                <span>اسم المزاد (إنجليزي)</span>
-                <input
-                  className="ltr"
-                  value={nameEn}
-                  onChange={(e) => setNameEn(e.target.value)}
-                  placeholder="Al-Saeed plan — phase one"
-                  aria-label="Auction name in English"
-                />
-              </label>
-              <label>
-                <span>زيادة المزايدة (ر.س)</span>
-                <input
-                  className="ltr num"
-                  inputMode="decimal"
-                  value={increment}
-                  onChange={(e) => setIncrement(e.target.value)}
-                  placeholder="5,000"
-                  aria-label="زيادة المزايدة بالريال"
-                  aria-invalid={incrementInvalid}
-                />
-                <small className="muted">
-                  المبلغ الذي تضيفه كل ضغطة زيادة يقدّمها المزايد، وهو أقل زيادة تُقبل على السعر الحالي.
-                </small>
-                {incrementInvalid && <small style={{ color: 'var(--danger)' }}>أدخل مبلغاً أكبر من صفر.</small>}
-              </label>
-            </div>
-
-            <div className="row end" style={{ marginTop: 8 }}>
-              <button onClick={() => setCreating(false)}>إلغاء</button>
-              <button
-                className="primary"
-                disabled={busy || nameAr.trim() === '' || nameEn.trim() === '' || incrementInvalid}
-                onClick={() => {
-                  onCreate(nameAr.trim(), nameEn.trim(), incrementMinor)
-                  setNameAr('')
-                  setNameEn('')
-                  setIncrement('')
-                  setCreating(false)
-                }}
-              >
-                إنشاء مسودة
-              </button>
-            </div>
-          </div>
-        </div>
+        <NewAuction
+          busy={busy}
+          onClose={() => setCreating(false)}
+          onCreate={(body) => {
+            onCreate(body)
+            setCreating(false)
+          }}
+        />
       )}
 
       {auctions.length > 0 && (
@@ -263,6 +190,7 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
           </div>
         )
       )}
+      <Pager page={paging.page} total={page?.total ?? 0} noun="مزاد" onPage={paging.setPage} />
     </>
   )
 }

@@ -37,7 +37,7 @@ public abstract record DomainEvent : IDomainEvent
 /// later, which is how internal fields end up on a public topic by accident.
 /// </summary>
 /// <summary>A document anyone may read, named for the catalogue that lists it.</summary>
-public sealed record PublicDocument(Guid DocumentId, string TitleAr);
+public sealed record PublicDocument(Guid DocumentId, string TitleAr, string? Kind = null);
 
 public sealed record PublicPlot(
     Guid Id, string PlotNumber, decimal AreaSqm,
@@ -45,7 +45,9 @@ public sealed record PublicPlot(
     string? DescriptionAr, string? DescriptionEn,
     decimal? StreetWidthMeters, decimal? FrontageMeters,
     /// <summary>الاستخدام, by name ("Residential", "Commercial", …); null when not set.</summary>
-    string? LandUse = null);
+    string? LandUse = null,
+    /// <summary>الواجهة, by name ("NorthEast", …); null when not set.</summary>
+    string? Facing = null);
 
 public sealed record AuctionApproved : DomainEvent
 {

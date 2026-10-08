@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BellIcon, Icon, PageHead, api, config, timestamp, type Session } from '@eauction/shared'
+import { BellIcon, Icon, PageHead, Pager, api, config, timestamp, usePage, type Session } from '@eauction/shared'
 
 export interface Notice {
   id: string
@@ -33,17 +33,23 @@ export function useNotices(session: Session | null) {
   )
   const [items, setItems] = useState<Notice[]>([])
   const [unread, setUnread] = useState(0)
+  const [total, setTotal] = useState(0)
+  // The page «الإشعارات» is on; the service cuts it. The bell needs only the count.
+  const paging = usePage()
 
   const load = useCallback(async () => {
     if (!client) return
     try {
-      const page = await client.get<{ items: Notice[]; unread: number }>('/notifications?take=50')
+      const page = await client.get<{ items: Notice[]; unread: number; total: number }>(
+        `/notifications?${paging.query}`,
+      )
       setItems(page.items)
       setUnread(page.unread)
+      setTotal(page.total)
     } catch {
       // A bell that cannot reach its service shows what it last knew.
     }
-  }, [client])
+  }, [client, paging.query])
 
   useEffect(() => {
     void load()
@@ -82,7 +88,7 @@ export function useNotices(session: Session | null) {
     await load()
   }, [client, load])
 
-  return { items, unread, markRead, markAllRead }
+  return { items, unread, markRead, markAllRead, total, paging }
 }
 
 /** The bell in the top bar: the unread count, and the way to the page. */
@@ -112,7 +118,7 @@ export function NotificationsPage({
   notices: ReturnType<typeof useNotices>
   onOpen: (auctionId: string) => void
 }) {
-  const { items, unread, markRead, markAllRead } = notices
+  const { items, unread, markRead, markAllRead, total, paging } = notices
   return (
     <>
       <PageHead
@@ -161,6 +167,7 @@ export function NotificationsPage({
             </div>
           ))
         )}
+        <Pager page={paging.page} total={total} noun="إشعار" onPage={paging.setPage} />
       </div>
     </>
   )

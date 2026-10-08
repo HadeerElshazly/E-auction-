@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, Icon, PageHead, Stats, api, config, when, type Session } from '@eauction/shared'
+import { ApiError, Icon, PageHead, Pager, Stats, api, config, usePage, when, type Session } from '@eauction/shared'
 
 interface Row {
   application: {
@@ -41,7 +41,9 @@ export function ApplicationsQueue({
   const participant = useMemo(() => api({ baseUrl: config.participantApi, session }), [session])
   const documents = useMemo(() => api({ baseUrl: config.documentsApi, session }), [session])
   const [filter, setFilter] = useState<Filter>('UnderReview')
-  const [page, setPage] = useState<{ items: Row[]; counts: Record<string, number> } | null>(null)
+  const [page, setPage] = useState<{ items: Row[]; total: number; counts: Record<string, number> } | null>(null)
+  const paging = usePage()
+  useEffect(() => paging.setPage(0), [filter])
   const [refusing, setRefusing] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -49,12 +51,12 @@ export function ApplicationsQueue({
 
   const load = useCallback(() => {
     participant
-      .get<{ items: Row[]; counts: Record<string, number> }>(
-        `/applications${filter === 'all' ? '' : `?eligibility=${filter}`}`,
+      .get<{ items: Row[]; total: number; counts: Record<string, number> }>(
+        `/applications?${filter === 'all' ? '' : `eligibility=${filter}&`}${paging.query}`,
       )
       .then(setPage)
       .catch((e) => setError(e instanceof ApiError ? `تعذّر التحميل (${e.status}).` : String(e)))
-  }, [participant, filter])
+  }, [participant, filter, paging.query])
   useEffect(() => load(), [load])
 
   const run = async (work: () => Promise<unknown>) => {
@@ -224,6 +226,7 @@ export function ApplicationsQueue({
                 })}
               </tbody>
             </table>
+            <Pager page={paging.page} total={page?.total ?? 0} noun="طلب" onPage={paging.setPage} />
           </div>
         )}
       </div>

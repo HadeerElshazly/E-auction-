@@ -235,10 +235,11 @@ public sealed record AuctionEntry
             : PriceMinorUnits.Value + MinIncrementMinorUnits;
 }
 
-public sealed record PublicDocumentEntry(Guid DocumentId, string TitleAr);
+/// <summary>Kind: "Photo", "Document", or null for one added before the distinction.</summary>
+public sealed record PublicDocumentEntry(Guid DocumentId, string TitleAr, string? Kind = null);
 
 public sealed record PlotEntry(
     Guid Id, string PlotNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn,
-    decimal? StreetWidthMeters, decimal? FrontageMeters, string? LandUse = null);
+    decimal? StreetWidthMeters, decimal? FrontageMeters, string? LandUse = null, string? Facing = null);

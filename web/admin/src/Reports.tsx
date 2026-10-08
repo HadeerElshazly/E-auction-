@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageHead,ApiError, api, config, day, riyals, stageLabel, type Session } from '@eauction/shared'
+import { ApiError, PageHead, Pager, api, config, day, riyals, stageLabel, usePage, type Session } from '@eauction/shared'
 
 /**
  * التقارير, as a stakeholder reads them.
@@ -32,6 +32,7 @@ const TABS: ReadonlyArray<{ id: Tab; label: string; path: string; file: string }
 
 interface Page<T> {
   count: number
+  total: number
   items: T[]
 }
 
@@ -162,7 +163,7 @@ export function Reports({ session }: { session: Session }) {
    */
   const query = useCallback(
     (extra?: string) => {
-      const parts: string[] = ['take=200']
+      const parts: string[] = []
       if (phase) parts.push(`phase=${encodeURIComponent(phase)}`)
       if (tab === 'revenue') parts.push(`groupBy=${groupBy}`)
       if (extra) parts.push(extra)
@@ -176,6 +177,12 @@ export function Reports({ session }: { session: Session }) {
    * button needing its own copy of it.
    */
   const [refresh, setRefresh] = useState(0)
+
+  // The page of the report on screen, cut by the reporting service; back to the
+  // first page whenever the report or its filters change. The CSV is always whole.
+  const paging = usePage()
+  const [total, setTotal] = useState(0)
+  useEffect(() => paging.setPage(0), [tab, phase, groupBy])
 
   /**
    * One fetch, in the effect that owns it, discarding its own result if something
@@ -208,10 +215,11 @@ export function Reports({ session }: { session: Session }) {
     setError(null)
 
     client
-      .get<Page<unknown>>(active.path + query())
+      .get<Page<unknown>>(active.path + query(paging.query))
       .then((page) => {
         if (cancelled) return
         setData({ tab: active.id, rows: page.items })
+        setTotal(page.total)
         setBusy(false)
       })
       .catch((e: unknown) => {
@@ -227,7 +235,7 @@ export function Reports({ session }: { session: Session }) {
     return () => {
       cancelled = true
     }
-  }, [active.id, active.path, client, query, refresh])
+  }, [active.id, active.path, client, query, refresh, paging.query])
 
   // The phase filter's options, so nobody has to type مخطط السعيد — المرحلة الأولى
   // by hand to narrow a report.
@@ -333,7 +341,10 @@ export function Reports({ session }: { session: Session }) {
           لا توجد بيانات لهذا التقرير بعد.
         </p>
       ) : (
-        <Table tab={tab} rows={data.rows} />
+        <>
+          <Table tab={tab} rows={data.rows} />
+          <Pager page={paging.page} total={total} noun="صف" onPage={paging.setPage} />
+        </>
       )}
 
       {tab === 'revenue' && data.tab === tab && data.rows.length > 0 && (

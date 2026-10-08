@@ -132,12 +132,12 @@ public sealed class CatalogueConsumer(
                 .Select(x => new PlotEntry(
                     x.Id, x.PlotNumber, x.AreaSqm,
                     x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn,
-                    x.StreetWidthMeters, x.FrontageMeters, x.LandUse))
+                    x.StreetWidthMeters, x.FrontageMeters, x.LandUse, x.Facing))
                 .ToArray(),
             CoverImageDocumentId = p.CoverImageDocumentId,
             Attachments = (p.Attachments ?? [])
                 .Where(x => x.DocumentId != Guid.Empty && !string.IsNullOrWhiteSpace(x.TitleAr))
-                .Select(x => new PublicDocumentEntry(x.DocumentId, x.TitleAr))
+                .Select(x => new PublicDocumentEntry(x.DocumentId, x.TitleAr, x.Kind))
                 .ToArray()
         });
 
@@ -288,6 +288,7 @@ public sealed class CatalogueConsumer(
     {
         public Guid DocumentId { get; init; }
         public string TitleAr { get; init; } = "";
+        public string? Kind { get; init; }
     }
 
     private sealed record PlotPayload
@@ -302,6 +303,7 @@ public sealed class CatalogueConsumer(
         public decimal? StreetWidthMeters { get; init; }
         public decimal? FrontageMeters { get; init; }
         public string? LandUse { get; init; }
+        public string? Facing { get; init; }
     }
 
     private sealed record CurrentWinnerPayload

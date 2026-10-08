@@ -60,7 +60,8 @@ export interface Auction {
   bookletDocumentId: string | null
   coverImageDocumentId: string | null
   /** Public documents for the catalogue — plans, photographs. Never the booklet. */
-  attachments: { documentId: string; titleAr: string }[]
+  /** kind: "Photo" for the gallery, "Document" for a plan or paper; null on older ones. */
+  attachments: { documentId: string; titleAr: string; kind: 'Photo' | 'Document' | null }[]
   plotCount: number
   totalAreaSqm: number
   rejectionReason: string | null
@@ -84,6 +85,8 @@ export interface PlotView {
   streetWidthMeters: number | null
   frontageMeters: number | null
   landUse: string | null
+  /** الواجهة, by name ("NorthEast", …); see shared facingAr. */
+  facing: string | null
   latitude: string | null
   longitude: string | null
   descriptionAr: string | null

@@ -22,6 +22,7 @@ import { FollowUp } from './FollowUp'
 import { Inquiries } from './Inquiries'
 import { ApplicationsQueue } from './ApplicationsQueue'
 import { Committee } from './Committee'
+import { BidLogPage } from './AuditViews'
 import { AuctionDetail } from './AuctionDetail'
 import { Monitor } from './Monitor'
 import { VisitorSettings } from './VisitorSettings'
@@ -281,6 +282,14 @@ export function App() {
             committeeUserId={session.subject}
             runDecision={(work) => stepUp.run('followup-decision', work)}
             onOpenAuction={open}
+            onOpenBids={(id) => navigate(`bids/${id}`)}
+          />
+        ) : view === 'bids' && routeId && (isCommittee || isAdmin || canAudit) ? (
+          <BidLogPage
+            session={session}
+            auctionId={routeId}
+            nameAr={auctions.find((a) => a.id === routeId)?.nameAr ?? null}
+            onBack={() => window.history.back()}
           />
         ) : view === 'followup' ? (
           <FollowUp
@@ -339,13 +348,12 @@ export function App() {
             canCreate={isAdmin}
             busy={busy}
             onOpen={open}
-            onCreate={(nameAr, nameEn, minIncrementMinorUnits) =>
+            onCreate={(body) =>
               act(async () => {
+                // The draft, its terms and its plot in one request, saved together.
                 const created = await client.post<Auction>('/auctions', {
                   createdByUserId: session.subject,
-                  nameAr,
-                  nameEn,
-                  minIncrementMinorUnits,
+                  ...body,
                 })
                 setSelected(created)
                 navigate(`auction/${created.id}`)

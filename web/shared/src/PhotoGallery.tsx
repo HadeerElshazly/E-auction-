@@ -72,7 +72,7 @@ export function PhotoGallery({
 }
 
 /** One photo full size over the page; Esc closes it, the arrow keys move along. */
-function Lightbox({
+export function Lightbox({
   images,
   index,
   onIndex,

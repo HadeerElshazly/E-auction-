@@ -51,25 +51,21 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
     await test.step('an administrator prepares a hall auction', async () => {
       const page = admin.page
 
-      await page.getByRole('button', { name: '+ إنشاء مزاد' }).click()
-      await page.getByLabel('اسم المزاد بالعربي').fill(nameAr)
-      await page.getByLabel('Auction name in English').fill('Al-Saeed hall — e2e')
-      await page.getByRole('button', { name: 'إنشاء مسودة' }).click()
+      // «إضافة مزاد»: one auction is one plot, entered with the auction's terms in
+      // a single form and saved as a draft.
+      await page.getByRole('button', { name: 'إضافة مزاد' }).click()
+      const form = page.getByRole('dialog', { name: 'إضافة مزاد جديد' })
+      await form.getByLabel('رقم القطعة').fill('2001')
+      await form.getByLabel('المساحة بالمتر المربع').fill('900')
+      await form.getByLabel('سعر البداية').fill('2000000')
+      await form.getByLabel('زيادة المزايدة').fill('5000')
+      await form.getByLabel('التأمين').fill('100000')
+      await form.getByRole('button', { name: 'حفظ المسودة' }).click()
 
       await expect(page.getByText('مسودة')).toBeVisible()
       auctionId = await page.locator('code.muted.small').first().innerText()
       expect(auctionId).toMatch(/^[0-9a-f-]{36}$/)
 
-      await page.getByTestId('auction-tab-info').click()
-      await page.getByRole('button', { name: 'إضافة قطعة' }).click()
-      const dialog = page.getByRole('dialog', { name: 'إضافة قطعة' })
-      await dialog.getByLabel('رقم القطعة').fill('2001')
-      await dialog.getByLabel(/المساحة/).fill('900')
-      await dialog.getByRole('button', { name: 'إضافة القطعة' }).click()
-      await expect(
-        page.getByRole('heading', { level: 3, name: /قطع الأرض \(1\)/ }),
-      ).toBeVisible()
-      await page.getByTestId('auction-tab-setup').click()
 
       // Real files, through the document service, and the ids it hands back. The
       // Arabic filename is the case that matters: S3 user metadata is ASCII-only,

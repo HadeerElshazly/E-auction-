@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Icon, PageHead, Stats, api, config, riyals, sar, stageLabels, useTick } from '@eauction/shared'
+import { Icon, PageHead, Pager, Stats, api, config, riyals, sar, stageLabels, usePage, useTick, type PageOf, type Session } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Props {
   auctions: AuctionSummary[]
-  signedIn: boolean
+  session: Session | null
   onOpen: (id: string) => void
 }
 
@@ -33,18 +33,24 @@ const filters = [
 
 type FilterKey = (typeof filters)[number]['key']
 
-interface CataloguePage {
-  items: AuctionSummary[]
+interface CataloguePage extends PageOf<AuctionSummary> {
   counts: Record<FilterKey, number>
 }
 
 /** المزادات — the public catalogue: what is on offer, what is running, what is next. */
-export function Catalogue({ auctions, signedIn, onOpen }: Props) {
+export function Catalogue({ auctions, session, onOpen }: Props) {
+  const signedIn = session !== null
   const [query, setQuery] = useState('')
   const [debounced, setDebounced] = useState('')
   const [filter, setFilter] = useState<FilterKey>('all')
   const [page, setPage] = useState<CataloguePage | null>(null)
-  const client = useMemo(() => api({ baseUrl: config.queryApi, session: null }), [])
+  const paging = usePage()
+  // As whoever is reading: a visitor gets what «إعدادات العرض للزوار» allows, a
+  // signed-in bidder the whole public auction.
+  const client = useMemo(() => api({ baseUrl: config.queryApi, session }), [session])
+
+  // A new filter or search starts again from the first page.
+  useEffect(() => paging.setPage(0), [filter, debounced])
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(query.trim()), 300)
@@ -57,12 +63,11 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
     const params = new URLSearchParams()
     if (filter !== 'all') params.set('state', filter)
     if (debounced) params.set('q', debounced)
-    const qs = params.toString()
     client
-      .get<CataloguePage>(`/auctions${qs ? `?${qs}` : ''}`)
+      .get<CataloguePage>(`/auctions?${params.toString()}&${paging.query}`)
       .then(setPage)
       .catch(() => undefined)
-  }, [client, filter, debounced, auctions])
+  }, [client, filter, debounced, auctions, paging.query])
 
   const visible = page?.items ?? []
   const countFor = (key: FilterKey) => page?.counts[key] ?? 0
@@ -142,7 +147,7 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
         </div>
       )}
 
-      <div className="section-foot">عرض {visible.length} مزاد</div>
+      <Pager page={paging.page} total={page?.total ?? 0} noun="مزاد" onPage={paging.setPage} />
     </>
   )
 }

@@ -16,7 +16,7 @@ public class PreparationWorkflowTests
 
         Assert.Contains(problems, p => p.Contains("اسم المزاد بالعربي"));
         Assert.Contains(problems, p => p.Contains("اسم المزاد بالإنجليزي"));
-        Assert.Contains(problems, p => p.Contains("قطعة أرض واحدة على الأقل"));
+        Assert.Contains(problems, p => p.Contains("يجب إضافة القطعة"));
         Assert.Contains(problems, p => p.Contains("كراسة الشروط"));
         Assert.Contains(problems, p => p.Contains("تاريخ ووقت بداية المزاد"));
     }
@@ -76,14 +76,15 @@ public class PreparationWorkflowTests
     }
 
     [Fact]
-    public void An_auction_can_hold_several_plots_sold_as_one_package()
+    public void An_auction_is_for_one_plot_which_can_be_replaced_while_a_draft()
     {
         var auction = Build.ReadyAuction(Now);
-        auction.AddPlot(new Plot(auction.Id, "SA-0002", 700m));
-        auction.AddPlot(new Plot(auction.Id, "SA-0003", 800m));
+        Assert.Throws<AuctionValidationException>(() => auction.AddPlot(new Plot(auction.Id, "SA-0002", 700m)));
 
-        Assert.Equal(3, auction.Plots.Count);
-        Assert.Equal(2150.5m, auction.TotalAreaSqm);
+        auction.ReplacePlot(new Plot(auction.Id, "SA-0002", 700m));
+
+        Assert.Equal("SA-0002", Assert.Single(auction.Plots).PlotNumber);
+        Assert.Equal(700m, auction.TotalAreaSqm);
         Assert.Empty(auction.Validate(Now));
     }
 
@@ -158,7 +159,7 @@ public class PreparationWorkflowTests
         Assert.Equal("الصور غير واضحة", auction.RejectionReason);
         Assert.Single(auction.Events.OfType<AuctionRejected>());
 
-        auction.AddPlot(new Plot(auction.Id, "SA-0002", 700m));
+        auction.ReplacePlot(new Plot(auction.Id, "SA-0002", 700m));
         auction.SubmitForReview(Now);
 
         Assert.Equal(AuctionStatus.PendingReview, auction.Status);

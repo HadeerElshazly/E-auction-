@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ApiError, api, config, sar, timestamp, type Session } from '@eauction/shared'
+import { ApiError, PAGE_SIZE, PageHead, Pager, api, config, sar, timestamp, usePage, type Session } from '@eauction/shared'
 import { useBidders } from './winners'
 
 const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
@@ -189,6 +189,7 @@ interface BidRow {
 }
 
 interface BidHistoryPage {
+  total: number
   recorded: number
   read: number
   acceptedCount: number
@@ -240,13 +241,23 @@ export function BidHistory({
   session,
   auctionId,
   withDecisions = true,
+  preview,
+  onOpenFull,
 }: {
   session: Session
   auctionId: string
   withDecisions?: boolean
+  /**
+   * In a dialog: only the latest few bids, and — when there are more — a button
+   * that opens the whole log on its own screen, rather than a dialog that scrolls
+   * for ever.
+   */
+  preview?: number
+  onOpenFull?: () => void
 }) {
   const audit = useMemo(() => api({ baseUrl: config.auditApi, session }), [session])
   const [page, setPage] = useState<BidHistoryPage | null>(null)
+  const paging = usePage(preview ?? PAGE_SIZE)
   const [decisions, setDecisions] = useState<Array<{ offset: number; at: string; action: string; details: string | null; payload?: string }> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const bidder = useBidders(session, page?.items.map((b) => b.bidderId) ?? [])
@@ -255,7 +266,7 @@ export function BidHistory({
     setPage(null)
     setError(null)
     audit
-      .get<BidHistoryPage>(`/audit/auctions/${auctionId}/bids`)
+      .get<BidHistoryPage>(`/audit/auctions/${auctionId}/bids?${paging.query}`)
       .then(setPage)
       .catch((e) => setError(e instanceof ApiError ? `تعذّر تحميل سجل المزايدات (${e.status}).` : String(e)))
     if (withDecisions)
@@ -265,7 +276,7 @@ export function BidHistory({
         )
         .then((r) => setDecisions(r.items.filter((x) => AWARD_ACTIONS[x.action]).reverse()))
         .catch(() => setDecisions(null))
-  }, [audit, auctionId, withDecisions])
+  }, [audit, auctionId, withDecisions, paging.query])
 
   const nameOf = (id: string) => bidder(id)?.nameAr ?? `${id.slice(0, 8)}…`
   const actorOf = (payload?: string) => {
@@ -282,7 +293,7 @@ export function BidHistory({
       {!page && !error && <p className="muted">…</p>}
       {page && (
         <>
-          <div className="stat-grid" style={{ marginBottom: 12 }}>
+          <div className="stat-grid compact" style={{ marginBottom: 12 }}>
             <div className="stat">
               <div className="stat-label">المزايدات المسجّلة</div>
               <div className="stat-value num">{page.read}</div>
@@ -344,6 +355,18 @@ export function BidHistory({
               </table>
             </div>
           )}
+          {preview ? (
+            page.total > preview &&
+            onOpenFull && (
+              <div className="row" style={{ justifyContent: 'center', marginTop: 12 }}>
+                <button onClick={onOpenFull}>
+                  عرض السجل كاملاً (<span className="num">{page.total}</span> مزايدة)
+                </button>
+              </div>
+            )
+          ) : (
+            <Pager page={paging.page} total={page.total} noun="مزايدة" onPage={paging.setPage} />
+          )}
         </>
       )}
 
@@ -399,5 +422,35 @@ export function BidHistoryScreen({ session }: { session: Session }) {
       </select>
       {auctionId && <BidHistory session={session} auctionId={auctionId} />}
     </div>
+  )
+}
+
+/**
+ * سجل العروض on a screen of its own: the whole log of one auction, paged by the
+ * audit service — what the dialog's «عرض السجل كاملاً» opens.
+ */
+export function BidLogPage({
+  session,
+  auctionId,
+  nameAr,
+  onBack,
+}: {
+  session: Session
+  auctionId: string
+  nameAr: string | null
+  onBack: () => void
+}) {
+  return (
+    <>
+      <PageHead
+        eyebrow="سجل العروض"
+        title={nameAr ?? 'سجل المزايدات'}
+        sub="كل مزايدة سُجّلت على هذا المزاد، الأحدث أولاً، مع نتيجتها."
+        action={<button onClick={onBack}>رجوع</button>}
+      />
+      <div className="card">
+        <BidHistory session={session} auctionId={auctionId} withDecisions={false} />
+      </div>
+    </>
   )
 }

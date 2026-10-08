@@ -1,18 +1,30 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Icon, LAND_USES, PlotMap, landUseAr, type Api } from '@eauction/shared'
+import { FACINGS, Icon, LAND_USES, PlotMap, facingAr, landUseAr, type Api } from '@eauction/shared'
 import type { Auction } from './types'
 
 type Plot = Auction['plots'][number]
 
-const located = (p: Plot) =>
+const located = (p: { latitude: string | null; longitude: string | null }) =>
   !!p.latitude && !!p.longitude && !isNaN(Number(p.latitude)) && !isNaN(Number(p.longitude))
 
 /** On the page itself, so the top bar and the side box cannot sit over it. */
-function Modal({ title, sub, onClose, children }: { title: string; sub?: string; onClose: () => void; children: ReactNode }) {
+export function Modal({
+  title,
+  sub,
+  onClose,
+  wide,
+  children,
+}: {
+  title: string
+  sub?: string
+  onClose: () => void
+  wide?: boolean
+  children: ReactNode
+}) {
   return createPortal(
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="modal">
+      <div className={`modal${wide ? ' wide' : ''}`}>
         <div className="modal-head">
           <button className="icon-btn" aria-label="إغلاق النافذة" onClick={onClose}>
             ✕
@@ -29,10 +41,145 @@ function Modal({ title, sub, onClose, children }: { title: string; sub?: string;
   )
 }
 
+/** The plot as typed into a form. */
+export interface PlotDraft {
+  number: string
+  area: string
+  use: string
+  street: string
+  frontage: string
+  facing: string
+  lat: string
+  lng: string
+  description: string
+}
+
+export const emptyPlot: PlotDraft = {
+  number: '',
+  area: '',
+  use: 'Residential',
+  street: '',
+  frontage: '',
+  facing: '',
+  lat: '',
+  lng: '',
+  description: '',
+}
+
+const draftOf = (p: Plot): PlotDraft => ({
+  number: p.plotNumber,
+  area: String(p.areaSqm),
+  use: p.landUse ?? 'Residential',
+  street: p.streetWidthMeters == null ? '' : String(p.streetWidthMeters),
+  frontage: p.frontageMeters == null ? '' : String(p.frontageMeters),
+  facing: p.facing ?? '',
+  lat: p.latitude ?? '',
+  lng: p.longitude ?? '',
+  description: p.descriptionAr ?? '',
+})
+
+/** An empty measurement is "not surveyed yet"; anything typed must be a positive number. */
+const measured = (v: string) => v.trim() === '' || Number(v) > 0
+
+export const plotReady = (d: PlotDraft) =>
+  d.number.trim() !== '' && Number(d.area) > 0 && measured(d.street) && measured(d.frontage)
+
+/** The request body auction-admin takes for a plot. */
+export const plotBody = (d: PlotDraft) => ({
+  plotNumber: d.number.trim(),
+  areaSqm: Number(d.area),
+  latitude: d.lat || null,
+  longitude: d.lng || null,
+  descriptionAr: d.description.trim() || null,
+  descriptionEn: null,
+  // Left out rather than sent as 0: the domain refuses a non-positive measurement,
+  // and an empty box means "not surveyed yet".
+  streetWidthMeters: d.street.trim() === '' ? null : Number(d.street),
+  frontageMeters: d.frontage.trim() === '' ? null : Number(d.frontage),
+  landUse: d.use,
+  facing: d.facing || null,
+})
+
+/** The plot's fields and its place on the map — used by «إضافة مزاد» and «تعديل القطعة». */
+export function PlotFields({ value, onChange }: { value: PlotDraft; onChange: (d: PlotDraft) => void }) {
+  const set = (patch: Partial<PlotDraft>) => onChange({ ...value, ...patch })
+  const picked = located({ latitude: value.lat, longitude: value.lng })
+    ? { lat: Number(value.lat), lng: Number(value.lng) }
+    : null
+  return (
+    <>
+      <div className="form-row-3">
+        <label>
+          <span>رقم القطعة</span>
+          <input className="ltr" value={value.number} onChange={(e) => set({ number: e.target.value })} />
+        </label>
+        <label>
+          <span>المساحة (م²)</span>
+          <input className="ltr num" inputMode="decimal" value={value.area} onChange={(e) => set({ area: e.target.value })} />
+        </label>
+        <label>
+          <span>الاستخدام</span>
+          <select value={value.use} onChange={(e) => set({ use: e.target.value })} aria-label="استخدام القطعة">
+            {LAND_USES.map(([key, ar]) => (
+              <option key={key} value={key}>
+                {ar}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>عرض الشارع (م)</span>
+          <input className="ltr num" inputMode="decimal" value={value.street} onChange={(e) => set({ street: e.target.value })} />
+        </label>
+        <label>
+          <span>الواجهة</span>
+          <select value={value.facing} onChange={(e) => set({ facing: e.target.value })} aria-label="واجهة القطعة">
+            <option value="">غير محدد</option>
+            {FACINGS.map(([key, ar]) => (
+              <option key={key} value={key}>
+                {ar}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>طول الواجهة (م)</span>
+          <input className="ltr num" inputMode="decimal" value={value.frontage} onChange={(e) => set({ frontage: e.target.value })} />
+          {!measured(value.frontage) && <small style={{ color: 'var(--danger)' }}>أدخل رقماً بالمتر.</small>}
+        </label>
+      </div>
+      <label style={{ display: 'block', marginTop: 12 }}>
+        <span>الوصف</span>
+        <textarea
+          rows={2}
+          value={value.description}
+          onChange={(e) => set({ description: e.target.value })}
+          style={{ width: '100%' }}
+        />
+      </label>
+      <p className="muted small" style={{ margin: '12px 0 6px' }}>
+        الموقع: انقر على الخريطة لتحديده، أو أدخل الإحداثيات.
+      </p>
+      <PlotMap points={[]} picked={picked} height={240} onPick={(p) => set({ lat: String(p.lat), lng: String(p.lng) })} />
+      <div className="form-row-3" style={{ marginTop: 10 }}>
+        <label>
+          <span>خط العرض</span>
+          <input className="ltr num" value={value.lat} onChange={(e) => set({ lat: e.target.value })} />
+        </label>
+        <label>
+          <span>خط الطول</span>
+          <input className="ltr num" value={value.lng} onChange={(e) => set({ lng: e.target.value })} />
+        </label>
+      </div>
+    </>
+  )
+}
+
 /**
- * قطع الأرض on the auction page: one row per plot with «تفاصيل», the map of all of
- * them above, and — while the auction is being prepared — «إضافة قطعة» in a dialog
- * and «إزالة» on each row.
+ * The plot's buttons beside «تفاصيل الأرض». The page shows the land's basic figures
+ * once; «تفاصيل» opens everything recorded about the plot — description,
+ * coordinates, the map — and, while the auction is a draft, «تعديل» changes it (or
+ * «إضافة القطعة» adds it, if a draft has none yet).
  */
 export function PlotsPanel({
   auction,
@@ -47,97 +194,45 @@ export function PlotsPanel({
   canEdit: boolean
   onAct: (work: () => Promise<unknown>) => Promise<void>
 }) {
-  const [adding, setAdding] = useState(false)
-  const [shown, setShown] = useState<Plot | null>(null)
-  const points = useMemo(
-    () =>
-      auction.plots
-        .filter(located)
-        .map((p) => ({ lat: Number(p.latitude), lng: Number(p.longitude), label: `قطعة ${p.plotNumber}` })),
-    [auction.plots],
-  )
+  const plot = auction.plots[0]
+  const [shown, setShown] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   return (
-    <>
-      <div className="panel-title">
-        <h3 style={{ margin: 0 }}>قطع الأرض ({auction.plots.length})</h3>
-        {canEdit && (
-          <button className="primary small" disabled={busy} onClick={() => setAdding(true)}>
-            <Icon name="plus" size={16} /> إضافة قطعة
-          </button>
-        )}
-      </div>
-      <p className="muted small" style={{ marginTop: 4 }}>تُباع القطع كوحدة واحدة — المزايدة على المزاد كاملاً.</p>
-
-      {points.length > 0 && <PlotMap points={points} height={240} />}
-
-      {auction.plots.length > 0 ? (
-        <div className="table-scroll" style={{ marginTop: 12 }}>
-          <table data-testid="plots-table">
-            <thead>
-              <tr>
-                <th>رقم القطعة</th>
-                <th>المساحة</th>
-                <th>الاستخدام</th>
-                <th>الموقع</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {auction.plots.map((p) => (
-                <tr key={p.id}>
-                  <td><span className="num strong">{p.plotNumber}</span></td>
-                  <td><span className="num">{p.areaSqm}</span> م²</td>
-                  <td>{landUseAr(p.landUse)}</td>
-                  <td>{located(p) ? 'محدد على الخريطة' : <span className="muted">غير محدد</span>}</td>
-                  <td className="row-actions">
-                    <button className="small" onClick={() => setShown(p)}>
-                      تفاصيل
-                    </button>
-                    {canEdit && (
-                      <button
-                        className="ghost small"
-                        disabled={busy}
-                        onClick={() => {
-                          if (!window.confirm(`إزالة القطعة ${p.plotNumber} من المزاد؟`)) return
-                          void onAct(() => client.del(`/auctions/${auction.id}/plots/${p.id}`))
-                        }}
-                      >
-                        إزالة
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="muted">
-          لم تُضف قطع بعد.{canEdit && ' أضف قطعة واحدة على الأقل قبل رفع المزاد للاعتماد.'}
-        </p>
+    <div className="row-actions">
+      {plot && (
+        <button className="small" onClick={() => setShown(true)} data-testid="plot-details">
+          تفاصيل
+        </button>
+      )}
+      {canEdit && (
+        <button className={plot ? 'ghost small' : 'primary small'} disabled={busy} onClick={() => setEditing(true)}>
+          {plot ? 'تعديل' : <><Icon name="plus" size={16} /> إضافة القطعة</>}
+        </button>
       )}
 
-      {shown && <PlotDetails plot={shown} onClose={() => setShown(null)} />}
-      {adding && (
-        <AddPlot
-          auction={auction}
-          others={points}
+      {shown && plot && <PlotDetails plot={plot} onClose={() => setShown(false)} />}
+      {editing && (
+        <EditPlot
+          initial={plot ? draftOf(plot) : emptyPlot}
+          title={plot ? 'تعديل القطعة' : 'إضافة القطعة'}
+          sub={auction.nameAr}
           busy={busy}
-          onClose={() => setAdding(false)}
-          onAdd={(body) =>
+          onClose={() => setEditing(false)}
+          onSave={(d) =>
             onAct(async () => {
-              await client.post(`/auctions/${auction.id}/plots`, body)
-              setAdding(false)
+              if (plot) await client.put(`/auctions/${auction.id}/plot`, plotBody(d))
+              else await client.post(`/auctions/${auction.id}/plots`, plotBody(d))
+              setEditing(false)
             })
           }
         />
       )}
-    </>
+    </div>
   )
 }
 
-/** «تفاصيل» — everything recorded about one plot, with its place on the map. */
+/** «تفاصيل» — everything recorded about the plot, with its place on the map. */
 function PlotDetails({ plot, onClose }: { plot: Plot; onClose: () => void }) {
   const metres = (v: number | null) => (v != null ? <><span className="num">{v}</span> متر</> : 'غير محدد')
   return (
@@ -147,7 +242,8 @@ function PlotDetails({ plot, onClose }: { plot: Plot; onClose: () => void }) {
         <div><small>المساحة</small><b><span className="num">{plot.areaSqm}</span> م²</b></div>
         <div><small>الاستخدام</small><b>{landUseAr(plot.landUse)}</b></div>
         <div><small>عرض الشارع</small><b>{metres(plot.streetWidthMeters)}</b></div>
-        <div><small>الواجهة</small><b>{metres(plot.frontageMeters)}</b></div>
+        <div><small>الواجهة</small><b>{facingAr(plot.facing)}</b></div>
+        <div><small>طول الواجهة</small><b>{metres(plot.frontageMeters)}</b></div>
         <div>
           <small>الإحداثيات</small>
           <b>{located(plot) ? <span className="ltr num">{plot.latitude}, {plot.longitude}</span> : 'غير محدد'}</b>
@@ -174,111 +270,29 @@ function PlotDetails({ plot, onClose }: { plot: Plot; onClose: () => void }) {
   )
 }
 
-/** «إضافة قطعة» — the form, and the map to place the plot by clicking it. */
-function AddPlot({
-  auction,
-  others,
+function EditPlot({
+  initial,
+  title,
+  sub,
   busy,
   onClose,
-  onAdd,
+  onSave,
 }: {
-  auction: Auction
-  others: Array<{ lat: number; lng: number; label?: string }>
+  initial: PlotDraft
+  title: string
+  sub: string
   busy: boolean
   onClose: () => void
-  onAdd: (body: unknown) => Promise<void>
+  onSave: (d: PlotDraft) => Promise<void>
 }) {
-  const [number, setNumber] = useState('')
-  const [area, setArea] = useState('')
-  const [streetWidth, setStreetWidth] = useState('')
-  const [frontage, setFrontage] = useState('')
-  const [use, setUse] = useState<string>('Residential')
-  const [lat, setLat] = useState('')
-  const [lng, setLng] = useState('')
-  const [description, setDescription] = useState('')
-  const picked =
-    lat !== '' && lng !== '' && !isNaN(Number(lat)) && !isNaN(Number(lng)) ? { lat: Number(lat), lng: Number(lng) } : null
-  const ready = number.trim() !== '' && Number(area) > 0
-
+  const [draft, setDraft] = useState(initial)
   return (
-    <Modal title="إضافة قطعة" sub={auction.nameAr} onClose={onClose}>
-      <div className="grid">
-        <label>
-          <span>رقم القطعة</span>
-          <input className="ltr" value={number} onChange={(e) => setNumber(e.target.value)} autoFocus />
-        </label>
-        <label>
-          <span>المساحة (م²)</span>
-          <input className="ltr num" inputMode="decimal" value={area} onChange={(e) => setArea(e.target.value)} />
-        </label>
-        <label>
-          <span>الاستخدام</span>
-          <select value={use} onChange={(e) => setUse(e.target.value)} aria-label="استخدام القطعة">
-            {LAND_USES.map(([key, ar]) => (
-              <option key={key} value={key}>
-                {ar}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>عرض الشارع (م)</span>
-          <input className="ltr num" inputMode="decimal" value={streetWidth} onChange={(e) => setStreetWidth(e.target.value)} />
-        </label>
-        <label>
-          <span>الواجهة (م)</span>
-          <input className="ltr num" inputMode="decimal" value={frontage} onChange={(e) => setFrontage(e.target.value)} />
-        </label>
-      </div>
-      <label style={{ display: 'block', marginTop: 12 }}>
-        <span>الوصف</span>
-        <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} style={{ width: '100%' }} />
-      </label>
-
-      <h3>الموقع</h3>
-      <p className="muted small" style={{ marginTop: -4 }}>انقر على الخريطة لتحديد موقع القطعة، أو أدخل الإحداثيات.</p>
-      <PlotMap
-        points={others}
-        picked={picked}
-        height={280}
-        onPick={(p) => {
-          setLat(String(p.lat))
-          setLng(String(p.lng))
-        }}
-      />
-      <div className="grid" style={{ marginTop: 10 }}>
-        <label>
-          <span>خط العرض</span>
-          <input className="ltr num" value={lat} onChange={(e) => setLat(e.target.value)} />
-        </label>
-        <label>
-          <span>خط الطول</span>
-          <input className="ltr num" value={lng} onChange={(e) => setLng(e.target.value)} />
-        </label>
-      </div>
-
+    <Modal title={title} sub={sub} onClose={onClose}>
+      <PlotFields value={draft} onChange={setDraft} />
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16, gap: 8 }}>
         <button onClick={onClose}>تراجع</button>
-        <button
-          className="primary"
-          disabled={busy || !ready}
-          onClick={() =>
-            void onAdd({
-              plotNumber: number.trim(),
-              areaSqm: Number(area),
-              latitude: lat || null,
-              longitude: lng || null,
-              descriptionAr: description.trim() || null,
-              descriptionEn: null,
-              // Left out rather than sent as 0: the domain refuses a non-positive
-              // measurement, and an empty box means "not surveyed yet".
-              streetWidthMeters: streetWidth.trim() === '' ? null : Number(streetWidth),
-              frontageMeters: frontage.trim() === '' ? null : Number(frontage),
-              landUse: use,
-            })
-          }
-        >
-          إضافة القطعة
+        <button className="primary" disabled={busy || !plotReady(draft)} onClick={() => void onSave(draft)}>
+          حفظ القطعة
         </button>
       </div>
     </Modal>

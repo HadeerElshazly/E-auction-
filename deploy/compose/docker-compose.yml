@@ -208,6 +208,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=eauction"
+      # Demo: no fresh-code confirmation before payments and awards. Production leaves it on.
+      StepUp__Enabled: "false"
       Jwt__Authority: http://keycloak:8080/realms/eauction
       # The browser logs in at localhost:8080, so that is the iss its tokens carry.
       Jwt__Issuer: http://localhost:8080/realms/eauction
@@ -241,6 +243,8 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=eauction"
+      # Demo: no fresh-code confirmation before payments and awards. Production leaves it on.
+      StepUp__Enabled: "false"
       Jwt__Authority: http://keycloak:8080/realms/eauction
       # The browser logs in at localhost:8080, so that is the iss its tokens carry.
       Jwt__Issuer: http://localhost:8080/realms/eauction
