@@ -252,7 +252,6 @@ export function ReviewDecision({
 
   return (
     <div className="review-decision" data-testid="review-decision">
-      <div className="bid-status">بانتظار قرار لجنة الترسية</div>
       <button
         className="primary wide"
         disabled={busy}
