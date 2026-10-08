@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-BASE="${SEED_BASE:-http://localhost}"
+BASE="${SEED_BASE:-https://auctions.westus2.cloudapp.azure.com}"
 PASSWORD="${DEMO_PASSWORD:-dev-only-password}"
 # The realm's seeded second factor for committee-user (deploy/keycloak/README.md).
 TOTP_SECRET="eauctiondevsecret1234567890"
