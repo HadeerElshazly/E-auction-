@@ -82,6 +82,9 @@ public sealed record AuctionCancelledPayload
 {
     public Guid AuctionId { get; init; }
     public string Reason { get; init; } = "";
+
+    /// <summary>Whether the bidders' deposits and booklet fees go back. Older events said nothing and did refund.</summary>
+    public bool Refund { get; init; } = true;
 }
 
 public sealed record CurrentWinnerPayload
@@ -131,5 +134,11 @@ public sealed record DepositsReleasablePayload
 {
     public Guid AuctionId { get; init; }
     public Guid[]? ForfeitForBidders { get; init; }
+
+    /// <summary>A cancellation that keeps every deposit.</summary>
+    public bool ForfeitAll { get; init; }
+
+    /// <summary>A cancellation that returns the booklet fees as well.</summary>
+    public bool RefundBooklets { get; init; }
     public Guid? AppliedToPurchaseForBidder { get; init; }
 }

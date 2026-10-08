@@ -132,7 +132,7 @@ public sealed class CatalogueConsumer(
                 .Select(x => new PlotEntry(
                     x.Id, x.PlotNumber, x.AreaSqm,
                     x.Latitude, x.Longitude, x.DescriptionAr, x.DescriptionEn,
-                    x.StreetWidthMeters, x.FrontageMeters))
+                    x.StreetWidthMeters, x.FrontageMeters, x.LandUse))
                 .ToArray(),
             CoverImageDocumentId = p.CoverImageDocumentId,
             Attachments = (p.Attachments ?? [])
@@ -235,8 +235,9 @@ public sealed class CatalogueConsumer(
         if (record.EventType == "AuctionCancelled")
         {
             if (!Guid.TryParse(record.Key, out var cancelledId)) return;
-            var reason = JsonSerializer.Deserialize<CancelledPayload>(record.Payload, Json)?.Reason ?? "";
-            if (state.MarkCancelled(cancelledId, reason) is { } cancelled) Push(cancelled);
+            var payload = JsonSerializer.Deserialize<CancelledPayload>(record.Payload, Json);
+            if (state.MarkCancelled(cancelledId, payload?.Reason ?? "", payload?.Refund ?? true) is { } cancelled)
+                Push(cancelled);
             fanOut.Forget(cancelledId);
             return;
         }
@@ -300,6 +301,7 @@ public sealed class CatalogueConsumer(
         public string? DescriptionEn { get; init; }
         public decimal? StreetWidthMeters { get; init; }
         public decimal? FrontageMeters { get; init; }
+        public string? LandUse { get; init; }
     }
 
     private sealed record CurrentWinnerPayload
@@ -332,6 +334,7 @@ public sealed class CatalogueConsumer(
     private sealed record CancelledPayload
     {
         public string Reason { get; init; } = "";
+        public bool Refund { get; init; } = true;
     }
 
     private sealed record LifecyclePayload

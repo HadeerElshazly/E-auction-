@@ -17,6 +17,9 @@ export function useHashRoute(fallback: string): [string[], (to: string) => void]
       window.scrollTo({ top: 0 })
     }
     window.addEventListener('hashchange', onChange)
+    // Once more now that it listens: the sign-in check may have put the address
+    // back (#auction/<id>) between the first render and this effect.
+    setParts(read())
     return () => window.removeEventListener('hashchange', onChange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

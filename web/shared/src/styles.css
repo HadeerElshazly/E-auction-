@@ -1318,3 +1318,170 @@ a.button.small { padding: 6px 12px; font-size: 13px; }
 
 /* Tabs across a whole page, under its heading. */
 .page-tabs { margin: 0 0 22px; }
+
+/* Plot maps: the pins, and the crosshair while choosing a location. */
+.plot-map { width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; z-index: 0; }
+.plot-map.picking { cursor: crosshair; }
+.plot-map.picking .leaflet-grab { cursor: crosshair; }
+.plot-pin span {
+  display: block; width: 22px; height: 22px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  background: var(--accent); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(16, 32, 38, .35);
+}
+.plot-pin.picked span { background: var(--warn); }
+.leaflet-container { font: inherit; direction: ltr; }
+
+/* The prototype's card details: the number over the image, the price with its
+   currency small beside it, and the time in the card's corner. */
+.lot-number { position: absolute; bottom: 10px; inset-inline-end: 12px; z-index: 1; color: #fff; font-size: 12px; }
+.lot-price { display: flex; align-items: baseline; gap: 6px; font-size: 26px; font-weight: 700; line-height: 1.3; direction: ltr; justify-content: flex-end; }
+.lot-price small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.time-text { font-size: 12px; color: var(--muted); }
+.time-text b { display: block; font-size: 17px; color: var(--text); direction: ltr; letter-spacing: 1px; text-align: start; }
+
+/* Lists of bids, and a panel title with something beside it. */
+.panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.panel-title h2 { margin: 0; }
+.bid-history { list-style: none; padding: 0; margin: 0; }
+.bid-history li { display: flex; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.bid-history li:last-child { border-bottom: 0; }
+.bid-history b { display: block; font-size: 14px; }
+.bid-history small { font-size: 12px; color: var(--muted); }
+.auction-box .bid-box, .auction-box .card { box-shadow: none; border: 0; padding: 0; margin: 0; }
+
+/* Tables in a card, edge to edge; small second lines in a cell. */
+.card.table-card { padding: 0; overflow: hidden; }
+.card.table-card table { margin: 0; }
+.card.table-card th:first-child, .card.table-card td:first-child { padding-inline-start: 20px; }
+td small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+td .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.toolbar .tabs .tab svg { vertical-align: middle; }
+
+tr.row-link { cursor: pointer; }
+tr.row-link:hover td { background: var(--accent-weak); }
+
+/* لجنة الترسية: one card per decision, the offer large, the actions underneath. */
+.decision-card + .decision-card { margin-top: 18px; }
+.auction-summary { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
+.auction-summary h2 { margin: 0 0 4px; font-size: 20px; }
+.auction-summary p { margin: 0; }
+.summary-price { display: flex; align-items: baseline; gap: 6px; font-size: 30px; font-weight: 700; direction: ltr; justify-content: flex-end; }
+.summary-price small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.inline-actions { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.wide-modal { max-width: 900px; width: calc(100% - 32px); max-height: 85vh; overflow: auto; }
+
+/* التسويات والإفراغ: one panel per award, its figures in a strip. */
+.settlement-list { display: grid; gap: 16px; margin-top: 12px; }
+.settlement-panel { border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; background: var(--surface); }
+.settlement-panel.overdue { border-color: var(--danger); }
+.settlement-panel h2 { margin: 0 0 2px; font-size: 18px; }
+.settlement-panel p { margin: 0; }
+.mini-stats { margin: 14px 0; padding: 14px 0; box-shadow: none; }
+.mini-stats .stat-figure { font-size: 19px; }
+.mini-stats .small-figure { font-size: 14px; font-weight: 600; }
+
+/* The staff box's result line. */
+.result-note { background: var(--accent-weak); color: var(--text); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 13px; line-height: 1.9; }
+
+/* معرض الصور: the large photo, its arrows and caption, and the thumbnails. */
+.gallery-main img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 2;
+  width: 38px; height: 38px; border-radius: 50%; padding: 0; border: 0;
+  background: rgba(255, 255, 255, .9); color: var(--text); font-size: 22px; line-height: 1;
+  display: grid; place-items: center; box-shadow: var(--shadow);
+}
+.gallery-nav.prev { inset-inline-start: 14px; }
+.gallery-nav.next { inset-inline-end: 14px; }
+.gallery-caption {
+  position: absolute; bottom: 12px; inset-inline-end: 14px; z-index: 2;
+  background: rgba(16, 32, 38, .55); color: #fff; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+}
+.gallery-thumbs { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; padding-bottom: 2px; }
+.gallery-thumb { flex: none; width: 92px; height: 62px; padding: 0; border-radius: var(--radius-sm); overflow: hidden; border: 2px solid transparent; }
+.gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery-thumb.active { border-color: var(--accent); }
+
+/* A file picker that reads as a button. */
+label.button {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 10px 18px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+}
+label.button:hover { border-color: var(--accent-line); color: var(--accent-dark); background: var(--accent-weak); }
+label.button.disabled { opacity: .55; pointer-events: none; }
+
+/* «إنهاء المزاد» — the two ways out of a running auction, as cards to choose from. */
+.end-options { display: grid; gap: 10px; }
+.end-option {
+  display: flex; gap: 12px; align-items: flex-start; padding: 14px;
+  border: 1px solid var(--border-strong); border-radius: 12px; cursor: pointer;
+}
+.end-option.active { border-color: var(--accent); background: var(--accent-weak); }
+.end-option input { margin-top: 4px; }
+.end-option b { display: block; margin-bottom: 4px; }
+.end-option small { color: var(--muted); line-height: 1.6; }
+.auction-box > button + .box-help, .auction-box > button { margin-top: 12px; }
+
+/* معرض الصور — small squares; a tap opens the photo full size. */
+.gallery-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 4px; }
+.gallery-square {
+  flex: none; padding: 0; border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--border); background: var(--surface-sunken); cursor: zoom-in;
+}
+.gallery-square img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .2s; }
+.gallery-square:hover img { transform: scale(1.06); }
+.gallery-square.extra { display: grid; place-items: center; cursor: default; border-style: dashed; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 60; background: rgba(10, 16, 18, .86);
+  display: grid; place-items: center; padding: 48px 72px;
+}
+.lightbox figure { margin: 0; max-width: 100%; max-height: 100%; display: grid; gap: 10px; justify-items: center; }
+.lightbox img { max-width: min(1100px, 100%); max-height: calc(100vh - 140px); object-fit: contain; border-radius: var(--radius-sm); }
+.lightbox figcaption { color: #fff; font-size: 14px; }
+.lightbox-close, .lightbox-nav {
+  position: absolute; border: 0; background: rgba(255, 255, 255, .14); color: #fff;
+  width: 44px; height: 44px; border-radius: 50%; font-size: 22px; display: grid; place-items: center;
+}
+.lightbox-close { top: 16px; inset-inline-end: 16px; font-size: 18px; }
+.lightbox-nav { top: 50%; transform: translateY(-50%); }
+.lightbox-nav.prev { inset-inline-start: 16px; }
+.lightbox-nav.next { inset-inline-end: 16px; }
+.lightbox-close:hover, .lightbox-nav:hover { background: rgba(255, 255, 255, .26); }
+@media (max-width: 640px) { .lightbox { padding: 56px 12px; } }
+
+/* صورة الغلاف — set on the photo itself while the auction is prepared. */
+.cover-button {
+  position: absolute; bottom: 14px; inset-inline-end: 14px;
+  background: var(--surface); box-shadow: var(--shadow-lift);
+}
+
+/* A figure «إعدادات العرض للزوار» keeps from a visitor. */
+.locked-value { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 500; font-size: 13px; }
+.lot-price.locked-value { font-size: 14px; }
+.signin-notice { display: flex; align-items: center; gap: 10px; }
+.signin-notice .grow { flex: 1; }
+
+/* «إعدادات العرض للزوار» — one row per group, a two-way choice on each. */
+.visibility-list { display: grid; gap: 4px; }
+.visibility-row { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.visibility-row:last-child { border-bottom: 0; }
+.visibility-row .grow { flex: 1 1 240px; display: grid; gap: 2px; }
+.visibility-row small { color: var(--muted); }
+.segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; }
+.segmented button { border: 0; border-radius: 0; background: transparent; padding: 8px 14px; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.segmented button + button { border-inline-start: 1px solid var(--border-strong); }
+.segmented button.active { background: var(--accent-weak); color: var(--accent-dark); font-weight: 600; }
+.check-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; }
+.check-list li { display: flex; gap: 8px; align-items: flex-start; }
+.check-list li svg { color: var(--ok); flex: none; margin-top: 3px; }
+
+/* «إغلاق للإلغاء» — whether the bidders' money goes back. */
+.refund-choice { margin-top: 12px; padding: 14px; border-radius: 12px; background: var(--surface-sunken); border: 1px solid var(--border); }
+.check-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.check-row input { margin-top: 4px; }
+.check-row b { display: block; margin-bottom: 2px; }
+.check-row small { color: var(--muted); }
+
+/* A table row's buttons, side by side. */
+.row-actions { white-space: nowrap; text-align: end; }
+.row-actions button + button { margin-inline-start: 6px; }

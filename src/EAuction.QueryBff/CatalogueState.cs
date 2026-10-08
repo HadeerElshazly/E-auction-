@@ -86,19 +86,22 @@ public sealed class CatalogueState
     /// definitions replay concurrently, and a cancellation that arrived first would
     /// otherwise be dropped and the auction shown as upcoming after a restart.
     /// </summary>
-    private readonly ConcurrentDictionary<Guid, string> _cancelled = new();
+    private readonly ConcurrentDictionary<Guid, (string Reason, bool Refund)> _cancelled = new();
 
-    public AuctionEntry? MarkCancelled(Guid auctionId, string reason)
+    public AuctionEntry? MarkCancelled(Guid auctionId, string reason, bool refund = true)
     {
-        _cancelled[auctionId] = reason;
+        _cancelled[auctionId] = (reason, refund);
         return ApplyCancellation(auctionId);
     }
 
     private AuctionEntry? ApplyCancellation(Guid auctionId)
     {
         if (!_auctions.TryGetValue(auctionId, out var entry)) return null;
-        if (!_cancelled.TryGetValue(auctionId, out var reason)) return entry;
-        var updated = entry with { Status = Cancelled, CancellationReason = reason };
+        if (!_cancelled.TryGetValue(auctionId, out var cancelled)) return entry;
+        var updated = entry with
+        {
+            Status = Cancelled, CancellationReason = cancelled.Reason, CancellationRefunds = cancelled.Refund,
+        };
         _auctions[auctionId] = updated;
         return updated;
     }
@@ -204,6 +207,9 @@ public sealed record AuctionEntry
     /// <summary>Why an administrator withdrew it — public, as the cancellation is.</summary>
     public string? CancellationReason { get; init; }
 
+    /// <summary>Whether the cancellation returns the bidders' deposits and booklet fees.</summary>
+    public bool? CancellationRefunds { get; init; }
+
     /// <summary>From auctions.lifecycle. "Scheduled" until the processor says otherwise.</summary>
     public string Status { get; init; } = "Scheduled";
 
@@ -235,4 +241,4 @@ public sealed record PlotEntry(
     Guid Id, string PlotNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn,
-    decimal? StreetWidthMeters, decimal? FrontageMeters);
+    decimal? StreetWidthMeters, decimal? FrontageMeters, string? LandUse = null);

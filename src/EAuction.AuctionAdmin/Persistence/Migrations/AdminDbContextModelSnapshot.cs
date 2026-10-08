@@ -50,6 +50,9 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
+                    b.Property<bool?>("CancellationRefunded")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset?>("CancelledAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -210,6 +213,27 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                     b.ToTable("award", (string)null);
                 });
 
+            modelBuilder.Entity("EAuction.AuctionAdmin.Domain.PlatformSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UpdatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ValueJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("platform_setting", (string)null);
+                });
+
             modelBuilder.Entity("EAuction.AuctionAdmin.Domain.Plot", b =>
                 {
                     b.Property<Guid>("Id")
@@ -233,6 +257,10 @@ namespace EAuction.AuctionAdmin.Persistence.Migrations
                     b.Property<decimal?>("FrontageMeters")
                         .HasPrecision(8, 2)
                         .HasColumnType("numeric(8,2)");
+
+                    b.Property<string>("LandUse")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<string>("Latitude")
                         .HasMaxLength(50)

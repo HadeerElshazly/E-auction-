@@ -72,7 +72,7 @@ public class AuditTrailTests : IDisposable
         bidderVisibility = "Masked",
         startsAt = DateTimeOffset.UtcNow.AddDays(7),
         endsAt = DateTimeOffset.UtcNow.AddDays(8),
-        openingPriceMinorUnits = 1_000_000_00L,
+        openingPriceMinorUnits = 2_000_000_00L,
         reservePriceMinorUnits = reserve,
         minIncrementMinorUnits = 50_000_00L,
         depositMinorUnits = 100_000_00L,

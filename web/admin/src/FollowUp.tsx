@@ -92,6 +92,12 @@ interface Props {
    */
   runDecision: (work: () => Promise<unknown>) => Promise<unknown>
   onOpenAuction?: (id: string) => void
+  /**
+   * Which page this is. «لجنة الترسية»: results waiting for the committee, and the
+   * awards it will settle. «التسويات والإفراغ»: receipts, the transfer, and the
+   * deposits still to resolve.
+   */
+  mode?: 'committee' | 'settlement'
 }
 
 /** A result waiting for the committee: who the processor put forward, at what price. */
@@ -109,7 +115,9 @@ export function FollowUp({
   committeeUserId,
   runDecision,
   onOpenAuction,
+  mode = 'settlement',
 }: Props) {
+  const committee = mode === 'committee'
   const admin = useMemo(() => api({ baseUrl: config.adminApi, session }), [session])
   const participant = useMemo(() => api({ baseUrl: config.participantApi, session }), [session])
   const documents = useMemo(() => api({ baseUrl: config.documentsApi, session }), [session])
@@ -185,8 +193,17 @@ export function FollowUp({
     ...pending.map((p) => p.candidateId),
   ])
 
+  // Every auction's name, not only the awarded ones': a deposit to settle may belong
+  // to an auction that ended unsold or was cancelled.
+  const [names, setNames] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    admin
+      .get<{ items: Array<{ id: string; nameAr: string }> }>('/auctions?take=200')
+      .then((r) => setNames(new Map(r.items.map((x) => [x.id, x.nameAr]))))
+      .catch(() => undefined)
+  }, [admin])
   const auctionName = (id: string) =>
-    awards?.find((a) => a.auctionId === id)?.nameAr ?? id.slice(0, 8)
+    names.get(id) ?? awards?.find((a) => a.auctionId === id)?.nameAr ?? id.slice(0, 8)
 
   const overdue = awards?.filter((a) => a.award.overdue).length ?? 0
 
@@ -195,10 +212,11 @@ export function FollowUp({
       <div className="page-head">
         <div>
           <div className="eyebrow">مساحة الإدارة</div>
-          <h1>متابعة الترسية</h1>
+          <h1>{committee ? 'لجنة الترسية' : 'التسويات والإفراغ'}</h1>
           <p>
-            سداد ثمن الترسية والإفراغ ورد التأمينات تتم خارج المنصة؛ تُسجَّل هنا يدوياً
-            مقابل مرجع يمكن تتبّعه.
+            {committee
+              ? 'اعتماد النتيجة المبدئية أو رفضها، ومتابعة الترسيات حتى اعتماد التسوية. لا تنتقل الترسية إلى المزايد التالي تلقائياً.'
+              : 'سداد ثمن الترسية والإفراغ ورد التأمينات تتم خارج المنصة؛ تُسجَّل هنا يدوياً مقابل مرجع يمكن تتبّعه.'}
           </p>
         </div>
         <span className="grow" />
@@ -216,7 +234,14 @@ export function FollowUp({
         </div>
       )}
 
-      {pending.length > 0 && (
+      {committee && pending.length === 0 && (
+        <div className="card empty-state">
+          <h3>لا توجد نتائج بانتظار قرار اللجنة</h3>
+          <p className="muted">تظهر هنا المزادات فور إغلاقها وترشيح أعلى مزايد فيها.</p>
+        </div>
+      )}
+
+      {committee && pending.length > 0 && (
         <div className="card" data-testid="pending-decisions">
           <div className="section-head">
             <h2>بانتظار قرار لجنة الترسية</h2>
@@ -307,49 +332,35 @@ export function FollowUp({
         {awards?.length === 0 && <p className="muted small">لا توجد ترسيات قيد المتابعة.</p>}
 
         {awards && awards.length > 0 && (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>المزاد</th>
-                  <th>الفائز</th>
-                  <th>مبلغ الترسية</th>
-                  <th>المسدَّد</th>
-                  <th>المتبقي</th>
-                  <th>مهلة السداد</th>
-                  <th>الإفراغ</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {awards.map((e) => {
-                  const a = e.award
-                  const t = transferAr[a.transferStatus]
-                  const isOpen = open === e.auctionId
-                  return (
-                    <FollowUpRows
-                      key={e.auctionId}
-                      entry={e}
-                      winner={bidder(a.bidderId)?.nameAr ?? '…'}
-                      transfer={t}
-                      expanded={isOpen}
-                      onToggle={() => setOpen(isOpen ? null : e.auctionId)}
-                      canRecord={canRecord}
-                      canDecide={canDecide}
-                      busy={busy}
-                      onAct={act}
-                      onDecide={decide}
-                      admin={admin}
-                      documents={documents}
-                    />
-                  )
-                })}
-              </tbody>
-            </table>
+          <div className="settlement-list">
+            {awards.map((e) => {
+              const a = e.award
+              const t = transferAr[a.transferStatus]
+              const isOpen = open === e.auctionId
+              return (
+                <FollowUpRows
+                  key={e.auctionId}
+                  entry={e}
+                  winner={bidder(a.bidderId)?.nameAr ?? '…'}
+                  transfer={t}
+                  expanded={isOpen}
+                  onToggle={() => setOpen(isOpen ? null : e.auctionId)}
+                  canRecord={canRecord}
+                  canDecide={canDecide}
+                  busy={busy}
+                  onAct={act}
+                  onDecide={decide}
+                  admin={admin}
+                  documents={documents}
+                />
+              )
+            })}
           </div>
         )}
       </div>
 
+      {!committee && (
+        <>
       <div className="card">
         <div className="section-head">
           <h2>التأمينات غير المسوّاة</h2>
@@ -397,6 +408,8 @@ export function FollowUp({
           </div>
         )}
       </div>
+        </>
+      )}
     </>
   )
 }
@@ -464,58 +477,68 @@ function FollowUpRows({
 
   return (
     <>
-      <tr className={a.overdue ? 'row-alert' : undefined}>
-        <td>
-          <div className="strong">{entry.nameAr}</div>
-          {entry.phase && <div className="muted small">{entry.phase}</div>}
-        </td>
-        <td>{winner}</td>
-        <td><span className="num">{sar(a.amountMinorUnits, 'ar')}</span></td>
-        <td><span className="num">{sar(a.paidMinorUnits, 'ar')}</span></td>
-        <td>
-          <span className="num strong">{sar(a.remainingMinorUnits, 'ar')}</span>
-        </td>
-        <td className="small">
-          {settled ? (
-            <span className="pill done">{stageLabel('Settled').ar}</span>
-          ) : a.overdue ? (
-            <span className="pill bad">متعثر — للمراجعة</span>
-          ) : (
-            when(a.complianceDeadline)
-          )}
-        </td>
-        <td><span className={`pill ${transfer.tone}`}>{transfer.ar}</span></td>
-        <td>
-          <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
-            {/* «اعتماد التسوية»: the committee's, once the price is paid in full
-                and the winner notified — the same rule as on the auction page. */}
-            {canDecide && entry.status === 'Awarded' && (
-              <button
-                className="primary"
-                disabled={busy || a.remainingMinorUnits > 0 || !a.winnerNotifiedAt}
-                title={
-                  a.remainingMinorUnits > 0
-                    ? `المتبقي ${sar(a.remainingMinorUnits, 'ar')}`
-                    : !a.winnerNotifiedAt
-                      ? 'لم يُشعَر الفائز بعد'
-                      : undefined
-                }
-                onClick={() => void onDecide(() => admin.post(`/auctions/${entry.auctionId}/settle`))}
-              >
-                اعتماد التسوية
-              </button>
-            )}
-            <button className="ghost" onClick={onToggle} aria-expanded={expanded}>
-              {expanded ? 'إخفاء' : 'التفاصيل'}
-            </button>
+      <section className={`settlement-panel${a.overdue ? ' overdue' : ''}`} data-testid="settlement-panel">
+        <div className="panel-title">
+          <div>
+            <h2>ترسية {entry.nameAr}</h2>
+            <p className="muted small">
+              الفائز: {winner}
+              {entry.phase && <> · {entry.phase}</>}
+            </p>
           </div>
-        </td>
-      </tr>
+          <div className="inline-actions">
+            {a.overdue && <span className="pill bad">متعثر — للمراجعة</span>}
+            <span className={`pill ${t2(settled, transfer)}`}>
+              {settled ? stageLabel('Settled').ar : a.transferStatus === 'Completed' ? 'اكتمل الإفراغ' : 'قيد التسوية'}
+            </span>
+          </div>
+        </div>
 
+        <div className="stats mini-stats">
+          <div className="stat-cell">
+            <div className="stat-head">قيمة الترسية</div>
+            <div className="stat-figure num">{sar(a.amountMinorUnits, 'ar')}</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-head">المسدَّد</div>
+            <div className="stat-figure num">{sar(a.paidMinorUnits, 'ar')}</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-head">المتبقي</div>
+            <div className="stat-figure num">{sar(a.remainingMinorUnits, 'ar')}</div>
+          </div>
+          <div className="stat-cell">
+            <div className="stat-head">مهلة السداد</div>
+            <div className="stat-figure small-figure">{settled ? '—' : when(a.complianceDeadline)}</div>
+          </div>
+        </div>
+
+        <div className="inline-actions">
+          <button className={expanded ? 'small' : 'primary small'} onClick={onToggle} aria-expanded={expanded}>
+            {expanded ? 'إخفاء التفاصيل' : canRecord ? 'تسجيل سداد والإفراغ' : 'الإيصالات والإفراغ'}
+          </button>
+          <span className={`pill ${transfer.tone}`}>الإفراغ: {transfer.ar}</span>
+          {/* «اعتماد التسوية»: the committee's, once the price is paid in full and
+              the winner notified — the same rule as on the auction page. */}
+          {canDecide && entry.status === 'Awarded' && (
+            <button
+              className="primary small"
+              disabled={busy || a.remainingMinorUnits > 0 || !a.winnerNotifiedAt}
+              title={
+                a.remainingMinorUnits > 0
+                  ? `المتبقي ${sar(a.remainingMinorUnits, 'ar')}`
+                  : !a.winnerNotifiedAt
+                    ? 'لم يُشعَر الفائز بعد'
+                    : undefined
+              }
+              onClick={() => void onDecide(() => admin.post(`/auctions/${entry.auctionId}/settle`))}
+            >
+              اعتماد التسوية
+            </button>
+          )}
+        </div>
       {expanded && (
-        <tr className="detail-row">
-          <td colSpan={8}>
-            <div className="followup-detail">
+            <div className="followup-detail" style={{ marginTop: 16 }}>
               <section>
                 <h3>الإيصالات</h3>
                 {a.receipts.length === 0 ? (
@@ -628,11 +651,15 @@ function FollowUpRows({
                 )}
               </section>
             </div>
-          </td>
-        </tr>
       )}
+      </section>
     </>
   )
+}
+
+/** The panel badge's tone: settled, transferred, or still being followed up. */
+function t2(settled: boolean, transfer: { tone: string }): string {
+  return settled ? 'done' : transfer.tone === 'live' ? 'live' : 'wait'
 }
 
 function DepositRow({

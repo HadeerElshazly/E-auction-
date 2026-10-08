@@ -85,6 +85,13 @@ public static class Topics
     /// </summary>
     public const string Inquiries = "auctions.inquiries";
 
+    /// <summary>
+    /// Compacted, keyed by setting. Platform settings an administrator changes and
+    /// another service applies — today «إعدادات العرض للزوار», which the query BFF
+    /// enforces on what it answers an anonymous caller.
+    /// </summary>
+    public const string Settings = "platform.settings";
+
     public const string BidTopicPrefix = "bids.";
 
     public static string BidTopicFor(Guid auctionId) => BidTopicPrefix + auctionId.ToString("N");

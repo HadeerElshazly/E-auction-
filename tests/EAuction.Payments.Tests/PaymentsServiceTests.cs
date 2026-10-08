@@ -182,6 +182,52 @@ public class PaymentsServiceTests : IAsyncDisposable
     // --- the end of an auction's money --------------------------------------
 
     [Fact]
+    public async Task A_cancellation_with_refund_returns_deposits_and_booklet_fees_through_the_gateway()
+    {
+        await StartAsync();
+
+        await RequestAsync("BookletFeeRequested", Sara, 1_000_00);
+        await RequestAsync("DepositRequested", Sara, 100_000_00);
+        await RequestAsync("BookletFeeRequested", Khalid, 1_000_00);
+        await SettlementAsync(Sara, "Deposit");
+        await SettlementAsync(Khalid, "Booklet");
+
+        await CancelReleaseAsync(refund: true);
+
+        await Until(
+            async () => (await AllSettlementsAsync()).Count(s => s.Outcome == PaymentOutcomes.Refunded) == 3,
+            "both booklets and the deposit refunded");
+
+        var all = await AllSettlementsAsync();
+        Assert.Equal(PaymentOutcomes.Refunded, all.Last(s => s.BidderId == Sara && s.Purpose == "Booklet").Outcome);
+        Assert.Equal(PaymentOutcomes.Refunded, all.Last(s => s.BidderId == Sara && s.Purpose == "Deposit").Outcome);
+        Assert.Equal(PaymentOutcomes.Refunded, all.Last(s => s.BidderId == Khalid && s.Purpose == "Booklet").Outcome);
+    }
+
+    [Fact]
+    public async Task A_cancellation_without_refund_keeps_every_deposit_and_booklet_fee()
+    {
+        await StartAsync();
+
+        await RequestAsync("BookletFeeRequested", Sara, 1_000_00);
+        await RequestAsync("DepositRequested", Sara, 100_000_00);
+        await RequestAsync("DepositRequested", Khalid, 100_000_00);
+        await SettlementAsync(Sara, "Booklet");
+        await SettlementAsync(Sara, "Deposit");
+        await SettlementAsync(Khalid, "Deposit");
+
+        await CancelReleaseAsync(refund: false);
+
+        await Until(
+            async () => (await AllSettlementsAsync()).Count(s => s.Outcome == PaymentOutcomes.Forfeited) == 2,
+            "both deposits kept");
+
+        var all = await AllSettlementsAsync();
+        Assert.DoesNotContain(all, s => s.Outcome == PaymentOutcomes.Refunded);
+        Assert.Equal(PaymentOutcomes.Charged, all.Last(s => s.Purpose == "Booklet").Outcome);
+    }
+
+    [Fact]
     public async Task Releasing_deposits_refunds_the_losers_and_keeps_the_defaulter_s()
     {
         await StartAsync();
@@ -358,6 +404,19 @@ public class PaymentsServiceTests : IAsyncDisposable
                 auctionId = Auction,
                 forfeitForBidders = forfeit,
                 appliedToPurchaseForBidder = appliedToPurchase
+            }, Json),
+            "DepositsReleasable", _cts.Token);
+
+    /// <summary>«إغلاق للإلغاء», with or without the bidders' money going back.</summary>
+    private Task CancelReleaseAsync(bool refund) =>
+        _events.PublishAsync(
+            Topics.Deposits, Auction.ToString(),
+            JsonSerializer.Serialize(new
+            {
+                auctionId = Auction,
+                forfeitForBidders = Array.Empty<Guid>(),
+                forfeitAll = !refund,
+                refundBooklets = refund,
             }, Json),
             "DepositsReleasable", _cts.Token);
 

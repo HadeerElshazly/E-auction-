@@ -168,7 +168,10 @@ export async function login(config: AuthConfig, options: LoginOptions = {}): Pro
   const state = randomUrlSafe(16)
   sessionStorage.setItem(VERIFIER_KEY, verifier)
   sessionStorage.setItem(STATE_KEY, state)
-  sessionStorage.setItem(RETURN_KEY, location.pathname + location.search)
+  // With the hash: the page is in it (#auction/<id>), and the identity provider
+  // returns to the bare redirect URI — without this a shared auction link opened
+  // the catalogue.
+  sessionStorage.setItem(RETURN_KEY, location.pathname + location.search + location.hash)
 
   const url = new URL(authorization_endpoint)
   url.searchParams.set('client_id', config.clientId)
@@ -275,13 +278,26 @@ async function redeem(config: AuthConfig): Promise<Session | null> {
 
   const returnTo = sessionStorage.getItem(RETURN_KEY) ?? '/'
   sessionStorage.removeItem(RETURN_KEY)
-  history.replaceState({}, '', returnTo)
+  returnToPage(returnTo)
 
   return sessionFrom(JSON.parse(body).access_token as string)
 }
 
+/** Drops the identity provider's parameters, back to the page the round trip left. */
 function cleanUrl() {
-  history.replaceState({}, '', location.pathname)
+  const returnTo = sessionStorage.getItem(RETURN_KEY)
+  sessionStorage.removeItem(RETURN_KEY)
+  returnToPage(returnTo ?? location.pathname)
+}
+
+/**
+ * Puts the address back to the page, and tells the hash router: replaceState
+ * fires no hashchange, and the router read the address before this ran.
+ */
+function returnToPage(url: string) {
+  const before = location.hash
+  history.replaceState({}, '', url)
+  if (location.hash !== before) window.dispatchEvent(new HashChangeEvent('hashchange'))
 }
 
 /**

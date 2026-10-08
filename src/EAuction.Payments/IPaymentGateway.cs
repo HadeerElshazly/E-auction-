@@ -6,7 +6,10 @@ namespace EAuction.Payments;
 /// </summary>
 public enum PaymentPurpose
 {
-    /// <summary>كراسة الشروط — the terms booklet. Small, non-refundable, paid to look.</summary>
+    /// <summary>
+    /// كراسة الشروط — the terms booklet. Small, paid to look, and not refunded —
+    /// except when the municipality cancels the auction and chooses to return it.
+    /// </summary>
     Booklet = 0,
 
     /// <summary>التأمين — the deposit. Large, and refunded unless the bidder defaults.</summary>

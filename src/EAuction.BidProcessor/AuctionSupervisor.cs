@@ -413,6 +413,14 @@ public sealed class AuctionSupervisor(
                 return payload is null ? Task.CompletedTask : OnClerkClosedAsync(payload, ct);
             }
 
+            case InboundEvents.AuctionClosedByAdmin:
+            {
+                // The same close as the hall's hammer: the engine stops where it is
+                // and the highest valid bid is offered to the committee.
+                var payload = JsonSerializer.Deserialize<ClerkCommandPayload>(record.Payload, Json);
+                return payload is null ? Task.CompletedTask : OnClerkClosedAsync(payload, ct);
+            }
+
             case InboundEvents.AuctionCancelled:
                 _cancelled[auctionId] = 0;
                 Withdraw(auctionId);
@@ -475,9 +483,9 @@ public sealed class AuctionSupervisor(
     }
 
     /// <summary>
-    /// Drops a cancelled auction before it opens. Admin refuses to cancel inside the
-    /// last minutes before the start, so an announced auction here means the two
-    /// raced; it is left running and said loudly, because bids may already be on it.
+    /// Drops a cancelled auction: before it opens, it never starts; once running, it
+    /// stops where it is with no close and no candidate — the administrator cancelled
+    /// the sale itself, and every deposit is refunded.
     /// </summary>
     private void Withdraw(Guid auctionId)
     {
@@ -485,8 +493,12 @@ public sealed class AuctionSupervisor(
 
         if (running.Announced)
         {
-            logger.LogError(
-                "Auction {AuctionId} was cancelled after it opened; it keeps running.", auctionId);
+            // Cancelled while running, by an administrator's decision: it stops here,
+            // and no close or candidate is ever published for it. The catcher refuses
+            // its bids from the same event; deposits go back through DepositsReleasable.
+            running.Closed = true;
+            _running.TryRemove(auctionId, out _);
+            logger.LogWarning("Auction {AuctionId} cancelled while running; stopped with no candidate.", auctionId);
             return;
         }
 

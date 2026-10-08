@@ -38,21 +38,21 @@ public class PreparationWorkflowTests
     }
 
     [Fact]
-    public void A_reserve_below_the_opening_price_is_refused()
+    public void A_reserve_above_the_opening_price_is_refused()
     {
-        // A reserve under the opening price is cleared by the first valid bid,
-        // so it does nothing at all. Almost always a data entry slip.
+        // The reserve is the floor the opening price may be lowered to on a
+        // re-offer; above the opening price it is a floor over the ceiling.
         var auction = Build.ReadyAuction(Now);
         auction.UpdateDetails(
             "اسم", "Name", BidChannel.Online, BidderVisibility.Masked,
             Now.AddDays(7), Now.AddDays(8),
             openingPriceMinorUnits: 1_000_000_00,
-            reservePriceMinorUnits: 900_000_00,
+            reservePriceMinorUnits: 1_100_000_00,
             minIncrementMinorUnits: 50_000_00, depositMinorUnits: 100_000_00,
             brokerageFeePercent: 2.5m, bookletPriceMinorUnits: 1_000_00,
             quietPeriodSeconds: 120, maxExtensions: 3);
 
-        Assert.Contains(auction.Validate(Now), p => p.Contains("يقل عن سعر الافتتاح"));
+        Assert.Contains(auction.Validate(Now), p => p.Contains("يزيد على سعر الافتتاح"));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public class PreparationWorkflowTests
             auction.Events.Single(e => e is AuctionReserveSet));
 
         Assert.Equal(1_500_000_00, reserve.ReservePriceMinorUnits);
-        Assert.Equal(1_000_000_00, approved.OpeningPriceMinorUnits);
+        Assert.Equal(2_000_000_00, approved.OpeningPriceMinorUnits);
         Assert.Equal(1, approved.PlotCount);
 
         // They go to different topics so the ACL, not a convention, keeps the

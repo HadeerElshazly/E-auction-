@@ -7,17 +7,21 @@ export interface AuctionSummary {
   nameEn: string
   channel: string
   bidderVisibility: string
-  startsAt: string
-  endsAt: string
-  openingPriceMinorUnits: number
+  // Null when hidden from a visitor by «إعدادات العرض للزوار»; `hidden` names the
+  // groups that were, so the page can say signing in shows them.
+  startsAt: string | null
+  endsAt: string | null
+  openingPriceMinorUnits: number | null
   priceMinorUnits: number | null
-  minimumNextBidMinorUnits: number
+  minimumNextBidMinorUnits: number | null
   depositMinorUnits: number
-  bookletPriceMinorUnits: number
+  /** 0 is a free booklet, always shown; a price is hidden with the fees. */
+  bookletPriceMinorUnits: number | null
   plotCount: number
   totalAreaSqm: number
   /** A Public document in the document service, or null for no image. */
   coverImageDocumentId: string | null
+  hidden: string[]
 }
 
 export interface Plot {
@@ -28,6 +32,8 @@ export interface Plot {
   /** Metres. Null while the plot is listed but not yet surveyed. */
   streetWidthMeters: number | null
   frontageMeters: number | null
+  /** الاستخدام, by name; see shared landUseAr. */
+  landUse: string | null
   latitude: string | null
   longitude: string | null
   descriptionAr: string | null
@@ -36,17 +42,19 @@ export interface Plot {
 
 export interface AuctionDetail extends Omit<AuctionSummary, 'plotCount'> {
   effectiveEndsAt: string | null
-  minIncrementMinorUnits: number
+  minIncrementMinorUnits: number | null
   quietPeriodSeconds: number | null
-  maxExtensions: number
-  extensionsUsed: number
+  maxExtensions: number | null
+  extensionsUsed: number | null
   plots: Plot[]
   /** Documents anyone may read — plans, photographs. Never the booklet. */
   attachments: PublicDocument[]
   /** السعي, charged to the winner on the price won. */
-  brokerageFeePercent: number
+  brokerageFeePercent: number | null
   /** Set when an administrator withdrew it before it opened. */
   cancellationReason: string | null
+  /** On a cancelled auction: whether deposits and booklet fees are returned. */
+  cancellationRefunds: boolean | null
 }
 
 export interface PublicDocument {

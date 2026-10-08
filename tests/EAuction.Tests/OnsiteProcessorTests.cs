@@ -180,6 +180,42 @@ public class OnsiteProcessorTests
         Assert.Equal(1, rejected);
     }
 
+    // --- an administrator ending a running auction ---------------------------
+
+    [Fact]
+    public async Task An_admin_s_early_close_offers_the_highest_bid_on_an_online_auction()
+    {
+        var (h, d) = await StartedAsync(Hall() with { Channel = BidChannel.Online });
+        await using var owned = h;
+        var winner = Guid.NewGuid();
+
+        await h.BidAsync(d, Guid.NewGuid(), 1_700_000_00, DateTimeOffset.UtcNow);
+        await h.BidAsync(d, winner, 1_800_000_00, DateTimeOffset.UtcNow);
+        await h.PublishAdminCloseAsync(d.AuctionId);
+        await h.DrainLifecycleAsync();
+
+        Assert.Single(await h.LifecycleOfAsync<AuctionClosed>(nameof(AuctionClosed)));
+        var offered = Assert.Single(await h.LifecycleOfAsync<CandidateOffered>(nameof(CandidateOffered)));
+        Assert.Equal(winner, offered.BidderId);
+    }
+
+    [Fact]
+    public async Task A_running_auction_cancelled_stops_with_no_close_and_no_candidate()
+    {
+        var (h, d) = await StartedAsync(Hall() with { Channel = BidChannel.Online });
+        await using var owned = h;
+
+        await h.BidAsync(d, Guid.NewGuid(), 1_800_000_00, DateTimeOffset.UtcNow);
+        await h.PublishCancelAsync(d.AuctionId);
+        await h.DrainLifecycleAsync();
+        // Even when its time comes, nothing is closed or offered.
+        await h.Supervisor.TickAsync(d.EndsAt + Grace, h.Token);
+
+        Assert.False(h.Supervisor.TryGet(d.AuctionId, out _));
+        Assert.Empty(await h.LifecycleOfAsync<AuctionClosed>(nameof(AuctionClosed)));
+        Assert.Empty(await h.LifecycleOfAsync<CandidateOffered>(nameof(CandidateOffered)));
+    }
+
     // --- the ladder survives, which is the whole point ----------------------
 
     [Fact]

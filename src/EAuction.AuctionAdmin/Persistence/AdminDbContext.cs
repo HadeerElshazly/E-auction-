@@ -11,6 +11,7 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
     public DbSet<Plot> Plots => Set<Plot>();
     public DbSet<Award> Awards => Set<Award>();
     public DbSet<OutboxMessage> Outbox => Set<OutboxMessage>();
+    public DbSet<PlatformSetting> Settings => Set<PlatformSetting>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -63,6 +64,8 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             e.Property(x => x.PlotNumber).HasMaxLength(100).IsRequired();
             e.Property(x => x.StreetWidthMeters).HasPrecision(8, 2);
             e.Property(x => x.FrontageMeters).HasPrecision(8, 2);
+            // By name: a stored number would mean something else the day the list is reordered.
+            e.Property(x => x.LandUse).HasConversion<string>().HasMaxLength(30);
             e.Property(x => x.AreaSqm).HasPrecision(18, 2);
             e.Property(x => x.Latitude).HasMaxLength(50);
             e.Property(x => x.Longitude).HasMaxLength(50);
@@ -98,6 +101,14 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             // One open award at a time: a cascade must close the previous
             // award before the next can be confirmed.
             e.HasIndex(x => new { x.AuctionId, x.CascadeStep }).IsUnique();
+        });
+
+        b.Entity<PlatformSetting>(e =>
+        {
+            e.ToTable("platform_setting");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasMaxLength(100);
+            e.Property(x => x.ValueJson).HasColumnType("jsonb").IsRequired();
         });
 
         b.Entity<OutboxMessage>(e =>

@@ -65,6 +65,7 @@ export interface Auction {
   totalAreaSqm: number
   rejectionReason: string | null
   cancellationReason: string | null
+  cancellationRefunded: boolean | null
   cancelledAt: string | null
   /** Why the committee refused the preliminary result, when it did. */
   resultRejectionReason: string | null
@@ -73,6 +74,19 @@ export interface Auction {
   currentAward: Award | null
   /** The open award, or the settled one whose title transfer is still tracked. */
   followUpAward: Award | null
+  plots: PlotView[]
+}
+
+export interface PlotView {
+  id: string
+  plotNumber: string
+  areaSqm: number
+  streetWidthMeters: number | null
+  frontageMeters: number | null
+  landUse: string | null
+  latitude: string | null
+  longitude: string | null
+  descriptionAr: string | null
 }
 
 export type AuctionStatus =

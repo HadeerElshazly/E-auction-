@@ -25,7 +25,7 @@ public class ClerkTests
             channel: BidChannel.Onsite,
             bidderVisibility: BidderVisibility.Masked,
             startsAt: now.AddDays(7), endsAt: now.AddDays(8),
-            openingPriceMinorUnits: 1_000_000_00, reservePriceMinorUnits: 1_500_000_00,
+            openingPriceMinorUnits: 2_000_000_00, reservePriceMinorUnits: 1_500_000_00,
             minIncrementMinorUnits: 50_000_00, depositMinorUnits: 100_000_00,
             brokerageFeePercent: 2.5m, bookletPriceMinorUnits: 1_000_00,
             quietPeriodSeconds: 120, maxExtensions: 3);

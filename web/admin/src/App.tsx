@@ -16,15 +16,15 @@ import {
 import { authConfig } from './authConfig'
 import type { Auction, AuctionListItem } from './types'
 import { AuctionList } from './AuctionList'
-import { AuctionEditor } from './AuctionEditor'
-import { AwardPanel } from './AwardPanel'
-import { Applicants } from './Applicants'
-import { ClerkTerminal } from './ClerkTerminal'
 import { Reports } from './Reports'
 import { AuditTrail } from './AuditTrail'
 import { FollowUp } from './FollowUp'
 import { Inquiries } from './Inquiries'
+import { ApplicationsQueue } from './ApplicationsQueue'
+import { Committee } from './Committee'
+import { AuctionDetail } from './AuctionDetail'
 import { Monitor } from './Monitor'
+import { VisitorSettings } from './VisitorSettings'
 
 /**
  * Which screen is open.
@@ -82,9 +82,12 @@ export function App() {
   const readerOnly = !!session && !isAdmin && !isCommittee && !isClerk
   useEffect(() => {
     if (!session) return
-    if (confirmed === 'followup-decision') navigate('followup')
-    else if (readerOnly && !window.location.hash)
+    if (confirmed === 'followup-decision') navigate('committee')
+    else if (window.location.hash) return
+    else if (readerOnly)
       navigate(canInquire ? 'inquiries' : canAudit ? 'audit' : canReport ? 'reports' : 'auctions')
+    // The committee's work is decisions: it starts on its own page.
+    else if (isCommittee && !isAdmin) navigate('committee')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, readerOnly])
 
@@ -114,23 +117,6 @@ export function App() {
   // The auction in the address, read whenever the address names a different one.
   const selectedId = view === 'auction' ? routeId : undefined
 
-  // Which part of the auction page is open: the one this person came for. The
-  // committee on a result waiting for it, the clerk on a hall auction, else the
-  // auction itself.
-  const [auctionTab, setAuctionTab] = useState<'details' | 'applicants' | 'hall' | 'award'>('details')
-  const [tabFor, setTabFor] = useState<string | null>(null)
-  useEffect(() => {
-    if (!selected || tabFor === selected.id) return
-    setAuctionTab(
-      isCommittee && ['PendingAward', 'WinnerDisqualified', 'Awarded'].includes(selected.status)
-        ? 'award'
-        : isClerk && selected.channel === 'Onsite'
-          ? 'hall'
-          : 'details',
-    )
-    setTabFor(selected.id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id])
   useEffect(() => {
     if (!selectedId) {
       setSelected(null)
@@ -231,12 +217,15 @@ export function App() {
 
   // This person's workspace: only the screens their roles open.
   const nav: NavItem[] = [
-    ...(isAdmin || isCommittee || isClerk ? [{ to: 'auctions', label: 'المزادات', icon: 'grid' }] : []),
+    ...(isCommittee ? [{ to: 'committee', label: 'لجنة الترسية', icon: 'gavel' }] : []),
+    ...(isAdmin || isCommittee || isClerk ? [{ to: 'auctions', label: 'إدارة المزادات', icon: 'grid' }] : []),
+    ...(isAdmin ? [{ to: 'applications', label: 'طلبات المشاركة', icon: 'shield' }] : []),
     ...(canWatch ? [{ to: 'monitor', label: 'المتابعة المباشرة', icon: 'live' }] : []),
-    ...(canReport ? [{ to: 'followup', label: 'متابعة الترسية', icon: 'wallet' }] : []),
+    ...(canReport ? [{ to: 'followup', label: 'التسويات والإفراغ', icon: 'wallet' }] : []),
     ...(canInquire || isAdmin || isCommittee ? [{ to: 'inquiries', label: 'الاستفسارات', icon: 'message' }] : []),
     ...(canReport ? [{ to: 'reports', label: 'التقارير', icon: 'chart' }] : []),
     ...(canAudit ? [{ to: 'audit', label: 'سجل المراجعة', icon: 'file' }] : []),
+    ...(isAdmin ? [{ to: 'visibility', label: 'إعدادات العرض للزوار', icon: 'lock' }] : []),
   ]
   const active = view === 'auction' ? 'auctions' : view ?? 'auctions'
   const crumb =
@@ -284,6 +273,15 @@ export function App() {
 
         {view === 'monitor' && canWatch ? (
           <Monitor session={session} />
+        ) : view === 'applications' && isAdmin ? (
+          <ApplicationsQueue session={session} onOpenAuction={open} />
+        ) : view === 'committee' && isCommittee ? (
+          <Committee
+            session={session}
+            committeeUserId={session.subject}
+            runDecision={(work) => stepUp.run('followup-decision', work)}
+            onOpenAuction={open}
+          />
         ) : view === 'followup' ? (
           <FollowUp
             session={session}
@@ -299,6 +297,8 @@ export function App() {
           <Reports session={session} />
         ) : view === 'audit' ? (
           <AuditTrail session={session} />
+        ) : view === 'visibility' && isAdmin ? (
+          <VisitorSettings session={session} />
         ) : !isAdmin && !isCommittee && !isClerk ? (
           // A reader with only `reporting` or `auditor` has no business on the
           // auction screens, and the services would refuse them anyway. Saying so
@@ -320,71 +320,17 @@ export function App() {
               action={<button onClick={() => navigate('auctions')}>جميع المزادات</button>}
             />
 
-            {(() => {
-              const tabs: Array<{ key: typeof auctionTab; label: string }> = [
-                { key: 'details', label: 'بيانات المزاد' },
-                ...(isAdmin ? [{ key: 'applicants' as const, label: 'المتقدّمون' }] : []),
-                ...(isClerk && selected.channel === 'Onsite' ? [{ key: 'hall' as const, label: 'القاعة' }] : []),
-                { key: 'award', label: 'النتيجة والترسية' },
-              ]
-              const current = tabs.some((t) => t.key === auctionTab) ? auctionTab : 'details'
-              return (
-                <>
-                  <div className="detail-tabs page-tabs" role="tablist" aria-label="أقسام المزاد">
-                    {tabs.map((t) => (
-                      <button
-                        key={t.key}
-                        role="tab"
-                        aria-selected={current === t.key}
-                        className={`tab${current === t.key ? ' active' : ''}`}
-                        onClick={() => setAuctionTab(t.key)}
-                        data-testid={`auction-tab-${t.key}`}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {current === 'details' && (
-                    <AuctionEditor
-                      auction={selected}
-                      client={client}
-                      session={session}
-                      busy={busy}
-                      canEdit={isAdmin}
-                      canApprove={isCommittee}
-                      onAct={act}
-                    />
-                  )}
-
-                  {current === 'applicants' && isAdmin && (
-                    <Applicants auction={selected} session={session} busy={busy} onAct={act} />
-                  )}
-
-                  {current === 'hall' && isClerk && selected.channel === 'Onsite' && (
-                    <ClerkTerminal
-                      auction={selected}
-                      session={session}
-                      client={client}
-                      onAct={act}
-                      busy={busy}
-                    />
-                  )}
-
-                  {current === 'award' && (
-                    <AwardPanel
-                      session={session}
-                      auction={selected}
-                      client={client}
-                      busy={busy}
-                      canAct={isCommittee}
-                      committeeUserId={session.subject}
-                      onAct={act}
-                    />
-                  )}
-                </>
-              )
-            })()}
+            <AuctionDetail
+              auction={selected}
+              client={client}
+              session={session}
+              busy={busy}
+              isAdmin={isAdmin}
+              isCommittee={isCommittee}
+              isClerk={isClerk}
+              onAct={act}
+              onOpen={open}
+            />
           </>
         ) : (
           <AuctionList
@@ -393,12 +339,13 @@ export function App() {
             canCreate={isAdmin}
             busy={busy}
             onOpen={open}
-            onCreate={(nameAr, nameEn) =>
+            onCreate={(nameAr, nameEn, minIncrementMinorUnits) =>
               act(async () => {
                 const created = await client.post<Auction>('/auctions', {
                   createdByUserId: session.subject,
                   nameAr,
                   nameEn,
+                  minIncrementMinorUnits,
                 })
                 setSelected(created)
                 navigate(`auction/${created.id}`)

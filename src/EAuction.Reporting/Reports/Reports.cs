@@ -447,6 +447,9 @@ public static class ReportQueries
                     bucket.Brokerage += row.AmountMinorUnits; break;
                 case (PaymentPurposes.Booklet, PaymentOutcomes.Charged):
                     bucket.Booklet += row.AmountMinorUnits; break;
+                // Returned on a cancelled auction: the fee was never the municipality's to keep.
+                case (PaymentPurposes.Booklet, PaymentOutcomes.Refunded):
+                    bucket.Booklet -= row.AmountMinorUnits; break;
                 case (PaymentPurposes.Deposit, PaymentOutcomes.Forfeited):
                     bucket.Forfeited += row.AmountMinorUnits; break;
                 case (PaymentPurposes.Deposit, PaymentOutcomes.Refunded):

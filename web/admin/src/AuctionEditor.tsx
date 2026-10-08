@@ -49,17 +49,20 @@ export function AuctionEditor({
         </div>
       )}
 
-      {open && canEdit ? (
-        <Details auction={auction} client={client} busy={busy} onAct={onAct} />
-      ) : (
-        <Summary auction={auction} session={session} />
+      {/* The read-only summary lives on «تفاصيل القطعة»; here only what can be
+          changed, and the approval workflow. */}
+      {open && canEdit && <Details auction={auction} client={client} busy={busy} onAct={onAct} />}
+      {!(open && canEdit) && (
+        <p className="muted small">
+          بيانات المزاد معروضة في «تفاصيل القطعة». لا تُعدَّل بعد رفعه للاعتماد؛ الإجراءات المتاحة أدناه.
+        </p>
       )}
 
       {auction.channel === 'Onsite' && (
         <Clerk auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
       )}
 
-      <Plots auction={auction} client={client} busy={busy} canEdit={open && canEdit} onAct={onAct} />
+      {/* قطع الأرض are added on «تفاصيل القطعة», each a row with its details. */}
 
       {!['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled'].includes(auction.status) && (
         <details className="card bid-history-card">
@@ -97,7 +100,7 @@ export function AuctionEditor({
  * costs to take part, and how it is set up — in that order, because that is the
  * order the committee and the clerk ask about it in.
  */
-function Summary({ auction, session }: { auction: Auction; session: Session }) {
+export function Summary({ auction, session }: { auction: Auction; session: Session }) {
   const figures = usePublicPrice(auction)
   const leaderId = useLeaders(session)[auction.id]
   const award = auction.currentAward ?? auction.followUpAward
@@ -160,7 +163,7 @@ function Summary({ auction, session }: { auction: Auction; session: Session }) {
           </div>
         )}
         <Stat label="سعر الافتتاح" value={sar(auction.openingPriceMinorUnits, 'ar')} />
-        <Stat label="الحد الأدنى للزيادة" value={sar(auction.minIncrementMinorUnits, 'ar')} />
+        <Stat label="زيادة المزايدة" value={sar(auction.minIncrementMinorUnits, 'ar')} sub="ما تضيفه كل ضغطة زيادة" />
         <Stat label="التأمين" value={sar(auction.depositMinorUnits, 'ar')} />
         <Stat
           label="سعر الكراسة"
@@ -184,7 +187,7 @@ function Summary({ auction, session }: { auction: Auction; session: Session }) {
   )
 }
 
-interface PublicPrice {
+export interface PublicPrice {
   status: string
   priceMinorUnits: number | null
   leaderLabel: string | null
@@ -198,7 +201,7 @@ interface PublicPrice {
  * portals read — for an auction that has opened. Polled while it is live; read
  * once after that, when they no longer move.
  */
-function usePublicPrice(auction: Auction): PublicPrice | null {
+export function usePublicPrice(auction: Auction): PublicPrice | null {
   const [figures, setFigures] = useState<PublicPrice | null>(null)
   const opened = !['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled', 'Cancelled']
     .includes(auction.status)
@@ -321,7 +324,7 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
 
   const amounts: Array<[keyof FormState, string]> = [
     ['opening', 'سعر الافتتاح'],
-    ['increment', 'الحد الأدنى للمزايدة'],
+    ['increment', 'زيادة المزايدة'],
     ['deposit', 'التأمين'],
     ['booklet', 'سعر الكراسة'],
   ]
@@ -473,6 +476,9 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
             placeholder="اتركه فارغاً لعدم التغيير"
             onChange={(e) => setForm({ ...form, reserve: e.target.value })}
           />
+          <small className="muted">
+            أدنى سعر يجوز خفض سعر الافتتاح إليه عند إعادة الطرح — لا يزيد على سعر الافتتاح.
+          </small>
         </label>
 
         <label>
@@ -587,106 +593,9 @@ function forInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function Plots({
-  auction,
-  client,
-  busy,
-  canEdit,
-  onAct,
-}: Omit<Props, 'canApprove'> & { canEdit: boolean }) {
-  const [number, setNumber] = useState('')
-  const [area, setArea] = useState('')
-  const [streetWidth, setStreetWidth] = useState('')
-  const [frontage, setFrontage] = useState('')
-  const [lat, setLat] = useState('')
-  const [lng, setLng] = useState('')
-
-  return (
-    <>
-      <h3>
-        قطع الأرض ({auction.plotCount}) — تُباع كوحدة واحدة
-      </h3>
-      <p className="muted small" style={{ marginTop: -4 }}>
-        المزايدة على المزاد كاملاً، لا على قطعة بعينها.
-      </p>
-
-      {canEdit && (
-        <div className="grid">
-          <label>
-            <span>رقم القطعة</span>
-            <input className="ltr" value={number} onChange={(e) => setNumber(e.target.value)} />
-          </label>
-          <label>
-            <span>المساحة (م²)</span>
-            <input
-              className="ltr num"
-              inputMode="decimal"
-              value={area}
-              onChange={(e) => setArea(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>عرض الشارع (م)</span>
-            <input
-              className="ltr num"
-              inputMode="decimal"
-              value={streetWidth}
-              onChange={(e) => setStreetWidth(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>الواجهة (م)</span>
-            <input
-              className="ltr num"
-              inputMode="decimal"
-              value={frontage}
-              onChange={(e) => setFrontage(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>خط العرض</span>
-            <input className="ltr num" value={lat} onChange={(e) => setLat(e.target.value)} />
-          </label>
-          <label>
-            <span>خط الطول</span>
-            <input className="ltr num" value={lng} onChange={(e) => setLng(e.target.value)} />
-          </label>
-          <div style={{ alignSelf: 'end' }}>
-            <button
-              disabled={busy || number.trim() === '' || Number(area) <= 0}
-              onClick={() =>
-                onAct(async () => {
-                  await client.post(`/auctions/${auction.id}/plots`, {
-                    plotNumber: number.trim(),
-                    areaSqm: Number(area),
-                    latitude: lat || null,
-                    longitude: lng || null,
-                    descriptionAr: null,
-                    descriptionEn: null,
-                    // Left out rather than sent as 0: the domain refuses a
-                    // non-positive measurement, and an empty box means "not
-                    // surveyed yet", not "zero metres".
-                    streetWidthMeters: streetWidth.trim() === '' ? null : Number(streetWidth),
-                    frontageMeters: frontage.trim() === '' ? null : Number(frontage),
-                  })
-                  setNumber('')
-                  setArea('')
-                  setStreetWidth('')
-                  setFrontage('')
-                })
-              }
-            >
-              + إضافة قطعة
-            </button>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
 /**
- * The two documents an auction is prepared with: كراسة الشروط and the cover image.
+ * The booklet an auction is prepared with, and its public attachments. The cover
+ * image is set on the photo at the top of the auction page (CoverPhoto).
  *
  * They go to the document service first and to auction-admin second, in that
  * order, because the id auction-admin records has to be an id that resolves. The
@@ -723,22 +632,7 @@ function Documents({
             onAct(() => client.post(`/auctions/${auction.id}/booklet`, { documentId }))
           }
         />
-        <Attach
-          label="صورة الغلاف"
-          buttonLabel="إرفاق غلاف"
-          inputLabel="ملف صورة الغلاف"
-          // Public: it is on the catalogue an anonymous citizen reads before
-          // deciding whether to register at all.
-          access="Public"
-          accept="image/*"
-          attached={auction.coverImageDocumentId}
-          documentsApi={documents}
-          canEdit={canEdit}
-          busy={busy}
-          onAttach={(documentId) =>
-            onAct(() => client.post(`/auctions/${auction.id}/cover-image`, { documentId }))
-          }
-        />
+        {/* صورة الغلاف is set on the photo at the top of the auction page. */}
       </div>
 
       <PublicAttachments

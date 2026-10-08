@@ -34,6 +34,8 @@ builder.Services.AddSingleton<BidderNames>();
 builder.Services.AddSingleton<LeaderLabels>();
 builder.Services.AddSingleton<FanOut>();
 builder.Services.AddSingleton<Clarifications>();
+builder.Services.AddSingleton<PublicVisibilityState>();
+builder.Services.AddHostedService<PublicVisibilityConsumer>();
 builder.Services.AddHostedService<ClarificationsConsumer>();
 builder.Services.AddSingleton(sp => new CatalogueConsumer(
     sp.GetRequiredService<CatalogueState>(),
@@ -78,7 +80,7 @@ app.MapGet("/health/ready", (CatalogueConsumer c) =>
 // is reachable from here.
 // ---------------------------------------------------------------------------
 
-app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
+app.MapGet("/auctions", (string? state, string? q, HttpContext http, CatalogueState catalogue, PublicVisibilityState visibility) =>
 {
     // The chips' grouping is shared with the administrators' list (StageGroups), so
     // an auction is "upcoming" or "finished" on both portals alike.
@@ -93,10 +95,11 @@ app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
         || ArabicText.Normalise(a.NameEn).Contains(needle);
 
     var all = catalogue.All().ToArray();
+    var visitor = visibility.For(http);
     var items = all
         .Where(a => InState(a, state) && Found(a))
         .OrderBy(a => a.StartsAt)
-        .Select(AuctionSummary.From)
+        .Select(a => AuctionSummary.From(a, visitor))
         .ToArray();
 
     // Each status chip's count under the current search.
@@ -121,8 +124,13 @@ app.MapGet("/auctions", (string? state, string? q, CatalogueState catalogue) =>
 // calls folded into one, so it discloses nothing new. The leader label in
 // particular goes through LeaderLabels, so a masked auction is masked here too.
 // ---------------------------------------------------------------------------
-app.MapGet("/auctions/live", (CatalogueState catalogue, LeaderLabels labels) =>
+app.MapGet("/auctions/live", (HttpContext http, CatalogueState catalogue, LeaderLabels labels, PublicVisibilityState visibility) =>
 {
+    // The live prices, folded together: a visitor gets them only if the setting
+    // lets a visitor see a live price at all.
+    if (visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.LivePrice))
+        return Results.Json(new { signInRequired = true }, statusCode: StatusCodes.Status401Unauthorized);
+
     var rows = catalogue.All()
         .Where(a => a.Status == "Live")
         .OrderBy(a => a.EffectiveEndsAt ?? a.EndsAt)
@@ -156,12 +164,14 @@ app.MapGet("/staff/leaders", (CatalogueState catalogue) =>
 
 // «التوضيحات العامة» (الخاصية 10): what staff published, after approval, for
 // everyone reading the auction — anonymous, like the auction itself.
-app.MapGet("/auctions/{id:guid}/clarifications", (Guid id, Clarifications store) =>
-    Results.Ok(new { items = store.For(id) })).AllowAnonymous();
+app.MapGet("/auctions/{id:guid}/clarifications", (Guid id, HttpContext http, Clarifications store, PublicVisibilityState visibility) =>
+    visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.Clarifications)
+        ? Results.Ok(new { items = Array.Empty<Clarification>(), signInRequired = true })
+        : Results.Ok(new { items = store.For(id), signInRequired = false })).AllowAnonymous();
 
-app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
+app.MapGet("/auctions/{id:guid}", (Guid id, HttpContext http, CatalogueState catalogue, PublicVisibilityState visibility) =>
     catalogue.TryGet(id, out var a)
-        ? Results.Ok(AuctionDetail.From(a))
+        ? Results.Ok(AuctionDetail.From(a, visibility.For(http)))
         : Results.NotFound()).AllowAnonymous();
 
 // ---------------------------------------------------------------------------
@@ -170,9 +180,11 @@ app.MapGet("/auctions/{id:guid}", (Guid id, CatalogueState catalogue) =>
 // ---------------------------------------------------------------------------
 
 app.MapGet("/auctions/{id:guid}/price", (
-    Guid id, HttpContext http, CatalogueState catalogue, LeaderLabels labels) =>
+    Guid id, HttpContext http, CatalogueState catalogue, LeaderLabels labels, PublicVisibilityState visibility) =>
 {
     if (!catalogue.TryGet(id, out var a)) return Results.NotFound();
+    if (visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.LivePrice))
+        return Results.Json(new { signInRequired = true }, statusCode: StatusCodes.Status401Unauthorized);
 
     // The one thing a caller learns about identity: whether the leader is
     // themselves. Anonymous callers learn nothing, which is correct — "am I
@@ -197,8 +209,14 @@ app.MapGet("/auctions/{id:guid}/price", (
 
 app.MapGet("/auctions/{id:guid}/stream", async (
     Guid id, HttpContext http, CatalogueState catalogue, LeaderLabels labels,
-    FanOut fanOut, CancellationToken ct) =>
+    FanOut fanOut, PublicVisibilityState visibility, CancellationToken ct) =>
 {
+    if (visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.LivePrice))
+    {
+        http.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return;
+    }
+
     // Returns Task, not IResult, and sets its own status code.
     //
     // A minimal-API handler that writes to the response directly and then also

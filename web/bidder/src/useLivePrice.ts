@@ -25,7 +25,12 @@ export interface LiveFeed {
  * than a stream and much better than a dead price panel, and `transport` says which
  * is in use so the portal can admit it.
  */
-export function useLivePrice(auctionId: string, session: Session | null): LiveFeed {
+/**
+ * `enabled` is false when the live price is hidden from this visitor
+ * («إعدادات العرض للزوار»): the service would refuse the stream and every poll, so
+ * neither is opened.
+ */
+export function useLivePrice(auctionId: string, session: Session | null, enabled = true): LiveFeed {
   const [price, setPrice] = useState<LivePrice | null>(null)
   const [verdicts, setVerdicts] = useState<BidVerdict[]>([])
   const [transport, setTransport] = useState<LiveFeed['transport']>('connecting')
@@ -35,6 +40,7 @@ export function useLivePrice(auctionId: string, session: Session | null): LiveFe
   const streaming = useRef(false)
 
   useEffect(() => {
+    if (!enabled) return
     const controller = new AbortController()
     streaming.current = false
     setTransport('connecting')
@@ -74,10 +80,11 @@ export function useLivePrice(auctionId: string, session: Session | null): LiveFe
     })
 
     return () => controller.abort()
-  }, [auctionId, session])
+  }, [auctionId, session, enabled])
 
   // The fallback. Runs only while the stream is not delivering.
   useEffect(() => {
+    if (!enabled) return
     const client = api({ baseUrl: config.queryApi, session })
     let cancelled = false
     let timer: number | null = null
@@ -115,7 +122,7 @@ export function useLivePrice(auctionId: string, session: Session | null): LiveFe
       cancelled = true
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [auctionId, session])
+  }, [auctionId, session, enabled])
 
   return { price, verdicts, transport }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EAuction.AuctionAdmin.Domain;
 using EAuction.AuctionAdmin.Outbox;
 using EAuction.AuctionAdmin.Persistence;
@@ -120,7 +121,15 @@ app.MapPost("/auctions", async (
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
 {
     await using var db = await f.CreateDbContextAsync(ct);
-    var auction = Auction.CreateDraft(r.CreatedByUserId, r.NameAr, r.NameEn);
+    Auction auction;
+    try
+    {
+        auction = Auction.CreateDraft(r.CreatedByUserId, r.NameAr, r.NameEn, r.MinIncrementMinorUnits);
+    }
+    catch (AuctionValidationException ex)
+    {
+        return Results.BadRequest(new { problems = ex.Problems });
+    }
     db.Auctions.Add(auction);
 
     // Outside Mutate because the auction does not exist to be loaded yet, so the
@@ -219,12 +228,49 @@ app.MapPost("/auctions/{id:guid}/close", (
         a => a.CloseByClerk(http.User.SubjectId() ?? Guid.Empty)))
     .RequireAuthorization(Policies.Operator);
 
+// «إعادة الطرح بسعر مخفّض» — an unsold auction's land as a new draft, at a lower
+// opening price no lower than the reserve. The new draft is returned; the old auction
+// is left exactly as it ended.
+app.MapPost("/auctions/{id:guid}/reoffer", async (
+    Guid id, ReofferRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var old = await Load(db, id, ct);
+    if (old is null) return Results.NotFound();
+
+    Auction next;
+    try
+    {
+        next = old.Reoffer(http.User.SubjectId() ?? Guid.Empty, r.OpeningPriceMinorUnits);
+    }
+    catch (AuctionValidationException ex)
+    {
+        return Results.BadRequest(new { problems = ex.Problems });
+    }
+    catch (InvalidAuctionTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, status = ex.From.ToString() });
+    }
+    db.Auctions.Add(next);
+
+    var actor = StaffAudit.ActorOf(http);
+    db.RecordStaffAction(
+        actor.Subject, actor.Roles, actor.SourceAddress, "ReofferAuction", AuditSubject.Auction(next.Id),
+        $"إعادة طرح {old.NameAr}: سعر الافتتاح {AuctionChanges.Money(old.OpeningPriceMinorUnits)} ← "
+        + $"{AuctionChanges.Money(next.OpeningPriceMinorUnits)} (المزاد السابق {old.Id})",
+        actor.Name, next.NameAr);
+
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(AuctionResponse.From(next));
+}).RequireAuthorization(Policies.AuctionAdmin);
+
 app.MapPost("/auctions/{id:guid}/plots", (
     Guid id, AddPlotRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "AddPlot", a => a.AddPlot(new Plot(
         id, r.PlotNumber, r.AreaSqm, r.Latitude, r.Longitude, r.DescriptionAr, r.DescriptionEn,
-        r.StreetWidthMeters, r.FrontageMeters)),
+        r.StreetWidthMeters, r.FrontageMeters, r.LandUse)),
         details: $"Plot {r.PlotNumber}, {r.AreaSqm} m²."))
     .RequireAuthorization(Policies.AuctionAdmin);
 
@@ -293,12 +339,73 @@ app.MapPost("/auctions/{id:guid}/reject", (
 // Withdrawing an approved auction before it opens. The auction manager's call, as
 // preparing it was, and audited with its reason — «توثيق الإلغاء المصرح به».
 app.MapPost("/auctions/{id:guid}/cancel", (
-    Guid id, RejectRequest r, HttpContext http,
+    Guid id, CancelRequest r, HttpContext http,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
     Mutate(f, id, ct, http, "CancelAuction",
-        a => a.Cancel(r.Reason, http.User.SubjectId() ?? Guid.Empty, DateTimeOffset.UtcNow),
-        details: r.Reason))
+        a => a.Cancel(r.Reason, http.User.SubjectId() ?? Guid.Empty, DateTimeOffset.UtcNow, r.Refund),
+        details: $"{r.Reason} — {(r.Refund ? "مع رد التأمين والكراسة للمزايدين" : "دون رد التأمين والكراسة")}"))
     .RequireAuthorization(Policies.AuctionAdmin);
+
+// «إغلاق المزاد الآن» — a running auction ended early, its highest bidder the
+// candidate. Cancelling it instead (no award, deposits back) is POST /cancel.
+app.MapPost("/auctions/{id:guid}/close-early", (
+    Guid id, RejectRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "CloseAuctionEarly",
+        a => a.CloseEarly(http.User.SubjectId() ?? Guid.Empty, r.Reason, DateTimeOffset.UtcNow),
+        details: $"إغلاق قبل الموعد مع اعتماد أعلى مزايدة — السبب: {r.Reason}"))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «إعدادات العرض للزوار» — what a visitor who has not signed in sees of an auction.
+// Stored here, published on platform.settings, enforced by the query BFF.
+app.MapGet("/settings/public-visibility", async (
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var row = await db.Settings.FirstOrDefaultAsync(s => s.Key == PublicVisibilityChanged.Key, ct);
+    return Results.Ok(PublicVisibilityView.From(row));
+}).RequireAuthorization(Policies.AuctionAdmin);
+
+app.MapPut("/settings/public-visibility", async (
+    PublicVisibilityRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    var unknown = (r.Public ?? new Dictionary<string, bool>()).Keys.Where(k => !PublicFields.IsKnown(k)).ToArray();
+    if (unknown.Length > 0)
+        return Results.BadRequest(new { problems = new[] { $"إعداد غير معروف: {string.Join("، ", unknown)}" } });
+
+    await using var db = await f.CreateDbContextAsync(ct);
+    var row = await db.Settings.FirstOrDefaultAsync(s => s.Key == PublicVisibilityChanged.Key, ct);
+    var before = PublicVisibilityView.Policy(row);
+    var after = PublicVisibilityPolicy.From(r.Public);
+
+    var by = http.User.SubjectId() ?? Guid.Empty;
+    var now = DateTimeOffset.UtcNow;
+    if (row is null)
+    {
+        row = new PlatformSetting { Key = PublicVisibilityChanged.Key };
+        db.Settings.Add(row);
+    }
+    row.ValueJson = JsonSerializer.Serialize(after.Public);
+    row.UpdatedAt = now;
+    row.UpdatedByUserId = by;
+
+    db.Outbox.Add(OutboxMessage.From(new PublicVisibilityChanged { Public = after.Public, ChangedByUserId = by, At = now }));
+
+    // What moved, in words, for سجل المراجعة.
+    var changes = PublicFields.Configurable
+        .Where(fl => before.Shows(fl.Key) != after.Shows(fl.Key))
+        .Select(fl => $"{fl.LabelAr}: {(after.Shows(fl.Key) ? "ظاهر للزوار" : "بعد تسجيل الدخول")}")
+        .ToArray();
+    var actor = StaffAudit.ActorOf(http);
+    db.RecordStaffAction(
+        actor.Subject, actor.Roles, actor.SourceAddress, "ChangePublicVisibility", "settings/public-visibility",
+        changes.Length == 0 ? "حُفظت الإعدادات دون تغيير" : string.Join(" · ", changes),
+        actor.Name, "إعدادات العرض للزوار");
+
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(PublicVisibilityView.From(row));
+}).RequireAuthorization(Policies.AuctionAdmin);
 
 // --- lifecycle --------------------------------------------------------------
 //
@@ -686,7 +793,36 @@ static async Task<IResult> Mutate(
 
 // --- contracts -------------------------------------------------------------
 
-public sealed record CreateAuctionRequest(Guid CreatedByUserId, string NameAr, string NameEn);
+public sealed record ReofferRequest(long OpeningPriceMinorUnits);
+
+public sealed record PublicVisibilityRequest(Dictionary<string, bool>? Public);
+
+/// <summary>The settings page: each group with its state, and what is always shown.</summary>
+public sealed record PublicVisibilityView(
+    IReadOnlyList<PublicVisibilityView.Field> Fields, IReadOnlyList<string> AlwaysPublic,
+    DateTimeOffset? UpdatedAt, Guid? UpdatedByUserId)
+{
+    public sealed record Field(string Key, string LabelAr, string HintAr, bool IsPublic, bool PublicByDefault);
+
+    public static PublicVisibilityPolicy Policy(PlatformSetting? row) =>
+        PublicVisibilityPolicy.From(row is null
+            ? null
+            : JsonSerializer.Deserialize<Dictionary<string, bool>>(row.ValueJson));
+
+    public static PublicVisibilityView From(PlatformSetting? row)
+    {
+        var policy = Policy(row);
+        return new(
+            PublicFields.Configurable
+                .Select(f => new Field(f.Key, f.LabelAr, f.HintAr, policy.Shows(f.Key), f.PublicByDefault))
+                .ToArray(),
+            PublicFields.AlwaysPublicAr,
+            row?.UpdatedAt, row?.UpdatedByUserId);
+    }
+}
+
+public sealed record CreateAuctionRequest(
+    Guid CreatedByUserId, string NameAr, string NameEn, long? MinIncrementMinorUnits = null);
 
 public sealed record UpdateAuctionRequest(
     string NameAr, string NameEn, BidChannel Channel,
@@ -709,7 +845,7 @@ public sealed record AttachmentRequest(Guid DocumentId, string TitleAr);
 public sealed record AddPlotRequest(
     string PlotNumber, decimal AreaSqm, string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn,
-    decimal? StreetWidthMeters, decimal? FrontageMeters);
+    decimal? StreetWidthMeters, decimal? FrontageMeters, LandUse? LandUse = null);
 
 public sealed record DocumentRequest(Guid DocumentId);
 
@@ -717,6 +853,9 @@ public sealed record DocumentRequest(Guid DocumentId);
 public sealed record DocumentGrantResponse(
     Guid DocumentId, string Grant, DateTimeOffset ExpiresAt);
 public sealed record RejectRequest(string Reason);
+
+/// <summary>«إغلاق للإلغاء»: the reason, and whether the bidders' money goes back.</summary>
+public sealed record CancelRequest(string Reason, bool Refund = true);
 public sealed record OfferCandidateRequest(Guid BidderId, long AmountMinorUnits);
 public sealed record ConfirmAwardRequest(Guid CommitteeUserId);
 public sealed record DisqualifyRequest(string Reason, bool ForfeitDeposit);
@@ -743,6 +882,15 @@ public sealed record AuctionListItem(
     // Staff only see this list: the real winner, not the public pseudonym (D-22).
     Guid? WinnerBidderId);
 
+public sealed record PlotView(
+    Guid Id, string PlotNumber, decimal AreaSqm, decimal? StreetWidthMeters, decimal? FrontageMeters, string? LandUse,
+    string? Latitude, string? Longitude, string? DescriptionAr)
+{
+    public static PlotView From(Plot p) => new(
+        p.Id, p.PlotNumber, p.AreaSqm, p.StreetWidthMeters, p.FrontageMeters, p.LandUse?.ToString(),
+        p.Latitude, p.Longitude, p.DescriptionAr);
+}
+
 public sealed record AuctionResponse(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,
     string BidderVisibility, Guid? ClerkUserId, string? Phase,
@@ -753,14 +901,17 @@ public sealed record AuctionResponse(
     Guid? BookletDocumentId, Guid? CoverImageDocumentId,
     IReadOnlyList<PublicDocument> Attachments,
     int PlotCount, decimal TotalAreaSqm, string? RejectionReason,
-    string? CancellationReason, DateTimeOffset? CancelledAt,
+    string? CancellationReason, DateTimeOffset? CancelledAt, bool? CancellationRefunded,
     string? ResultRejectionReason,
     // Both halves of the pending candidate. The id alone would ask the committee to
     // approve an unknown sum.
     Guid? PendingCandidateBidderId, long? PendingCandidateAmountMinorUnits,
     AwardResponse? CurrentAward,
     // The open award, or the settled one whose title transfer is still tracked.
-    AwardResponse? FollowUpAward)
+    AwardResponse? FollowUpAward,
+    // The plots themselves, for the editor's table and map: the count alone left an
+    // administrator unable to see what they had added, or remove the wrong one.
+    IReadOnlyList<PlotView> Plots)
 {
     public static AuctionResponse From(Auction a)
     {
@@ -773,11 +924,12 @@ public sealed record AuctionResponse(
             a.QuietPeriodSeconds, a.MaxExtensions, a.BookletDocumentId, a.CoverImageDocumentId,
             a.Attachments.Select(x => new PublicDocument(x.DocumentId, x.TitleAr)).ToArray(),
             a.Plots.Count, a.TotalAreaSqm, a.RejectionReason,
-            a.CancellationReason, a.CancelledAt,
+            a.CancellationReason, a.CancelledAt, a.CancellationRefunded,
             a.ResultRejectionReason,
             a.PendingCandidateBidderId, a.PendingCandidateAmountMinorUnits,
             a.CurrentAward is null ? null : AwardResponse.From(a.CurrentAward, now),
-            a.FollowUpAward is null ? null : AwardResponse.From(a.FollowUpAward, now));
+            a.FollowUpAward is null ? null : AwardResponse.From(a.FollowUpAward, now),
+            a.Plots.Select(PlotView.From).ToArray());
     }
 }
 

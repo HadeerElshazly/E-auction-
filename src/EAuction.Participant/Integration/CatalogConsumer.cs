@@ -176,7 +176,7 @@ public sealed class CatalogConsumer(
 
         foreach (var subscription in subscriptions)
             subscription.ResolveDeposit(
-                forfeited.Contains(subscription.BidderId), now,
+                payload.ForfeitAll || forfeited.Contains(subscription.BidderId), now,
                 appliedToPurchase: subscription.BidderId == payload.AppliedToPurchaseForBidder);
 
         await db.SaveChangesAsync(ct);
@@ -237,5 +237,8 @@ public sealed class CatalogConsumer(
         public Guid AuctionId { get; init; }
         public Guid[] ForfeitForBidders { get; init; } = [];
         public Guid? AppliedToPurchaseForBidder { get; init; }
+
+        /// <summary>A cancellation that keeps every deposit, guarantees included.</summary>
+        public bool ForfeitAll { get; init; }
     }
 }

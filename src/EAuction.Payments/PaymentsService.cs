@@ -17,7 +17,7 @@ namespace EAuction.Payments;
 /// | <c>BookletFeeRequested</c> | Charges كراسة الشروط, so the bidder may read the terms |
 /// | <c>DepositRequested</c> | Charges التأمين, which is what makes them eligible to bid |
 /// | <c>AwardConfirmed</c> | Charges مبلغ السعي, a percentage of the price they won at |
-/// | <c>DepositsReleasable</c> | Refunds the losers, forfeits the defaulters, applies the winner's to the price |
+/// | <c>DepositsReleasable</c> | Refunds the losers, forfeits the defaulters, applies the winner's to the price; on a cancellation, refunds every deposit and booklet fee or keeps them all |
 ///
 /// It holds no database. What it has already settled is rebuilt by replaying its
 /// own output topic from offset 0, the same way the bid catcher rebuilds its
@@ -284,6 +284,7 @@ public sealed class PaymentsService(
         if (payload is null) return;
 
         var forfeit = (payload.ForfeitForBidders ?? []).ToHashSet();
+        bool Forfeits(Guid bidder) => payload.ForfeitAll || forfeit.Contains(bidder);
 
         // Everyone this auction took a deposit from, which this service knows
         // because it took them. Nobody else has to be asked.
@@ -295,7 +296,7 @@ public sealed class PaymentsService(
 
         foreach (var deposit in deposits)
         {
-            if (forfeit.Contains(deposit.BidderId))
+            if (Forfeits(deposit.BidderId))
             {
                 await RecordAsync(deposit with
                 {
@@ -317,6 +318,16 @@ public sealed class PaymentsService(
 
             await RefundAsync(deposit, ct);
         }
+
+        // A cancelled sale returns what bidders paid to read its terms, too. Only
+        // what this service charged: a booklet nobody paid for has nothing to return.
+        if (!payload.RefundBooklets) return;
+        var booklets = _settled.Values
+            .Where(s => s.AuctionId == payload.AuctionId
+                        && s.Purpose == nameof(PaymentPurpose.Booklet)
+                        && s.Outcome == PaymentOutcomes.Charged)
+            .ToList();
+        foreach (var booklet in booklets) await RefundAsync(booklet, ct);
     }
 
     // --- what it does -------------------------------------------------------
@@ -356,13 +367,14 @@ public sealed class PaymentsService(
         }, ct);
     }
 
+    /// <summary>Returns a charge — a deposit, or on a cancellation a booklet fee — through the gateway.</summary>
     private async Task RefundAsync(PaymentSettled deposit, CancellationToken ct)
     {
         var instruction = new PaymentInstruction
         {
             AuctionId = deposit.AuctionId,
             BidderId = deposit.BidderId,
-            Purpose = PaymentPurpose.Deposit,
+            Purpose = Enum.Parse<PaymentPurpose>(deposit.Purpose),
             AmountMinorUnits = deposit.AmountMinorUnits,
             IdempotencyKey = $"{deposit.Key}:refund",
         };

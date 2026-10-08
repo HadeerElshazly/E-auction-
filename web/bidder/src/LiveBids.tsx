@@ -48,7 +48,7 @@ export function LiveBids({ session, auctions, onOpenRoom, onBack }: Props) {
   const running = mine.filter((a) => a.status === 'Live')
   const upcoming = mine
     .filter((a) => a.status === 'Scheduled')
-    .sort((x, y) => x.startsAt.localeCompare(y.startsAt))
+    .sort((x, y) => x.startsAt!.localeCompare(y.startsAt!))
 
   return (
     <>
@@ -149,8 +149,9 @@ function LiveCard({
 
   const live = (price?.status ?? summary.status) === 'Live'
   const current = price?.priceMinorUnits ?? null
-  const minimum = price?.minimumNextBidMinorUnits ?? summary.minimumNextBidMinorUnits
-  const endsAt = price?.effectiveEndsAt ?? summary.endsAt
+  // Signed in, so «إعدادات العرض للزوار» hid nothing: the figures are always sent.
+  const minimum = (price?.minimumNextBidMinorUnits ?? summary.minimumNextBidMinorUnits)!
+  const endsAt = (price?.effectiveEndsAt ?? summary.endsAt)!
   const seconds = Math.max(0, Math.floor((new Date(endsAt).getTime() - Date.now()) / 1000))
   const closing = live && seconds <= 120
   const leading = price?.leaderIsYou === true

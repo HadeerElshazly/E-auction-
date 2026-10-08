@@ -43,7 +43,9 @@ public sealed record PublicPlot(
     Guid Id, string PlotNumber, decimal AreaSqm,
     string? Latitude, string? Longitude,
     string? DescriptionAr, string? DescriptionEn,
-    decimal? StreetWidthMeters, decimal? FrontageMeters);
+    decimal? StreetWidthMeters, decimal? FrontageMeters,
+    /// <summary>الاستخدام, by name ("Residential", "Commercial", …); null when not set.</summary>
+    string? LandUse = null);
 
 public sealed record AuctionApproved : DomainEvent
 {
@@ -154,6 +156,12 @@ public sealed record AuctionCancelled : DomainEvent
     public required string Reason { get; init; }
     public required Guid CancelledByUserId { get; init; }
     public required DateTimeOffset At { get; init; }
+
+    /// <summary>
+    /// «إغلاق للإلغاء» with the bidders' money returned — deposits and booklet fees —
+    /// or kept. Bidders are told which; the money itself moves on DepositsReleasable.
+    /// </summary>
+    public bool Refund { get; init; } = true;
 
     public override string AggregateType => "auction-lifecycle";
     public override string AggregateId => AuctionId.ToString();
@@ -307,6 +315,19 @@ public sealed record DepositsReleasable : DomainEvent
     /// <summary>The settled winner, whose deposit is applied to the price rather than returned.</summary>
     public Guid? AppliedToPurchaseForBidder { get; init; }
 
+    /// <summary>
+    /// A cancellation that keeps the bidders' money: every deposit is retained, paid
+    /// or guaranteed alike. Set only by «إغلاق للإلغاء» without a refund.
+    /// </summary>
+    public bool ForfeitAll { get; init; }
+
+    /// <summary>
+    /// A cancellation that returns the booklet fees too. A booklet is otherwise not
+    /// refunded — the bidder bought the terms and read them — but when the
+    /// municipality withdraws the sale itself, what they paid to look is returned.
+    /// </summary>
+    public bool RefundBooklets { get; init; }
+
     public override string AggregateType => "auction-deposits";
     public override string AggregateId => AuctionId.ToString();
 }
@@ -331,6 +352,37 @@ public sealed record AuctionExtendedByClerk : DomainEvent
 }
 
 /// <summary>The hammer. The only thing that ends a hall auction.</summary>
+/// <summary>
+/// An administrator ended a running auction early, keeping its result: the
+/// processor closes it as it would at its end time, and the highest valid bid
+/// becomes the candidate the committee decides on. With the reason, for the record.
+/// </summary>
+/// <summary>
+/// «إعدادات العرض للزوار» changed. The whole setting each time, not the difference:
+/// the topic is compacted on the key, so the latest record alone has to be the truth.
+/// </summary>
+public sealed record PublicVisibilityChanged : DomainEvent
+{
+    public required IReadOnlyDictionary<string, bool> Public { get; init; }
+    public required Guid ChangedByUserId { get; init; }
+    public required DateTimeOffset At { get; init; }
+
+    public const string Key = "public-visibility";
+    public override string AggregateType => "platform-settings";
+    public override string AggregateId => Key;
+}
+
+public sealed record AuctionClosedByAdmin : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required Guid ClosedByUserId { get; init; }
+    public required string Reason { get; init; }
+    public required DateTimeOffset At { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
 public sealed record AuctionClosedByClerk : DomainEvent
 {
     public required Guid AuctionId { get; init; }

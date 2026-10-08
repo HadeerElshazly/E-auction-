@@ -434,6 +434,34 @@ app.MapGet("/auctions/{auctionId:guid}/applications", async (
     });
 }).RequireAuthorization(Policies.AuctionAdmin);
 
+// «طلبات المشاركة» — every application across the auctions, for the administrator's
+// queue: those waiting on a decision first. Eligibility is derived, not stored, so
+// the filter and the counts are applied here rather than in SQL.
+app.MapGet("/applications", async (
+    string? eligibility, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var rows = await db.Subscriptions
+        .Join(db.Bidders, s => s.BidderId, b => b.Id, (s, b) => new { s, b.NameAr })
+        .Join(db.AuctionTerms, x => x.s.AuctionId, t => t.AuctionId, (x, t) => new { x.s, x.NameAr, Auction = t.NameAr })
+        .ToListAsync(ct);
+
+    var wanted = MyApplications.Standing(eligibility);
+    var counts = MyApplications.StandingKeys.ToDictionary(
+        k => k, k => rows.Count(x => k == "all" || x.s.Eligibility.State.ToString() == k));
+
+    return Results.Ok(new
+    {
+        counts,
+        items = rows
+            .Where(x => wanted is null || x.s.Eligibility.State.ToString() == wanted)
+            .OrderBy(x => x.s.Eligibility.State != Eligibility.UnderReview)
+            .ThenByDescending(x => x.s.CreatedAt)
+            .Take(300)
+            .Select(x => new { application = ApplicationEntry.From(x.s, x.NameAr), auctionNameAr = x.Auction })
+    });
+}).RequireAuthorization(Policies.AuctionAdmin);
+
 app.MapPost("/auctions/{auctionId:guid}/subscriptions/{bidderId:guid}/rotate-key", (
     HttpContext http, Guid auctionId, Guid bidderId,
     IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>

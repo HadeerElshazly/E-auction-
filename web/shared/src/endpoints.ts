@@ -30,3 +30,17 @@ export const ENDPOINTS = {
 } as const satisfies Record<string, Endpoint>
 
 export type EndpointName = keyof typeof ENDPOINTS
+
+/**
+ * The map tiles behind the plot maps. One server, named here, so the
+ * Content-Security-Policy can allow exactly it and nothing else (see vite-csp).
+ *
+ * OpenStreetMap's public tiles are fine for development and a demonstration; a
+ * production deployment should point this at a provider with a service agreement
+ * (or the municipality's own GIS), since the public servers have a usage policy.
+ */
+export const MAP_TILES = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  origin: 'https://tile.openstreetmap.org',
+  attribution: '&copy; OpenStreetMap',
+} as const

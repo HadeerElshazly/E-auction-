@@ -33,6 +33,27 @@ public class CancellationTests
         var release = Assert.Single(auction.Events.OfType<DepositsReleasable>());
         Assert.Empty(release.ForfeitForBidders);
         Assert.Null(release.AppliedToPurchaseForBidder);
+        // The municipality withdrew the sale: the booklet fees go back with the deposits.
+        Assert.False(release.ForfeitAll);
+        Assert.True(release.RefundBooklets);
+        Assert.True(auction.CancellationRefunded);
+    }
+
+    [Fact]
+    public void A_cancellation_may_keep_the_bidders_money()
+    {
+        var auction = Approved();
+        auction.MarkScheduled();
+        auction.MarkLive();
+        auction.ClearEvents();
+
+        auction.Cancel("تواطؤ بين المزايدين", Build.Admin, auction.StartsAt!.Value.AddMinutes(5), refund: false);
+
+        Assert.False(auction.CancellationRefunded);
+        Assert.False(Assert.Single(auction.Events.OfType<AuctionCancelled>()).Refund);
+        var release = Assert.Single(auction.Events.OfType<DepositsReleasable>());
+        Assert.True(release.ForfeitAll);
+        Assert.False(release.RefundBooklets);
     }
 
     [Fact]
@@ -44,7 +65,7 @@ public class CancellationTests
     }
 
     [Fact]
-    public void An_auction_about_to_open_or_already_live_cannot_be_cancelled()
+    public void An_auction_about_to_open_cannot_be_cancelled()
     {
         var auction = Approved();
         var starts = auction.StartsAt!.Value;
@@ -52,11 +73,41 @@ public class CancellationTests
         // Inside the cut-off: the processor may already be opening it.
         Assert.Throws<AuctionValidationException>(
             () => auction.Cancel("سبب", Build.Admin, starts - TimeSpan.FromMinutes(1)));
+    }
+
+    [Fact]
+    public void A_running_auction_is_cancelled_with_no_award_and_every_deposit_back()
+    {
+        var auction = Approved();
+        auction.MarkScheduled();
+        auction.MarkLive();
+        auction.ClearEvents();
+
+        auction.Cancel("خطأ في بيانات القطعة", Build.Admin, auction.StartsAt!.Value.AddMinutes(10));
+
+        Assert.Equal(AuctionStatus.Cancelled, auction.Status);
+        Assert.Single(auction.Events.OfType<AuctionCancelled>());
+        Assert.Empty(Assert.Single(auction.Events.OfType<DepositsReleasable>()).ForfeitForBidders);
+    }
+
+    [Fact]
+    public void A_running_auction_closed_early_keeps_its_result_for_the_committee()
+    {
+        var auction = Approved();
+        Assert.Throws<InvalidAuctionTransitionException>(() => auction.CloseEarly(Build.Admin, "سبب", Now));
 
         auction.MarkScheduled();
         auction.MarkLive();
-        Assert.Throws<InvalidAuctionTransitionException>(
-            () => auction.Cancel("سبب", Build.Admin, Now));
+        auction.ClearEvents();
+        Assert.Throws<AuctionValidationException>(() => auction.CloseEarly(Build.Admin, " ", Now));
+
+        auction.CloseEarly(Build.Admin, "اكتمال المنافسة", Now);
+
+        var closed = Assert.Single(auction.Events.OfType<AuctionClosedByAdmin>());
+        Assert.Equal("اكتمال المنافسة", closed.Reason);
+        // No deposits move and the status waits for the processor's close.
+        Assert.Empty(auction.Events.OfType<DepositsReleasable>());
+        Assert.Equal(AuctionStatus.Live, auction.Status);
     }
 
     [Fact]

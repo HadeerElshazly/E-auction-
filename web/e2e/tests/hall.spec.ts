@@ -60,12 +60,16 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
       auctionId = await page.locator('code.muted.small').first().innerText()
       expect(auctionId).toMatch(/^[0-9a-f-]{36}$/)
 
-      await page.getByLabel('رقم القطعة').fill('2001')
-      await page.getByLabel(/المساحة/).fill('900')
+      await page.getByTestId('auction-tab-info').click()
       await page.getByRole('button', { name: 'إضافة قطعة' }).click()
+      const dialog = page.getByRole('dialog', { name: 'إضافة قطعة' })
+      await dialog.getByLabel('رقم القطعة').fill('2001')
+      await dialog.getByLabel(/المساحة/).fill('900')
+      await dialog.getByRole('button', { name: 'إضافة القطعة' }).click()
       await expect(
         page.getByRole('heading', { level: 3, name: /قطع الأرض \(1\)/ }),
       ).toBeVisible()
+      await page.getByTestId('auction-tab-setup').click()
 
       // Real files, through the document service, and the ids it hands back. The
       // Arabic filename is the case that matters: S3 user metadata is ASCII-only,

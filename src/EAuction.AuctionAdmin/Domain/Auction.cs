@@ -18,6 +18,9 @@ public sealed class Auction
 
     public string? CancellationReason { get; private set; }
     public DateTimeOffset? CancelledAt { get; private set; }
+
+    /// <summary>Whether the cancellation returned the bidders' deposits and booklet fees. Null before this was recorded.</summary>
+    public bool? CancellationRefunded { get; private set; }
     public IReadOnlyList<PublicAttachment> Attachments => _attachments;
     private readonly List<Award> _awards = new();
     private readonly List<DomainEvent> _events = new();
@@ -97,13 +100,74 @@ public sealed class Auction
 
     private Auction() { }
 
-    public static Auction CreateDraft(Guid createdByUserId, string nameAr, string nameEn) =>
-        new()
+    /// <param name="minIncrementMinorUnits">
+    /// «زيادة المزايدة», asked for up front: the amount each click of a bidder's
+    /// raise adds. Optional — a draft without it is completed in the details, and
+    /// approval still refuses one that is not set (see Validate).
+    /// </param>
+    public static Auction CreateDraft(
+        Guid createdByUserId, string nameAr, string nameEn, long? minIncrementMinorUnits = null)
+    {
+        if (minIncrementMinorUnits is <= 0)
+            throw new AuctionValidationException(new[] { "زيادة المزايدة يجب أن تكون أكبر من صفر." });
+        return new()
         {
             CreatedByUserId = createdByUserId,
             NameAr = nameAr?.Trim() ?? "",
-            NameEn = nameEn?.Trim() ?? ""
+            NameEn = nameEn?.Trim() ?? "",
+            MinIncrementMinorUnits = minIncrementMinorUnits ?? 0,
         };
+    }
+
+    /// <summary>
+    /// «إعادة الطرح بسعر مخفّض»: the land of an auction that ended unsold, offered
+    /// again as a new draft at a lower opening price — never below the reserve, which
+    /// is exactly what the reserve is for. Everything else is carried over (plots,
+    /// documents, terms); the schedule is not, because the old one is in the past,
+    /// and the draft goes through review and approval like any other.
+    ///
+    /// A new auction rather than the old one reopened: the first run's bids, result
+    /// and record stay exactly as they happened.
+    /// </summary>
+    public Auction Reoffer(Guid byUserId, long newOpeningPriceMinorUnits)
+    {
+        if (Status != AuctionStatus.Unsold)
+            throw new InvalidAuctionTransitionException(Status, "re-offer");
+
+        var problems = new List<string>();
+        if (newOpeningPriceMinorUnits >= OpeningPriceMinorUnits)
+            problems.Add("سعر الافتتاح الجديد يجب أن يكون أقل من السابق.");
+        if (newOpeningPriceMinorUnits < ReservePriceMinorUnits)
+            problems.Add("لا يمكن خفض سعر الافتتاح إلى ما دون السعر الاحتياطي.");
+        if (problems.Count > 0) throw new AuctionValidationException(problems);
+
+        var next = new Auction
+        {
+            CreatedByUserId = byUserId,
+            NameAr = NameAr,
+            NameEn = NameEn,
+            Phase = Phase,
+            Channel = Channel,
+            BidderVisibility = BidderVisibility,
+            OpeningPriceMinorUnits = newOpeningPriceMinorUnits,
+            ReservePriceMinorUnits = ReservePriceMinorUnits,
+            MinIncrementMinorUnits = MinIncrementMinorUnits,
+            DepositMinorUnits = DepositMinorUnits,
+            BrokerageFeePercent = BrokerageFeePercent,
+            BookletPriceMinorUnits = BookletPriceMinorUnits,
+            QuietPeriodSeconds = QuietPeriodSeconds,
+            MaxExtensions = MaxExtensions,
+            BookletDocumentId = BookletDocumentId,
+            CoverImageDocumentId = CoverImageDocumentId,
+        };
+        foreach (var p in _plots)
+            next._plots.Add(new Plot(
+                next.Id, p.PlotNumber, p.AreaSqm, p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn,
+                p.StreetWidthMeters, p.FrontageMeters, p.LandUse));
+        foreach (var a in _attachments)
+            next._attachments.Add(new PublicAttachment(a.DocumentId, a.TitleAr));
+        return next;
+    }
 
     public void ClearEvents() => _events.Clear();
 
@@ -243,11 +307,12 @@ public sealed class Auction
         {
             problems.Add("السعر الاحتياطي يجب أن يكون أكبر من صفر.");
         }
-        else if (ReservePriceMinorUnits < OpeningPriceMinorUnits)
+        else if (ReservePriceMinorUnits > OpeningPriceMinorUnits)
         {
-            // A reserve below the opening price is met by the first valid bid,
-            // so it does nothing. Almost always a data entry slip.
-            problems.Add("السعر الاحتياطي لا يمكن أن يقل عن سعر الافتتاح.");
+            // السعر الاحتياطي is the floor the price may be lowered to — the lowest
+            // the municipality will re-offer the land at if it draws no bids at the
+            // opening price (see Reoffer). So it cannot sit above the opening price.
+            problems.Add("السعر الاحتياطي لا يمكن أن يزيد على سعر الافتتاح.");
         }
 
         if (BrokerageFeePercent is < 0 or > 100)
@@ -313,7 +378,7 @@ public sealed class Auction
                 .Select(p => new PublicPlot(
                     p.Id, p.PlotNumber, p.AreaSqm,
                     p.Latitude, p.Longitude, p.DescriptionAr, p.DescriptionEn,
-                    p.StreetWidthMeters, p.FrontageMeters))
+                    p.StreetWidthMeters, p.FrontageMeters, p.LandUse?.ToString()))
                 .ToArray(),
             Attachments = _attachments
                 .Select(a => new PublicDocument(a.DocumentId, a.TitleAr))
@@ -353,34 +418,52 @@ public sealed class Auction
     /// auction mid-bid is a decision about those bidders the first phase does not
     /// make. Before the start nobody has bid, so every deposit simply goes back.
     /// </summary>
-    public void Cancel(string reason, Guid cancelledByUserId, DateTimeOffset now)
+    /// <param name="refund">
+    /// Return the bidders' money — paid deposits and booklet fees through the gateway;
+    /// bank guarantees are released by hand from «التسويات والإفراغ». Without it,
+    /// every deposit is retained.
+    /// </param>
+    public void Cancel(string reason, Guid cancelledByUserId, DateTimeOffset now, bool refund = true)
     {
-        if (Status is not (AuctionStatus.Approved or AuctionStatus.Scheduled))
+        // While bidding is under way too: an administrator may stop a running auction
+        // outright — no award, every deposit back (see DepositsReleasable below).
+        if (Status is not (AuctionStatus.Approved or AuctionStatus.Scheduled or AuctionStatus.Live))
             throw new InvalidAuctionTransitionException(Status, "cancel");
 
         var problems = new List<string>();
         if (string.IsNullOrWhiteSpace(reason)) problems.Add("سبب الإلغاء مطلوب.");
         else if (reason.Trim().Length > 2000) problems.Add("سبب الإلغاء طويل جداً.");
-        if (StartsAt is { } starts && now >= starts - CancellationCutoff)
-            problems.Add("لا يمكن إلغاء المزاد عند بدئه أو بعده.");
+        // The cut-off guards the moment of opening, when the processor may already
+        // be announcing it; once it is live the cancellation is a decision about a
+        // running auction and the processor stops it.
+        if (Status != AuctionStatus.Live && StartsAt is { } starts && now >= starts - CancellationCutoff)
+            problems.Add("لا يمكن إلغاء المزاد في الدقائق السابقة لبدئه مباشرة.");
         if (problems.Count > 0) throw new AuctionValidationException(problems);
 
         Status = AuctionStatus.Cancelled;
         CancellationReason = reason.Trim();
         CancelledAt = now;
+        CancellationRefunded = refund;
 
         _events.Add(new AuctionCancelled
         {
             AuctionId = Id,
             Reason = CancellationReason,
             CancelledByUserId = cancelledByUserId,
-            At = now
+            At = now,
+            Refund = refund,
         });
 
-        // Nobody bid, so nobody forfeits: every deposit taken for this auction is
-        // refunded or its guarantee released, through the same path a finished
-        // auction's losers take.
-        _events.Add(new DepositsReleasable { AuctionId = Id, ForfeitForBidders = [] });
+        // The sale itself is withdrawn, so no bidder is singled out: either every
+        // bidder's money goes back — deposits and the booklet fees — or the
+        // administrator keeps all of it.
+        _events.Add(new DepositsReleasable
+        {
+            AuctionId = Id,
+            ForfeitForBidders = [],
+            ForfeitAll = !refund,
+            RefundBooklets = refund,
+        });
     }
 
     /// <summary>The relay confirms the auction reached auctions.upcoming.</summary>
@@ -496,6 +579,28 @@ public sealed class Auction
     /// closes one on a clock, because the room is still bidding until the
     /// auctioneer says otherwise.
     /// </summary>
+    /// <summary>
+    /// «إغلاق المزاد الآن»: ends a running auction early and keeps its result. The
+    /// processor closes it and offers the highest valid bid as the candidate; the
+    /// committee then decides, exactly as after a normal close. The status moves when
+    /// the processor's close arrives, not here, so there is one source for "closed".
+    /// </summary>
+    public void CloseEarly(Guid closedByUserId, string reason, DateTimeOffset now)
+    {
+        if (Status != AuctionStatus.Live)
+            throw new InvalidAuctionTransitionException(Status, "close early");
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new AuctionValidationException(new[] { "سبب الإغلاق مطلوب." });
+
+        _events.Add(new AuctionClosedByAdmin
+        {
+            AuctionId = Id,
+            ClosedByUserId = closedByUserId,
+            Reason = reason.Trim(),
+            At = now,
+        });
+    }
+
     public void CloseByClerk(Guid clerkUserId)
     {
         RequireClerkOnTheFloor(clerkUserId, "close");

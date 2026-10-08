@@ -413,7 +413,7 @@ export function SubscriptionSteps({
                         // The guarantee must outlast the auction, which the
                         // service checks; a month past the close is the usual ask.
                         expiresAt: new Date(
-                          new Date(auction.endsAt).getTime() + 30 * 864e5,
+                          new Date(auction.endsAt!).getTime() + 30 * 864e5,
                         ).toISOString(),
                       },
                     )

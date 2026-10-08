@@ -34,7 +34,7 @@
  * means the browser walk-through, which drives the dev server, does not exercise
  * this — `csp.test.ts` tests the policy and the injection directly instead.
  */
-import { ENDPOINTS } from './src/endpoints.ts'
+import { ENDPOINTS, MAP_TILES } from './src/endpoints.ts'
 
 export interface CspOptions {
   /**
@@ -82,7 +82,8 @@ export function buildPolicy(env: Record<string, string | undefined>): string {
     // data: for the inline SVG favicon, which exists so there is no request to 404.
     // The document service for cover images, which are Public documents served
     // from it — that one origin, not every API the page talks to.
-    `img-src ${["'self'", 'data:', originOf(env[ENDPOINTS.documentsApi.env] ?? ENDPOINTS.documentsApi.dev)]
+    // And the map tile server behind the plot maps — that one origin (MAP_TILES).
+    `img-src ${["'self'", 'data:', originOf(env[ENDPOINTS.documentsApi.env] ?? ENDPOINTS.documentsApi.dev), MAP_TILES.origin]
       .filter(Boolean)
       .join(' ')}`,
     "font-src 'self'",

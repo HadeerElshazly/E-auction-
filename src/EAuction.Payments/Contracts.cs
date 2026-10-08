@@ -29,6 +29,12 @@ public sealed record DepositsReleasablePayload
     public Guid AuctionId { get; init; }
     public Guid[]? ForfeitForBidders { get; init; }
     public Guid? AppliedToPurchaseForBidder { get; init; }
+
+    /// <summary>A cancellation that keeps every deposit.</summary>
+    public bool ForfeitAll { get; init; }
+
+    /// <summary>A cancellation that returns the booklet fees as well.</summary>
+    public bool RefundBooklets { get; init; }
 }
 
 public sealed record AwardConfirmedPayload

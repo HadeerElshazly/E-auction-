@@ -59,11 +59,11 @@ test('an auction runs from draft to award through the portals', async ({ browser
       auctionId = await page.locator('code.muted.small').first().innerText()
       expect(auctionId).toMatch(/^[0-9a-f-]{36}$/)
 
-      // Three plots, sold as one indivisible package.
+      // Three plots, sold as one indivisible package, each added in its own dialog
+      // on «تفاصيل القطعة» and then shown as a row on the page.
       //
       // Each iteration waits for the count in the heading to reach its own number
-      // before the next one types: the form clears itself once the POST returns, so
-      // typing straight into the next plot races that reset and loses the input.
+      // before the next one opens the dialog again.
       // Plot number, street width and frontage — the three a bidder values the
       // land on. The last plot leaves the two measurements empty, which is the
       // case that must not reach the domain as a zero.
@@ -72,18 +72,24 @@ test('an auction runs from draft to award through the portals', async ({ browser
         ['1006', '940', '25', '30'],
         ['1007', '756.25', '', ''],
       ]
+      await page.getByTestId('auction-tab-info').click()
       for (const [index, [number, area, streetWidth, frontage]] of plots.entries()) {
-        await page.getByLabel('رقم القطعة').fill(number)
-        await page.getByLabel('المساحة (م²)').fill(area)
-        await page.getByLabel('عرض الشارع (م)').fill(streetWidth)
-        await page.getByLabel('الواجهة (م)').fill(frontage)
-        const add = page.getByRole('button', { name: '+ إضافة قطعة' })
+        await page.getByRole('button', { name: 'إضافة قطعة' }).click()
+        const dialog = page.getByRole('dialog', { name: 'إضافة قطعة' })
+        await dialog.getByLabel('رقم القطعة').fill(number)
+        await dialog.getByLabel('المساحة (م²)').fill(area)
+        await dialog.getByLabel('عرض الشارع (م)').fill(streetWidth)
+        await dialog.getByLabel('الواجهة (م)').fill(frontage)
+        const add = dialog.getByRole('button', { name: 'إضافة القطعة' })
         await expect(add).toBeEnabled()
         await add.click()
         await expect(
           page.getByRole('heading', { level: 3, name: new RegExp(`قطع الأرض \\(${index + 1}\\)`) }),
         ).toBeVisible()
       }
+      // A row each, with its «تفاصيل».
+      await expect(page.getByTestId('plots-table').getByRole('button', { name: 'تفاصيل' })).toHaveCount(3)
+      await page.getByTestId('auction-tab-setup').click()
 
       // Real files, through the document service, and the ids it hands back. The
       // Arabic filename is the case that matters: S3 user metadata is ASCII-only,

@@ -415,7 +415,7 @@ public sealed class EventConsumer(
                 if (payload is null) return;
 
                 var name = await NameOf(db, payload.AuctionId, ct);
-                var (title, body) = Messages.AuctionCancelled(name, payload.Reason);
+                var (title, body) = Messages.AuctionCancelled(name, payload.Reason, payload.Refund);
 
                 await RaiseForAudienceAsync(
                     db, payload.AuctionId, NotificationKind.AuctionCancelled,
@@ -568,8 +568,10 @@ public sealed class EventConsumer(
         foreach (var bidder in audience)
         {
             var (title, body) =
-                forfeited.Contains(bidder) ? Messages.DepositForfeited(name)
+                payload.ForfeitAll ? Messages.DepositRetainedOnCancellation(name)
+                : forfeited.Contains(bidder) ? Messages.DepositForfeited(name)
                 : payload.AppliedToPurchaseForBidder == bidder ? Messages.DepositApplied(name)
+                : payload.RefundBooklets ? Messages.DepositReturnedWithBooklet(name)
                 : Messages.DepositReturned(name);
 
             await RaiseAsync(

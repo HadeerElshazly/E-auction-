@@ -97,6 +97,8 @@ const paths: Record<string, string> = {
   plus: 'M12 5v14M5 12h14',
   live: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14',
   list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  lock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4',
+  image: 'M3 4h18v16H3zM3 16l5-5 4 4 3-3 6 6M15 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2',
 }
 
 export function Icon({ name, size = 20 }: { name: string; size?: number }) {

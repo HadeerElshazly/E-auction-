@@ -40,6 +40,9 @@ public static class TopicMap
         // cannot place, so forgetting this line would stall every auction event
         // behind the first audited action.
         "staff-action" => StaffActions,
+
+        // Platform settings, which are about no auction at all.
+        "platform-settings" => Topics.Settings,
         _ => null
     };
 }

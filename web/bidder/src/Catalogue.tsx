@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CardClock, Icon, PageHead, Stats, api, config, sar, stageLabels } from '@eauction/shared'
+import { Icon, PageHead, Stats, api, config, riyals, sar, stageLabels, useTick } from '@eauction/shared'
 import type { AuctionSummary } from './types'
 
 interface Props {
@@ -147,12 +147,38 @@ export function Catalogue({ auctions, signedIn, onOpen }: Props) {
   )
 }
 
+/** HH : MM : SS to a moment, as the card counts it — hours run past 24 for a far one. */
+function hms(target: string | null, now: number): string | undefined {
+  // Hidden from a visitor by «إعدادات العرض للزوار»: no clock rather than a wrong one.
+  if (target == null) return undefined
+  let n = Math.max(0, Math.floor((new Date(target).getTime() - now) / 1000))
+  const h = Math.floor(n / 3600)
+  n %= 3600
+  return [h, Math.floor(n / 60), n % 60].map((x) => String(x).padStart(2, '0')).join(' : ')
+}
+
+/** What the card's corner says about time, by stage. */
+function timeLine(a: AuctionSummary, now: number): { caption: string; clock?: string } {
+  if (a.status === 'Live')
+    return a.channel === 'Onsite'
+      ? { caption: 'جارٍ في القاعة — يُغلق بقرار مدير المزاد' }
+      : { caption: 'ينتهي خلال', clock: hms(a.endsAt, now) }
+  if (a.status === 'Scheduled' || a.status === 'Approved') return { caption: 'يفتح خلال', clock: hms(a.startsAt, now) }
+  if (a.status === 'PendingAward' || a.status === 'PendingEligibilityReview') return { caption: 'بانتظار قرار اللجنة' }
+  if (a.status === 'Awarded' || a.status === 'Settled') return { caption: 'ترسية معتمدة' }
+  if (a.status === 'Cancelled') return { caption: 'أُلغي المزاد' }
+  return { caption: 'انتهى المزاد' }
+}
+
 function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id: string) => void }) {
   const s = statusAr[a.status] ?? { ar: a.status, tone: 'done' }
   const live = a.status === 'Live'
   const bidding = live && a.priceMinorUnits != null
+  const ticking = live || a.status === 'Scheduled' || a.status === 'Approved'
+  const now = useTick(ticking)
+  const t = timeLine(a, now)
   return (
-    <article className="lot-card auction-card static">
+    <article className="lot-card auction-card static" data-testid="lot-card">
       <button className="lot-visual cover" onClick={() => onOpen(a.id)} aria-label={`تفاصيل ${a.nameAr}`}>
         {a.coverImageDocumentId && (
           <img
@@ -167,10 +193,9 @@ function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id:
           />
         )}
         <span className={`pill ${s.tone} lot-badge`}>{s.ar}</span>
-        <span className="lot-channel">{a.channel === 'Onsite' ? '📍 حضوري' : '🌐 إلكتروني'}</span>
-        {/* The clock, over the cover — only where there is a clock to show. A hall
-            auction has none: the auctioneer brings the hammer down (§29). */}
-        <CardClock status={a.status} channel={a.channel} startsAt={a.startsAt} endsAt={a.endsAt} />
+        <span className="lot-number">
+          {a.plotCount} قطعة · {a.channel === 'Onsite' ? 'حضوري' : 'إلكتروني'}
+        </span>
       </button>
 
       <div className="lot-body">
@@ -186,22 +211,27 @@ function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id:
             <span className="num">{a.totalAreaSqm}</span> م²
           </span>
           <span>
-            <Icon name="grid" size={15} />
-            {a.plotCount} قطعة
-          </span>
-          <span>
             <Icon name="shield" size={15} />
             تأمين <span className="num">{sar(a.depositMinorUnits, 'ar')}</span>
           </span>
         </div>
-        <div className="price-caption">{bidding ? 'أعلى مزايدة' : 'سعر الافتتاح'}</div>
-        <div className="lot-price num">
-          {sar(bidding ? a.priceMinorUnits! : a.openingPriceMinorUnits, 'ar')}
-        </div>
+        <div className="price-caption">{bidding ? 'أعلى مزايدة' : 'سعر البداية'}</div>
+        {(bidding ? a.priceMinorUnits : a.openingPriceMinorUnits) == null ? (
+          // Hidden from a visitor by «إعدادات العرض للزوار».
+          <div className="lot-price locked-value">
+            <Icon name="lock" size={16} /> يظهر بعد تسجيل الدخول
+          </div>
+        ) : (
+          <div className="lot-price">
+            <small>ر.س</small>
+            <span className="num">{riyals(bidding ? a.priceMinorUnits! : a.openingPriceMinorUnits, 'ar')}</span>
+          </div>
+        )}
         <div className="card-bottom">
-          <span className="muted small">
-            الكراسة {a.bookletPriceMinorUnits === 0 ? 'مجانية' : sar(a.bookletPriceMinorUnits, 'ar')}
-          </span>
+          <div className="time-text">
+            {t.caption}
+            {t.clock && <b className="num">{t.clock}</b>}
+          </div>
           <button className="small" onClick={() => onOpen(a.id)}>
             تفاصيل المزاد
           </button>

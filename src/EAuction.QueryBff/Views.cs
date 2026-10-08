@@ -1,4 +1,5 @@
 using System.Text.Json;
+using EAuction.Core;
 
 namespace EAuction.QueryBff;
 
@@ -12,21 +13,39 @@ namespace EAuction.QueryBff;
 // it by reflection.
 // ---------------------------------------------------------------------------
 
+// A figure is null when it is hidden from this caller — a visitor, under
+// «إعدادات العرض للزوار» — and Hidden names the groups that were, so the page can
+// say what signing in shows rather than show a blank.
 public sealed record AuctionSummary(
     Guid Id, string Status, string NameAr, string NameEn, string Channel,
     /// <summary>"Masked" or "Named". A bidder is entitled to know before registering.</summary>
     string BidderVisibility,
-    DateTimeOffset StartsAt, DateTimeOffset EndsAt,
-    long OpeningPriceMinorUnits, long? PriceMinorUnits, long MinimumNextBidMinorUnits,
-    long DepositMinorUnits, long BookletPriceMinorUnits,
-    int PlotCount, decimal TotalAreaSqm, Guid? CoverImageDocumentId)
+    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
+    long? OpeningPriceMinorUnits, long? PriceMinorUnits, long? MinimumNextBidMinorUnits,
+    long DepositMinorUnits, long? BookletPriceMinorUnits,
+    int PlotCount, decimal TotalAreaSqm, Guid? CoverImageDocumentId,
+    IReadOnlyList<string> Hidden)
 {
-    public static AuctionSummary From(AuctionEntry a) => new(
-        a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
-        a.StartsAt, a.EndsAt,
-        a.OpeningPriceMinorUnits, a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
-        a.DepositMinorUnits, a.BookletPriceMinorUnits,
-        a.Plots.Count, a.TotalAreaSqm, a.CoverImageDocumentId);
+    /// <param name="visitor">The visitor's policy, or null for a signed-in caller.</param>
+    public static AuctionSummary From(AuctionEntry a, PublicVisibilityPolicy? visitor = null)
+    {
+        bool Shows(string key) => visitor?.Shows(key) ?? true;
+        return new(
+            a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
+            Shows(PublicFields.Schedule) ? a.StartsAt : null,
+            Shows(PublicFields.Schedule) ? a.EndsAt : null,
+            Shows(PublicFields.OpeningPrice) ? a.OpeningPriceMinorUnits : null,
+            Shows(PublicFields.LivePrice) ? a.PriceMinorUnits : null,
+            Shows(PublicFields.LivePrice) ? a.MinimumNextBidMinorUnits : null,
+            a.DepositMinorUnits,
+            Booklet(a, Shows(PublicFields.Fees)),
+            a.Plots.Count, a.TotalAreaSqm, a.CoverImageDocumentId,
+            visitor?.Hidden() ?? []);
+    }
+
+    /// <summary>A free booklet is always said to be free; a price, only with the fees.</summary>
+    internal static long? Booklet(AuctionEntry a, bool fees) =>
+        a.BookletPriceMinorUnits == 0 || fees ? a.BookletPriceMinorUnits : null;
 }
 
 public sealed record AuctionDetail(
@@ -37,24 +56,38 @@ public sealed record AuctionDetail(
     /// administrator's choice is not one they should discover after the fact.
     /// </summary>
     string BidderVisibility,
-    DateTimeOffset StartsAt, DateTimeOffset EndsAt, DateTimeOffset? EffectiveEndsAt,
-    long OpeningPriceMinorUnits, long MinIncrementMinorUnits,
-    long? PriceMinorUnits, long MinimumNextBidMinorUnits,
-    long DepositMinorUnits, long BookletPriceMinorUnits,
-    int? QuietPeriodSeconds, int MaxExtensions, int ExtensionsUsed,
+    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, DateTimeOffset? EffectiveEndsAt,
+    long? OpeningPriceMinorUnits, long? MinIncrementMinorUnits,
+    long? PriceMinorUnits, long? MinimumNextBidMinorUnits,
+    long DepositMinorUnits, long? BookletPriceMinorUnits,
+    int? QuietPeriodSeconds, int? MaxExtensions, int? ExtensionsUsed,
     decimal TotalAreaSqm, IReadOnlyList<PlotEntry> Plots,
     Guid? CoverImageDocumentId, IReadOnlyList<PublicDocumentEntry> Attachments,
-    decimal BrokerageFeePercent, string? CancellationReason)
+    decimal? BrokerageFeePercent, string? CancellationReason,
+    IReadOnlyList<string> Hidden,
+    /// <summary>On a cancelled auction, whether the bidders' money goes back.</summary>
+    bool? CancellationRefunds = null)
 {
-    public static AuctionDetail From(AuctionEntry a) => new(
-        a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
-        a.StartsAt, a.EndsAt, a.EffectiveEndsAt,
-        a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
-        a.PriceMinorUnits, a.MinimumNextBidMinorUnits,
-        a.DepositMinorUnits, a.BookletPriceMinorUnits,
-        a.QuietPeriodSeconds, a.MaxExtensions, a.ExtensionsUsed,
-        a.TotalAreaSqm, a.Plots, a.CoverImageDocumentId, a.Attachments,
-        a.BrokerageFeePercent, a.CancellationReason);
+    /// <param name="visitor">The visitor's policy, or null for a signed-in caller.</param>
+    public static AuctionDetail From(AuctionEntry a, PublicVisibilityPolicy? visitor = null)
+    {
+        bool Shows(string key) => visitor?.Shows(key) ?? true;
+        var schedule = Shows(PublicFields.Schedule);
+        var live = Shows(PublicFields.LivePrice);
+        var terms = Shows(PublicFields.ExtensionTerms);
+        return new(
+            a.AuctionId, a.Status, a.NameAr, a.NameEn, a.Channel, a.BidderVisibility,
+            schedule ? a.StartsAt : null, schedule ? a.EndsAt : null, schedule ? a.EffectiveEndsAt : null,
+            Shows(PublicFields.OpeningPrice) ? a.OpeningPriceMinorUnits : null,
+            Shows(PublicFields.OpeningPrice) ? a.MinIncrementMinorUnits : null,
+            live ? a.PriceMinorUnits : null, live ? a.MinimumNextBidMinorUnits : null,
+            a.DepositMinorUnits, AuctionSummary.Booklet(a, Shows(PublicFields.Fees)),
+            terms ? a.QuietPeriodSeconds : null, terms ? a.MaxExtensions : null, live ? a.ExtensionsUsed : null,
+            a.TotalAreaSqm, a.Plots, a.CoverImageDocumentId,
+            Shows(PublicFields.Attachments) ? a.Attachments : [],
+            Shows(PublicFields.Fees) ? a.BrokerageFeePercent : null, a.CancellationReason,
+            visitor?.Hidden() ?? [], a.CancellationRefunds);
+    }
 }
 
 public sealed record LivePrice(

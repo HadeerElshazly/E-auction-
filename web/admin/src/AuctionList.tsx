@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CardClock, Icon, PageHead, Stats, api, config, sar, when, type Session } from '@eauction/shared'
+import { CardClock, Icon, PageHead, Stats, api, config, parseRiyals, sar, when, type Session } from '@eauction/shared'
 import type { AuctionListItem } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
@@ -10,7 +10,8 @@ interface Props {
   canCreate: boolean
   busy: boolean
   onOpen: (id: string) => void
-  onCreate: (nameAr: string, nameEn: string) => void
+  /** The bid step in halalas, when given up front; else set later in the details. */
+  onCreate: (nameAr: string, nameEn: string, minIncrementMinorUnits: number | null) => void
 }
 
 /**
@@ -42,7 +43,10 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
   const leaders = useLeaders(session)
   const [nameAr, setNameAr] = useState('')
   const [nameEn, setNameEn] = useState('')
+  const [increment, setIncrement] = useState('')
   const [creating, setCreating] = useState(false)
+  const incrementMinor = increment.trim() === '' ? null : parseRiyals(increment)
+  const incrementInvalid = increment.trim() !== '' && (incrementMinor === null || incrementMinor <= 0)
 
   // Filtered and searched on the server, like the catalogue: every client gets the
   // same list and the chips' counts are real. Re-asked whenever the app reloads its
@@ -69,6 +73,23 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
   }, [client, filter, debounced, auctions])
 
   const visible = page?.items ?? auctions
+
+  // A table by default, as the operators' screen; the cards, with their covers, on request.
+  const [layout, setLayout] = useState<'table' | 'cards'>(() => {
+    try {
+      return localStorage.getItem('admin.list') === 'cards' ? 'cards' : 'table'
+    } catch {
+      return 'table'
+    }
+  })
+  const chooseLayout = (l: 'table' | 'cards') => {
+    setLayout(l)
+    try {
+      localStorage.setItem('admin.list', l)
+    } catch {
+      // Not remembered; still switches.
+    }
+  }
 
   return (
     <>
@@ -119,7 +140,7 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
                 scheduled before it has a plot in it. A progress bar that never
                 reached step two would be decoration claiming to be a flow. */}
             <p className="muted small" style={{ margin: '0 0 20px' }}>
-              يكفي الاسم الآن. القطع والأسعار والجدولة في شاشة المزاد بعد الحفظ.
+              الاسم وزيادة المزايدة الآن. القطع والأسعار والجدولة في شاشة المزاد بعد الحفظ.
             </p>
 
             <div className="grid">
@@ -142,17 +163,34 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
                   aria-label="Auction name in English"
                 />
               </label>
+              <label>
+                <span>زيادة المزايدة (ر.س)</span>
+                <input
+                  className="ltr num"
+                  inputMode="decimal"
+                  value={increment}
+                  onChange={(e) => setIncrement(e.target.value)}
+                  placeholder="5,000"
+                  aria-label="زيادة المزايدة بالريال"
+                  aria-invalid={incrementInvalid}
+                />
+                <small className="muted">
+                  المبلغ الذي تضيفه كل ضغطة زيادة يقدّمها المزايد، وهو أقل زيادة تُقبل على السعر الحالي.
+                </small>
+                {incrementInvalid && <small style={{ color: 'var(--danger)' }}>أدخل مبلغاً أكبر من صفر.</small>}
+              </label>
             </div>
 
             <div className="row end" style={{ marginTop: 8 }}>
               <button onClick={() => setCreating(false)}>إلغاء</button>
               <button
                 className="primary"
-                disabled={busy || nameAr.trim() === '' || nameEn.trim() === ''}
+                disabled={busy || nameAr.trim() === '' || nameEn.trim() === '' || incrementInvalid}
                 onClick={() => {
-                  onCreate(nameAr.trim(), nameEn.trim())
+                  onCreate(nameAr.trim(), nameEn.trim(), incrementMinor)
                   setNameAr('')
                   setNameEn('')
+                  setIncrement('')
                   setCreating(false)
                 }}
               >
@@ -178,6 +216,14 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
               </button>
             ))}
           </div>
+          <div className="tabs" role="group" aria-label="طريقة العرض">
+            <button className={`tab${layout === 'table' ? ' active' : ''}`} onClick={() => chooseLayout('table')}>
+              <Icon name="list" size={16} /> جدول
+            </button>
+            <button className={`tab${layout === 'cards' ? ' active' : ''}`} onClick={() => chooseLayout('cards')}>
+              <Icon name="grid" size={16} /> بطاقات
+            </button>
+          </div>
           <label className="search">
             <Icon name="search" size={18} />
             <input
@@ -200,18 +246,22 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
           <p className="muted" style={{ margin: 0 }}>لا توجد مزادات مطابقة للبحث أو التصفية.</p>
         </div>
       ) : (
-        <div className="lot-grid">
-          {visible.map((a) => (
-            <AuctionCard
-              key={a.id}
-              session={session}
-              auction={a}
-              live={live[a.id]}
-              leaderId={leaders[a.id]}
-              onOpen={onOpen}
-            />
-          ))}
-        </div>
+        layout === 'table' ? (
+          <AuctionTable session={session} auctions={visible} live={live} leaders={leaders} onOpen={onOpen} />
+        ) : (
+          <div className="lot-grid">
+            {visible.map((a) => (
+              <AuctionCard
+                key={a.id}
+                session={session}
+                auction={a}
+                live={live[a.id]}
+                leaderId={leaders[a.id]}
+                onOpen={onOpen}
+              />
+            ))}
+          </div>
+        )
       )}
     </>
   )
@@ -222,6 +272,103 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
  * public source the bidders' screens and the live monitor read, so staff never see
  * the planned end time while bidders see an extended one.
  */
+/**
+ * إدارة المزادات as a table — the prototype's operators' view: one row per auction,
+ * the figure that matters for its stage, and the way into it.
+ */
+function AuctionTable({
+  session,
+  auctions,
+  live,
+  leaders,
+  onOpen,
+}: {
+  session: Session
+  auctions: AuctionListItem[]
+  live: Record<string, LiveFigures>
+  leaders: Record<string, string>
+  onOpen: (id: string) => void
+}) {
+  return (
+    <div className="card table-card">
+      <div className="table-scroll">
+        <table data-testid="auction-table">
+          <thead>
+            <tr>
+              <th>المزاد</th>
+              <th>القطع والمساحة</th>
+              <th>أعلى عرض</th>
+              <th>الحالة</th>
+              <th>البدء</th>
+              <th>إدارة</th>
+            </tr>
+          </thead>
+          <tbody>
+            {auctions.map((a) => {
+              const l = label(a.status)
+              const figures = live[a.id]
+              const bidding = a.status === 'Live' && figures?.priceMinorUnits != null
+              const winnerId = a.status === 'Live' ? leaders[a.id] : a.winnerBidderId ?? leaders[a.id]
+              return (
+                <tr
+                  key={a.id}
+                  data-testid="auction-card"
+                  className="row-link"
+                  onClick={(e) => {
+                    // The whole row opens the auction; its own buttons and links do their own thing.
+                    if (!(e.target as HTMLElement).closest('button, a')) onOpen(a.id)
+                  }}
+                >
+                  <td>
+                    <button className="link strong" onClick={() => onOpen(a.id)}>
+                      {a.nameAr}
+                    </button>
+                    <small className="ltr">{a.nameEn}</small>
+                  </td>
+                  <td>
+                    {a.plotCount} قطعة
+                    <small><span className="num">{a.totalAreaSqm}</span> م²</small>
+                  </td>
+                  <td>
+                    <span className="num strong">
+                      {sar(bidding ? figures!.priceMinorUnits : a.openingPriceMinorUnits, 'ar')}
+                    </span>
+                    <small>
+                      {bidding ? 'السعر الحالي' : 'سعر الافتتاح'}
+                      {winnerId && a.status !== 'Cancelled' && (
+                        <>
+                          {' · '}
+                          <BidderName session={session} id={winnerId} />
+                        </>
+                      )}
+                    </small>
+                  </td>
+                  <td>
+                    <span className={`pill ${l.tone}`}>{l.ar}</span>
+                  </td>
+                  <td className="small">{a.startsAt ? when(a.startsAt) : <span className="muted">لم يُجدول</span>}</td>
+                  <td>
+                    <div className="actions">
+                      <button className="small" onClick={() => onOpen(a.id)}>
+                        {['Draft', 'Rejected'].includes(a.status) ? 'تعديل' : 'فتح'}
+                      </button>
+                      {a.status === 'Live' && (
+                        <a className="button small" href="#monitor">
+                          المتابعة
+                        </a>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 interface LiveFigures {
   priceMinorUnits: number | null
   effectiveEndsAt: string

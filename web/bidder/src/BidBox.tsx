@@ -24,7 +24,7 @@ interface Props {
   onBid: () => void
 }
 
-interface Submitted {
+export interface Submitted {
   clientBidId: string
   amount: number
   offset: number
@@ -46,7 +46,7 @@ function storageKey(auctionId: string, bidderId: string): string {
   return `eauction:bids:${auctionId}:${bidderId}`
 }
 
-function loadSubmitted(auctionId: string, bidderId: string): Submitted[] {
+export function loadSubmitted(auctionId: string, bidderId: string): Submitted[] {
   try {
     const raw = window.localStorage.getItem(storageKey(auctionId, bidderId))
     if (!raw) return []
@@ -111,7 +111,8 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
   const sender = useBidSender(auction.id, session, participant)
   const { busy, problem, setProblem, catcher } = sender
 
-  const minimum = price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits
+  // Signed in, so «إعدادات العرض للزوار» hid nothing: the figures are always sent.
+  const minimum = (price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits)!
   const [text, setText] = useState('')
   const [submitted, setSubmitted] = useState<Submitted[]>(() =>
     loadSubmitted(auction.id, session.subject),
@@ -134,7 +135,7 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
 
   const amount = parseRiyals(text)
   const tooLow = amount !== null && amount < minimum
-  const increment = auction.minIncrementMinorUnits
+  const increment = auction.minIncrementMinorUnits!
   const current = price?.priceMinorUnits ?? null
 
   // One tap per raise, each showing the exact amount it sends. Built on the price

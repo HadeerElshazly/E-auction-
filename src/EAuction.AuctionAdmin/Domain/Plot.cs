@@ -36,6 +36,12 @@ public sealed class Plot
 
     public decimal? FrontageMeters { get; private set; }
 
+    /// <summary>
+    /// الاستخدام — what the land is zoned for. A bidder weighs a residential plot and
+    /// a commercial one differently, and the plan says which; null until it is set.
+    /// </summary>
+    public LandUse? LandUse { get; private set; }
+
     public string? Latitude { get; private set; }
     public string? Longitude { get; private set; }
     public string? DescriptionAr { get; private set; }
@@ -46,7 +52,8 @@ public sealed class Plot
     public Plot(Guid auctionId, string plotNumber, decimal areaSqm,
         string? latitude = null, string? longitude = null,
         string? descriptionAr = null, string? descriptionEn = null,
-        decimal? streetWidthMeters = null, decimal? frontageMeters = null)
+        decimal? streetWidthMeters = null, decimal? frontageMeters = null,
+        LandUse? landUse = null)
     {
         if (string.IsNullOrWhiteSpace(plotNumber))
             throw new ArgumentException("رقم القطعة مطلوب.", nameof(plotNumber));
@@ -62,9 +69,21 @@ public sealed class Plot
         AreaSqm = areaSqm;
         StreetWidthMeters = streetWidthMeters;
         FrontageMeters = frontageMeters;
+        LandUse = landUse;
         Latitude = latitude;
         Longitude = longitude;
         DescriptionAr = descriptionAr;
         DescriptionEn = descriptionEn;
     }
+}
+
+/// <summary>الاستخدام: the uses an approved plan zones a plot for.</summary>
+public enum LandUse
+{
+    Residential,
+    Commercial,
+    ResidentialCommercial,
+    Industrial,
+    Agricultural,
+    Other,
 }

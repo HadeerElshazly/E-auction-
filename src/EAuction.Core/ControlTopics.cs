@@ -79,6 +79,11 @@ public static class ControlTopics
             + "erase the history that is the entire point.",
             Partitions: 1),
 
+        new(Topics.Settings, TopicShape.CompactedState,
+            "The current value of each platform setting. The query BFF replays it on "
+            + "start; if the setting aged out, visitors would fall back to the defaults "
+            + "whatever an administrator had chosen."),
+
         new(Topics.Inquiries, TopicShape.EventLog,
             "Replies to bidders' questions and the clarifications published from them. "
             + "The query BFF replays it from the start to rebuild each auction's public "

@@ -76,9 +76,11 @@ public static class Messages
         ("رُفض الضمان البنكي",
          $"رُفض الضمان البنكي المقدَّم لمزاد «{auction}». السبب: {reason}. يمكنك رفع ضمان آخر من صفحة المزاد.");
 
-    public static (string Title, string Body) AuctionCancelled(string auction, string reason) =>
+    public static (string Title, string Body) AuctionCancelled(string auction, string reason, bool refund = true) =>
         ("أُلغي المزاد",
-         $"أُلغي مزاد «{auction}» قبل بدئه. السبب: {reason}. يُرد التأمين المدفوع أو يُحرَّر الضمان البنكي.");
+         refund
+             ? $"أُلغي مزاد «{auction}». السبب: {reason}. لا ترسية على هذا المزاد، ويُرد التأمين المدفوع ورسم كراسة الشروط، أو يُحرَّر الضمان البنكي."
+             : $"أُلغي مزاد «{auction}». السبب: {reason}. لا ترسية على هذا المزاد، ولا يُرد التأمين ولا رسم كراسة الشروط.");
 
     public static (string Title, string Body) InquiryAnswered(string auction) =>
         ("وصلك رد على استفسارك",
@@ -125,6 +127,14 @@ public static class Messages
     public static (string Title, string Body) DepositReturned(string auction) =>
         ("أُعيد مبلغ التأمين",
          $"أُعيد مبلغ التأمين الخاص بـ«{auction}» إلى وسيلة الدفع التي سدّدت منها.");
+
+    public static (string Title, string Body) DepositReturnedWithBooklet(string auction) =>
+        ("أُعيد مبلغ التأمين والكراسة",
+         $"أُلغي مزاد «{auction}»، وأُعيد مبلغ التأمين ورسم كراسة الشروط إلى وسيلة الدفع التي سدّدت منها. إن كان تأمينك ضماناً بنكياً فيُحرَّر من الأمانة.");
+
+    public static (string Title, string Body) DepositRetainedOnCancellation(string auction) =>
+        ("لم يُرد مبلغ التأمين",
+         $"أُلغي مزاد «{auction}» بقرار من الأمانة دون رد مبلغ التأمين ورسم الكراسة.");
 
     public static (string Title, string Body) DepositForfeited(string auction) =>
         ("حُجز مبلغ التأمين",

@@ -34,7 +34,8 @@ export function BiddingRoom({ auction, session, onBack, onRefresh }: Props) {
   const status = price?.status ?? auction.status
   const live = status === 'Live'
   const scheduled = status === 'Scheduled'
-  const endsAt = price?.effectiveEndsAt ?? auction.effectiveEndsAt ?? auction.endsAt
+  // Signed in, so «إعدادات العرض للزوار» hid nothing: the figures are always sent.
+  const endsAt = (price?.effectiveEndsAt ?? auction.effectiveEndsAt ?? auction.endsAt)!
   const leftMs = new Date(endsAt).getTime() - Date.now()
   const closing = live && leftMs > 0 && leftMs <= 120_000
   const bidding = price?.priceMinorUnits != null
@@ -77,7 +78,7 @@ export function BiddingRoom({ auction, session, onBack, onRefresh }: Props) {
           </span>
           <span className={`room-figure${live ? ' num' : ''}`}>
             {scheduled
-              ? untilText(auction.startsAt)
+              ? untilText(auction.startsAt!)
               : live
                 ? untilText(endsAt)
                 : 'أُغلق المزاد'}
