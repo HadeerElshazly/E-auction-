@@ -12,8 +12,27 @@ cd "$(dirname "$0")/../.."          # repository root
 VM_DIR="deploy/vm"
 BASE="deploy/compose/docker-compose.yml"
 OVERRIDE="$VM_DIR/docker-compose.vm.yml"
-ENV_FILE="$VM_DIR/.env"
 HOST="auctions.westus2.cloudapp.azure.com"
+
+# The project name is pinned rather than taken from the directory.
+#
+# Compose derives it from the working directory by default, and the named
+# volumes are prefixed with it: postgres-data becomes <project>_postgres-data.
+# A GitHub runner's workspace path is not something this repository controls, so
+# a path that changed would silently produce a second set of volumes — an empty
+# database, an empty object store, and the old data still on disk under a name
+# nothing refers to. Pinning it means the data follows the stack, not the path.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-eauction}"
+
+# .env lives outside the checkout, for the same reason.
+#
+# A self-hosted runner cleans its workspace between runs, so a .env inside it
+# would be deleted and regenerated on every deploy — and regenerating the
+# document grant key invalidates every grant already issued, while regenerating
+# the bidder master key makes every signing secret a browser holds wrong. Kept
+# here it survives the checkout, the runner, and the repository being re-cloned.
+ENV_FILE="${EAUCTION_ENV_FILE:-$HOME/.config/eauction/.env}"
+mkdir -p "$(dirname "$ENV_FILE")" && chmod 700 "$(dirname "$ENV_FILE")"
 
 SEED=1
 REBUILD=""
@@ -61,7 +80,7 @@ DOCUMENT_GRANT_KEY=$(hex 32)
 BID_RECEIPT_KEY=$(hex 32)
 ENV
   chmod 600 "$ENV_FILE"
-  echo "  done — read the Keycloak password with: grep KEYCLOAK_ADMIN_PASSWORD $ENV_FILE"
+  echo "  done — $ENV_FILE (kept outside the checkout so a runner cannot wipe it)"
 fi
 
 dc() { docker compose --env-file "$ENV_FILE" -f "$BASE" -f "$OVERRIDE" "$@"; }
@@ -111,8 +130,12 @@ if [ "$SEED" = 1 ]; then
   # Publishes events rather than calling the API: auction-admin refuses a start
   # date in the past, and seeded history is in the past by definition.
   docker build -q -f deploy/compose/Dockerfile.seed -t eauction/seed:local . >/dev/null
-  NET="$(dc ps --format json bid-catcher 2>/dev/null | head -1 | python3 -c 'import sys,json;d=sys.stdin.read().strip();print(json.loads(d)["Networks"] if d else "")' 2>/dev/null || true)"
-  NET="${NET:-compose_default}"
+  # Knowable rather than guessed, now the project name is pinned.
+  NET="${COMPOSE_PROJECT_NAME}_default"
+  docker network inspect "$NET" >/dev/null 2>&1 || {
+    echo "  network $NET not found; asking compose"
+    NET="$(docker network ls --format '{{.Name}}' | grep -E "_default$" | head -1)"
+  }
   docker run --rm --network "$NET" eauction/seed:local \
     dotnet eauction-seed.dll --kafka kafka:9092 || echo "  seeding failed; the stack is still up"
 fi
@@ -133,5 +156,8 @@ cat <<DONE
   your own address range: this stack runs a payment simulator that settles
   every charge without taking a riyal.
 
-  Accounts are in the realm. The Keycloak admin password is in $ENV_FILE.
+  Accounts are in the realm. The Keycloak admin password:
+    grep KEYCLOAK_ADMIN_PASSWORD $ENV_FILE
+
+  compose project: $COMPOSE_PROJECT_NAME   (volumes are ${COMPOSE_PROJECT_NAME}_postgres-data, ${COMPOSE_PROJECT_NAME}_minio-data)
 DONE

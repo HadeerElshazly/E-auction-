@@ -1,19 +1,29 @@
-# Deploy the demo to the Azure VM over SSH.
+# Deploy the demo to the Azure VM, from a runner on that VM.
 #
-# Manual only, and from a runner rather than from a developer's machine, because
-# the one credential involved is a GitHub secret and never leaves it.
+# A self-hosted runner rather than SSH from a GitHub-hosted one, and the reason
+# is the firewall. A hosted runner would need inbound port 22 open to GitHub's
+# address ranges, which are large and change often — close enough to opening SSH
+# broadly, on a host that runs a payment simulator settling every charge for
+# free. The runner here polls GitHub outbound instead:
 #
-# The first job does nothing but try to reach port 22. The cloud session that
-# wrote this cannot — outbound 22 is blocked there, confirmed against a second
-# host — so whether a GitHub runner can is still an open question, and twenty
-# seconds answers it before a twenty-minute build does not.
+#   * no inbound port open at all
+#   * no SSH key in GitHub secrets — that credential stops existing
+#   * no rsync: actions/checkout puts the commit on the VM directly
+#
+# Setting the runner up, once, on the VM:
+#
+#   Settings -> Actions -> Runners -> New self-hosted runner  (Linux x64)
+#   follow the curl + ./config.sh it gives you, then:
+#     sudo ./svc.sh install && sudo ./svc.sh start
+#     sudo usermod -aG docker "$USER"      # the runner must reach the socket
+#   and restart the service so the group applies.
 name: vm-deploy
 
 on:
   workflow_dispatch:
     inputs:
-      reachability_only:
-        description: "Only test SSH, deploy nothing"
+      preflight_only:
+        description: "Only check the VM, deploy nothing"
         type: boolean
         default: false
       bootstrap:
@@ -30,151 +40,88 @@ on:
         default: true
 
 concurrency:
-  # One deploy at a time: two `docker compose up` runs against one host fight
+  # One deploy at a time. Two `docker compose up` runs against one host fight
   # over the same container names and leave half the stack down.
   group: vm-deploy
   cancel-in-progress: false
 
 env:
-  VM_HOST: 48.202.57.47
   VM_NAME: auctions.westus2.cloudapp.azure.com
-  VM_USER: auctionvmuser
-  REMOTE_DIR: /home/auctionvmuser/e-auction
+  # Pinned so the named volumes keep their prefix whatever the runner's
+  # workspace path is. See the comment in deploy/vm/deploy.sh.
+  COMPOSE_PROJECT_NAME: eauction
 
 jobs:
-  reach:
-    name: Can a runner reach the VM?
-    runs-on: ubuntu-latest
-    steps:
-      - name: Port 22
-        run: |
-          if timeout 10 bash -c "cat </dev/null >/dev/tcp/${VM_HOST}/22" 2>/dev/null; then
-            echo "port 22 is open from this runner"
-          else
-            echo "::error::TCP ${VM_HOST}:22 is unreachable from a GitHub runner."
-            echo "::error::Add this runner's egress IP to the VM's network security group:"
-            curl -sS --max-time 10 https://api.ipify.org || true
-            echo
-            echo "::error::GitHub's ranges are large and change; allowing the whole set is"
-            echo "::error::not advisable. Running deploy/vm/deploy.sh from your own"
-            echo "::error::terminal is the better answer if this keeps failing."
-            exit 1
-          fi
-
-      - name: Who are we talking to
-        env:
-          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/vm.pem && chmod 600 ~/.ssh/vm.pem
-
-          if [ -n "${KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-            chmod 600 ~/.ssh/known_hosts
-            STRICT=yes
-          else
-            # Trust on first use. Weaker than a pinned host key, and called out
-            # rather than hidden: on the first connection there is nothing to
-            # compare against, so this accepts whatever answers and pins it for
-            # the rest of the run. Set VM_SSH_KNOWN_HOSTS from the line printed
-            # below to close the gap.
-            echo "::warning::VM_SSH_KNOWN_HOSTS is not set; accepting the host key on first use."
-            STRICT=accept-new
-          fi
-
-          cat > ~/.ssh/config <<CFG
-          Host vm
-            HostName ${VM_HOST}
-            User ${VM_USER}
-            IdentityFile ~/.ssh/vm.pem
-            IdentitiesOnly yes
-            StrictHostKeyChecking ${STRICT}
-            ConnectTimeout 15
-            ServerAliveInterval 30
-          CFG
-          chmod 600 ~/.ssh/config
-
-          ssh vm 'echo "host: $(hostname)"; echo "os:   $(. /etc/os-release && echo "$PRETTY_NAME")"; echo "cpu:  $(nproc) vCPU"; echo "ram:  $(free -g | awk "/^Mem:/ {print \$2}") GiB"; echo "disk: $(df -h / | awk "NR==2 {print \$4}") free"; echo "docker: $(docker compose version 2>/dev/null || echo NOT INSTALLED)"'
-
-          echo
-          echo "Pin the host key by setting VM_SSH_KNOWN_HOSTS to this line:"
-          ssh-keyscan -t ed25519 "${VM_HOST}" 2>/dev/null || true
-
   deploy:
-    name: Deploy
-    needs: reach
-    if: ${{ !inputs.reachability_only }}
-    runs-on: ubuntu-latest
+    name: Deploy on the VM
+    runs-on: self-hosted
+    timeout-minutes: 60      # fourteen images on four vCPUs
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check it builds and passes before shipping it
+      - name: Is this VM able to run it
         run: |
-          # The VM has four vCPUs and will take twenty minutes to build these
-          # images. Finding out here that a test fails costs far less.
-          dotnet test EAuction.sln --nologo -v q
-          cd web
-          # ci, not install: a package.json that has drifted from the lockfile
-          # must fail here. That is exactly how this branch broke once already.
-          npm ci
-          npm run typecheck
-          npm test
+          set -uo pipefail
+          fail=0
+          echo "host    $(hostname)"
+          echo "os      $(. /etc/os-release && echo "$PRETTY_NAME")"
+          echo "cpu     $(nproc) vCPU"
+          echo "ram     $(free -g | awk '/^Mem:/ {print $2}') GiB"
+          echo "disk    $(df -h / | awk 'NR==2 {print $4}') free on /"
+          echo "workdir $(pwd)"
 
-      - name: Open the connection
-        env:
-          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/vm.pem && chmod 600 ~/.ssh/vm.pem
-          STRICT=accept-new
-          if [ -n "${KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-            chmod 600 ~/.ssh/known_hosts
-            STRICT=yes
+          if ! docker compose version >/dev/null 2>&1; then
+            echo "::error::docker compose is missing. Re-run with 'Install Docker' ticked."
+            fail=1
+          else
+            echo "docker  $(docker --version), $(docker compose version --short)"
           fi
-          cat > ~/.ssh/config <<CFG
-          Host vm
-            HostName ${VM_HOST}
-            User ${VM_USER}
-            IdentityFile ~/.ssh/vm.pem
-            IdentitiesOnly yes
-            StrictHostKeyChecking ${STRICT}
-            ConnectTimeout 15
-            ServerAliveInterval 30
-          CFG
-          chmod 600 ~/.ssh/config
 
-      - name: Copy the repository to the VM
+          # The runner must be able to talk to the socket. Without the docker
+          # group this fails here with a clear message rather than three steps
+          # later inside a build.
+          if ! docker ps >/dev/null 2>&1; then
+            echo "::error::This runner cannot reach the Docker socket."
+            echo "::error::  sudo usermod -aG docker \$USER   then restart the runner service"
+            fail=1
+          fi
+
+          # Fourteen images and their layers. Measured at about 12 GiB; below
+          # 20 the build is likely to die part-way with a confusing error.
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail:-0}" -lt 20 ]; then
+            echo "::error::Only ${avail}G free on /. The images need roughly 12G; clear space first."
+            echo "::error::  docker system prune -af --volumes   (removes stopped containers and unused images)"
+            fail=1
+          fi
+
+          exit $fail
+
+      - name: Bootstrap
+        if: ${{ inputs.bootstrap }}
+        run: bash deploy/vm/bootstrap.sh
+
+      - name: Test before building
+        if: ${{ !inputs.preflight_only }}
         run: |
           set -euo pipefail
-          # rsync from the runner's checkout rather than a clone on the VM: the
-          # VM then needs no git credential of its own, and what is deployed is
-          # exactly the commit this run tested.
+          # The VM has four vCPUs and will spend twenty minutes on the images.
+          # A failing test should cost seconds, not that.
           #
-          # .env is excluded explicitly. It is generated on the VM and must
-          # survive every deploy — regenerating the document grant key would
-          # invalidate every grant already issued.
-          ssh vm "mkdir -p '${REMOTE_DIR}'"
-          rsync -az --delete \
-            --exclude '.git' \
-            --exclude 'node_modules' \
-            --exclude 'bin' --exclude 'obj' \
-            --exclude 'deploy/vm/.env' \
-            ./ "vm:${REMOTE_DIR}/"
-          # Written from here: .git is not copied, so the VM cannot work out
-          # for itself what it is running.
-          printf '%s\n' "${GITHUB_SHA}" | ssh vm "cat > '${REMOTE_DIR}/.deployed-commit'"
-          echo "deployed ${GITHUB_SHA::12}"
-
-      - name: Bootstrap the VM
-        if: ${{ inputs.bootstrap }}
-        run: ssh vm "cd '${REMOTE_DIR}' && bash deploy/vm/bootstrap.sh"
+          # Both toolchains run inside containers, so the VM needs neither the
+          # .NET SDK nor Node installed — only Docker, which it has.
+          docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 \
+            dotnet test EAuction.sln --nologo -v q
+          docker run --rm -v "$PWD:/src" -w /src/web node:22-alpine sh -euc '
+            # ci, not install: a package.json that has drifted from the
+            # lockfile must fail here. That is how this branch broke once.
+            npm ci --no-audit --no-fund
+            npm run typecheck
+            npm test
+          '
 
       - name: Deploy
+        if: ${{ !inputs.preflight_only }}
         env:
           REBUILD: ${{ inputs.rebuild }}
           SEED: ${{ inputs.seed }}
@@ -184,45 +131,66 @@ jobs:
           [ "$REBUILD" = "true" ] && ARGS="$ARGS --rebuild"
           [ "$SEED" = "true" ]    || ARGS="$ARGS --no-seed"
           echo "deploy.sh$ARGS"
-          # ServerAliveInterval keeps the connection from being dropped during
-          # the build, which is quiet for minutes at a time on four vCPUs.
-          ssh -o ServerAliveInterval=30 vm \
-            "cd '${REMOTE_DIR}' && bash deploy/vm/deploy.sh $ARGS"
+          bash deploy/vm/deploy.sh $ARGS
 
       - name: Prove it answers
+        if: ${{ !inputs.preflight_only }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           fail=0
           check() {
             local what="$1" url="$2" want="${3:-200}"
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)
-            if [ "$code" = "$want" ]; then
-              echo "  ok    $what  ($code)"
-            else
-              echo "  FAIL  $what  ($code, wanted $want)  $url"
-              fail=1
-            fi
+            if [ "$code" = "$want" ]; then printf '  ok    %-38s (%s)\n' "$what" "$code"
+            else printf '  FAIL  %-38s (%s, wanted %s)  %s\n' "$what" "$code" "$want" "$url"; fail=1; fi
           }
-          B="http://${VM_NAME}"
-          check "bidder portal"   "$B/"
-          check "admin portal"    "http://${VM_NAME}:8081/"
-          check "edge health"     "$B/edge/health"
-          check "keycloak realm"  "$B/auth/realms/eauction"
-          check "sandbox"         "$B/sandbox/"
-          check "public auctions" "$B/api/query/auctions"
-          # 401 is the right answer here: the endpoint exists and refuses an
+
+          # Over localhost first: this is the stack answering, independent of
+          # whether the network security group has been opened yet.
+          echo "--- on the VM itself"
+          check "edge health"      "http://localhost/edge/health"
+          check "bidder portal"    "http://localhost/"
+          check "admin portal"     "http://localhost:8081/"
+          check "keycloak realm"   "http://localhost/auth/realms/eauction"
+          check "sandbox"          "http://localhost/sandbox/"
+          check "public auctions"  "http://localhost/api/query/auctions"
+          # 401 is the right answer: the endpoint exists and refuses an
           # anonymous caller. A 200 would mean the staff surface is open.
-          check "staff endpoint refuses anonymous" "$B/api/query/staff/leaders" 401
+          check "staff list refuses anonymous" "http://localhost/api/query/staff/leaders" 401
+
+          # Then over the public name. A failure here and a pass above means the
+          # stack is fine and the firewall is not open — a different problem
+          # with a different fix, which is why they are reported separately.
+          echo "--- through ${VM_NAME} (needs ports 80 and 8081 open)"
+          for u in "http://${VM_NAME}/edge/health" "http://${VM_NAME}:8081/edge/health"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$u" || echo 000)
+            if [ "$code" = "200" ]; then printf '  ok    %s\n' "$u"
+            else printf '  note  %s -> %s (open it in the NSG, scoped to your own range)\n' "$u" "$code"; fi
+          done
+
           exit $fail
 
       - name: What is running
         if: always()
         run: |
-          ssh vm "cd '${REMOTE_DIR}' && docker compose --env-file deploy/vm/.env -f deploy/compose/docker-compose.yml -f deploy/vm/docker-compose.vm.yml ps" || true
-          echo "--- anything unhealthy or restarting"
-          ssh vm "docker ps --filter health=unhealthy --filter status=restarting --format '{{.Names}}: {{.Status}}'" || true
+          docker compose --env-file "${EAUCTION_ENV_FILE:-$HOME/.config/eauction/.env}" \
+            -f deploy/compose/docker-compose.yml -f deploy/vm/docker-compose.vm.yml \
+            ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || true
+          echo "--- unhealthy or restarting"
+          docker ps --filter health=unhealthy --filter status=restarting \
+            --format '{{.Names}}: {{.Status}}' || true
+
+      - name: Logs from anything that failed
+        if: failure()
+        run: |
+          for c in $(docker ps -a --filter status=exited --format '{{.Names}}' | grep '^eauction-' || true); do
+            echo "::group::$c"
+            docker logs --tail=40 "$c" 2>&1 || true
+            echo "::endgroup::"
+          done
 
       - name: Where to click
+        if: ${{ !inputs.preflight_only }}
         run: |
           echo "bidder   http://${VM_NAME}/"
           echo "admin    http://${VM_NAME}:8081/"
