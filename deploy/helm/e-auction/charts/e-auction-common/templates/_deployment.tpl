@@ -138,8 +138,20 @@ metadata:
 automountServiceAccountToken: false
 {{- end -}}
 
+{{/*
+The Service.
+
+ClusterIP by default, because in a production install nothing reaches a service
+except through the Ingress or Route above. A NodePort is the exception a shared
+cluster forces: where the only IngressClass belongs to another tenant, a node
+port is the one way out that does not touch their router. `service.nodePort`
+pins the number so a firewall rule can be written once and stay true across
+releases; left unset, the API server allocates one and it may move.
+*/}}
 {{- define "e-auction.service" -}}
 {{- if .svc.port -}}
+{{- $service := .svc.service | default dict -}}
+{{- $type := $service.type | default "ClusterIP" -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -147,12 +159,15 @@ metadata:
   labels:
     {{- include "e-auction.labels" . | nindent 4 }}
 spec:
-  type: ClusterIP
+  type: {{ $type }}
   ports:
     - port: 80
       targetPort: http
       protocol: TCP
       name: http
+      {{- if and (eq $type "NodePort") $service.nodePort }}
+      nodePort: {{ $service.nodePort }}
+      {{- end }}
   selector:
     {{- include "e-auction.selectorLabels" . | nindent 4 }}
 {{- end -}}

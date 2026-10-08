@@ -1,0 +1,319 @@
+# Staging overlay: namespace `e-auctions` on the shared k3s node `archive-stg`.
+#
+# This is a demo install on a cluster we share with another tenant (the SDAIA
+# archive, in a demo freeze). Three things about that namespace drive almost
+# every value here, and none of them are style choices:
+#
+#   1. ResourceQuota caps requests.cpu at 3 cores and limits.cpu at 6, for the
+#      whole namespace. The node has 16 cores and the archive already requests
+#      about 10.8 — our 3 is what is left, and it has to cover the dependencies
+#      as well as the eleven services.
+#
+#   2. LimitRange gives any container that declares no limits 1 CPU. Sixteen
+#      containers defaulting that way is 16 cores against a 6-core cap, so the
+#      pods would simply not schedule. Every container below therefore declares
+#      its own CPU limit. This is the trap that makes a quota failure look like
+#      a broken chart.
+#
+#   3. The only IngressClass is `kong` and it belongs to the archive. We must
+#      not use it, so the two browser-facing services go out on NodePorts
+#      instead. 31831 and 31832 are already taken.
+#
+# Pod Security is `baseline` (enforced). The chart was already compliant — no
+# privileged containers, no hostPath, no hostPorts, no hostNetwork — so nothing
+# here loosens it.
+
+platform: kubernetes
+
+global:
+  imageRegistry: eauctionacr.azurecr.io
+  imagePullSecrets:
+    - name: acr-pull
+
+ingress:
+  # Deliberately empty. The chart only emits an Ingress for a service whose
+  # `expose.enabled` is true, and below none of them have it — but if one is
+  # ever turned on by accident, an empty class is far better than silently
+  # borrowing the archive's router.
+  className: ""
+
+config:
+  kafka:
+    # The single-broker Kafka deployed by deploy/staging/dependencies.yaml, in
+    # this namespace. Not the archive's Strimzi cluster: we cannot see their
+    # namespace, and installing a second Strimzi operator would collide with
+    # their CRDs.
+    bootstrapServers: kafka.e-auctions.svc.cluster.local:9092
+
+  jwt:
+    authority: http://keycloak.e-auctions.svc.cluster.local:8080/realms/eauction
+    audience: eauction
+
+  # Both portals are reached through a NodePort on the node's public IP, so that
+  # is the origin the browser sends. http, not https: terminating TLS needs a
+  # certificate and a hostname, and this is a demo behind a firewall rule.
+  cors:
+    allowedOrigins:
+      - http://40.64.120.210:30080
+      - http://40.64.120.210:30081
+
+# --- the provisioning hooks ------------------------------------------------
+
+provision:
+  topics:
+    # One broker, so one replica. The tool refuses a factor above the broker
+    # count rather than creating half the topics, which would fail the hook and
+    # block the release — correct, but better not to trigger it.
+    replicationFactor: 1
+    partitions: 1
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 300m, memory: 256Mi }
+
+# --- the bid path ----------------------------------------------------------
+
+bidCatcher:
+  replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    # One node and one replica: a PDB with minAvailable 2 can never be satisfied
+    # and would block every drain on a node we do not own.
+    enabled: false
+  spreadAcrossNodes: false
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30090
+  resources:
+    requests: { cpu: 150m, memory: 256Mi }
+    limits: { cpu: 400m, memory: 512Mi }
+
+bidProcessor:
+  # Never raise this. Auctions are not sharded across processor instances, so a
+  # second replica drives every auction in parallel and publishes duplicate
+  # winners. NOTES.txt warns about it; the quota would not stop you.
+  replicas: 1
+  resources:
+    requests: { cpu: 150m, memory: 320Mi }
+    limits: { cpu: 400m, memory: 640Mi }
+
+queryBff:
+  replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30091
+  resources:
+    # Holds one long-lived connection per watching browser, so memory matters
+    # more than CPU here.
+    requests: { cpu: 150m, memory: 320Mi }
+    limits: { cpu: 400m, memory: 640Mi }
+
+# --- the write side --------------------------------------------------------
+
+auctionAdmin:
+  replicas: 1
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30092
+  secretEnv:
+    - name: ConnectionStrings__Admin
+      secretName: eauction-admin-db
+      secretKey: connection-string
+    - name: Documents__GrantKeyHex
+      secretName: eauction-document-grants
+      secretKey: grant-key
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    - name: Award__ComplianceWindowDays
+      value: "5"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+participant:
+  replicas: 1
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30093
+  secretEnv:
+    - name: ConnectionStrings__Participant
+      secretName: eauction-participant-db
+      secretKey: connection-string
+    - name: Participant__BidderMasterKeyHex
+      secretName: eauction-bidder-keys
+      secretKey: master-key
+    - name: Documents__GrantKeyHex
+      secretName: eauction-document-grants
+      secretKey: grant-key
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+payments:
+  replicas: 1
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30094
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    # THIS IS A DEMO AND ONLY A DEMO.
+    #
+    # The simulator settles every charge without taking a riyal. On the Jeddah
+    # install this flag is deliberately absent and the service refuses to start
+    # without a real gateway, because allowing it there would qualify every
+    # registered bidder in the country to bid on state land while looking
+    # exactly like a working deployment.
+    #
+    # It is on here because this namespace is a firewalled demo with seeded
+    # data and no real money or real bidders. It must never be copied into
+    # values-jeddah.yaml.
+    - name: Payments__AllowSimulatedGateway
+      value: "true"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+documents:
+  replicas: 1
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30095
+  secretEnv:
+    - name: Storage__AccessKey
+      secretName: eauction-object-store
+      secretKey: access-key
+    - name: Storage__SecretKey
+      secretName: eauction-object-store
+      secretKey: secret-key
+    - name: Documents__GrantKeyHex
+      secretName: eauction-document-grants
+      secretKey: grant-key
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+    - name: Storage__ServiceUrl
+      value: http://minio.e-auctions.svc.cluster.local:9000
+    - name: Storage__Bucket
+      value: eauction-documents
+    - name: Documents__MaxUploadBytes
+      value: "67108864"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+notifications:
+  replicas: 1
+  secretEnv:
+    - name: ConnectionStrings__Notifications
+      secretName: eauction-notifications-db
+      secretKey: connection-string
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+audit:
+  replicas: 1
+  secretEnv:
+    - name: ConnectionStrings__Audit
+      secretName: eauction-audit-db
+      secretKey: connection-string
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+reporting:
+  replicas: 1
+  secretEnv:
+    - name: ConnectionStrings__Reporting
+      secretName: eauction-reporting-db
+      secretKey: connection-string
+  env:
+    - name: ASPNETCORE_URLS
+      value: http://+:8080
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 512Mi }
+
+# --- the two portals -------------------------------------------------------
+#
+# Two separate releases of the same template, not one with two sides: the chart
+# ranges over bidderPortal and adminPortal as independent services, because they
+# are built from different bundles and are exposed separately.
+
+bidderPortal:
+  replicas: 1
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30080
+  resources:
+    # nginx serving a built bundle.
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 75m, memory: 64Mi }
+
+adminPortal:
+  replicas: 1
+  expose:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30081
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 75m, memory: 64Mi }
+
+# --- the budget ------------------------------------------------------------
+#
+#                        requests        limits
+#   bid-catcher            150m            400m
+#   bid-processor          150m            400m
+#   query-bff              150m            400m
+#   auction-admin          100m            200m
+#   participant            100m            200m
+#   payments               100m            200m
+#   documents              100m            200m
+#   notifications          100m            200m
+#   audit                  100m            200m
+#   reporting              100m            200m
+#   bidder-portal           25m             75m
+#   admin-portal            25m             75m
+#   ---------------------------------------------
+#   services             1 200m          2 750m
+#   dependencies.yaml    1 050m          2 150m
+#   provision hooks        200m            600m
+#   ---------------------------------------------
+#   total                2 450m          5 500m
+#   quota                3 000m          6 000m
+#
+# The hooks are counted because on an upgrade they run while the services are
+# still up. 550m of request headroom and 500m of limit headroom is thin but
+# real; adding a service means recomputing this table, not guessing.
