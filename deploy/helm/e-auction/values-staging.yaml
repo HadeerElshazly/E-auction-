@@ -15,9 +15,17 @@
 #      its own CPU limit. This is the trap that makes a quota failure look like
 #      a broken chart.
 #
-#   3. The only IngressClass is `kong` and it belongs to the archive. We must
-#      not use it, so the two browser-facing services go out on NodePorts
-#      instead. 31831 and 31832 are already taken.
+#   3. Five NodePort services, and the browser calls eight APIs. The only
+#      IngressClass is `kong` and it belongs to the archive, so we cannot route
+#      by host either. The eight APIs therefore stay ClusterIP behind the nginx
+#      gateway in deploy/staging/api-gateway.yaml, which holds the one port;
+#      the two portals and Keycloak keep a port each. Four of five, and 31831
+#      and 31832 were already taken before we arrived.
+#
+#        30080  bidder portal
+#        30081  admin portal
+#        30082  keycloak
+#        30083  api-gateway -> the eight APIs
 #
 # Pod Security is `baseline` (enforced). The chart was already compliant — no
 # privileged containers, no hostPath, no hostPorts, no hostNetwork — so nothing
@@ -68,7 +76,7 @@ provision:
     partitions: 1
   resources:
     requests: { cpu: 100m, memory: 128Mi }
-    limits: { cpu: 300m, memory: 256Mi }
+    limits: { cpu: 200m, memory: 256Mi }
 
 # --- the bid path ----------------------------------------------------------
 
@@ -83,9 +91,6 @@ bidCatcher:
   spreadAcrossNodes: false
   expose:
     enabled: false
-  service:
-    type: NodePort
-    nodePort: 30090
   resources:
     requests: { cpu: 150m, memory: 256Mi }
     limits: { cpu: 400m, memory: 512Mi }
@@ -108,9 +113,6 @@ queryBff:
   spreadAcrossNodes: false
   expose:
     enabled: false
-  service:
-    type: NodePort
-    nodePort: 30091
   resources:
     # Holds one long-lived connection per watching browser, so memory matters
     # more than CPU here.
@@ -123,9 +125,6 @@ auctionAdmin:
   replicas: 1
   expose:
     enabled: false
-  service:
-    type: NodePort
-    nodePort: 30092
   secretEnv:
     - name: ConnectionStrings__Admin
       secretName: eauction-admin-db
@@ -146,9 +145,6 @@ participant:
   replicas: 1
   expose:
     enabled: false
-  service:
-    type: NodePort
-    nodePort: 30093
   secretEnv:
     - name: ConnectionStrings__Participant
       secretName: eauction-participant-db
@@ -170,9 +166,6 @@ payments:
   replicas: 1
   expose:
     enabled: false
-  service:
-    type: NodePort
-    nodePort: 30094
   env:
     - name: ASPNETCORE_URLS
       value: http://+:8080
@@ -197,9 +190,6 @@ documents:
   replicas: 1
   expose:
     enabled: false
-  service:
-    type: NodePort
-    nodePort: 30095
   secretEnv:
     - name: Storage__AccessKey
       secretName: eauction-object-store
@@ -307,13 +297,18 @@ adminPortal:
 #   bidder-portal           25m             75m
 #   admin-portal            25m             75m
 #   ---------------------------------------------
-#   services             1 200m          2 750m
+#   chart services       1 200m          2 750m
+#   api-gateway             50m            200m
 #   dependencies.yaml    1 050m          2 150m
-#   provision hooks        200m            600m
+#   provision hooks        200m            400m
 #   ---------------------------------------------
-#   total                2 450m          5 500m
+#   total                2 500m          5 500m
 #   quota                3 000m          6 000m
+#   headroom               500m            500m
 #
-# The hooks are counted because on an upgrade they run while the services are
-# still up. 550m of request headroom and 500m of limit headroom is thin but
-# real; adding a service means recomputing this table, not guessing.
+# The hooks are counted even though they are pre-install: on an upgrade they
+# run while the services are still up, so for one moment both are charged
+# against the quota. The limit ceiling is the tighter of the two caps, which is
+# why the hooks' own limit came down to 200m. Adding a service means
+# recomputing this table, not guessing — the quota refuses, it does not
+# throttle, and a pod that cannot be admitted says only "exceeded quota".

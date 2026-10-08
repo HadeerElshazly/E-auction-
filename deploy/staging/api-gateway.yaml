@@ -1,0 +1,219 @@
+# One nginx in front of the eight APIs a browser calls.
+#
+# It exists for a quota, not for architecture. The namespace allows five
+# NodePort services and the portals call eight APIs; the first draft asked for
+# nine ports and would have been refused outright. Path prefixes behind one
+# port bring the whole deployment to four: bidder portal, admin portal,
+# Keycloak, and this.
+#
+# Keycloak is deliberately NOT behind here. The `iss` claim in a token is
+# whatever host Keycloak was called on, so putting it on a path would make the
+# issuer a gateway URL that the services would then have to reach from inside
+# the cluster to fetch signing keys. It keeps its own port, and the services
+# accept its external issuer through Jwt:Issuer while fetching JWKS in-cluster.
+#
+# The release name is `eauction`, so the chart's services resolve as
+# eauction-<name>. If the release is ever renamed, these names move with it and
+# this file has to change — which is why the workflow passes the release name
+# explicitly rather than letting it drift.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-conf
+  labels:
+    app.kubernetes.io/part-of: e-auctions-dependencies
+data:
+  default.conf: |
+    # DNS resolution through the cluster's resolver, re-resolved rather than
+    # pinned at startup. nginx otherwise resolves an upstream once when it
+    # loads config and caches it forever: the first rolling restart of a
+    # service gives it a stale ClusterIP and every request 502s until nginx is
+    # restarted too. The `set $upstream` + variable-in-proxy_pass form is what
+    # forces the re-resolve.
+    resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
+    resolver_timeout 5s;
+
+    map $http_origin $cors_origin {
+      default                        "";
+      "http://40.64.120.210:30080"   $http_origin;
+      "http://40.64.120.210:30081"   $http_origin;
+    }
+
+    server {
+      listen 8080;
+      server_name _;
+
+      # A bid frame is a few hundred bytes. Anything larger is not a bid, and
+      # the catcher's own Ingress annotation in the Jeddah values caps it the
+      # same way.
+      client_max_body_size 64m;
+
+      # The services set their own CORS headers; nginx must not add a second
+      # set, because two Access-Control-Allow-Origin headers are a CORS
+      # failure in every browser. $cors_origin exists only for the one case
+      # nginx answers alone: a preflight that never reaches a service.
+      location / {
+        return 404 '{"error":"unknown api path"}';
+        add_header Content-Type application/json always;
+      }
+
+      # --- the eight APIs ---------------------------------------------------
+      #
+      # Each strips its prefix, so /api/query/auctions reaches the service as
+      # /auctions and the services need no knowledge of the gateway.
+
+      location /api/admin/ {
+        set $up http://eauction-auction-admin.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
+      location /api/participant/ {
+        set $up http://eauction-participant.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
+      location /api/catcher/ {
+        set $up http://eauction-bid-catcher.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
+      location /api/query/ {
+        set $up http://eauction-query-bff.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+
+        # The live price feed is server-sent events. nginx buffers a proxied
+        # response by default, which does not slow the stream down — it holds
+        # it until the buffer fills, so a bidder sees the closing price after
+        # the auction has closed. The service already sends
+        # X-Accel-Buffering: no for exactly this reason; these make it
+        # unconditional, and the read timeout has to outlive a quiet stream.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        chunked_transfer_encoding on;
+      }
+
+      location /api/documents/ {
+        set $up http://eauction-documents.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+        # A booklet or a plan image, not a JSON body.
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+      }
+
+      location /api/notifications/ {
+        set $up http://eauction-notifications.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
+      location /api/audit/ {
+        set $up http://eauction-audit.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
+      location /api/reporting/ {
+        set $up http://eauction-reporting.e-auctions.svc.cluster.local:80;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
+      # The gateway's own liveness, answered without touching a service.
+      location = /gateway/health {
+        access_log off;
+        return 200 'ok';
+        add_header Content-Type text/plain always;
+      }
+    }
+
+  proxy-common.inc: |
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Authorization passes through untouched: every service validates the
+    # bearer token itself and the gateway is not a trust boundary.
+    proxy_set_header Connection "";
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: http
+      nodePort: 30083
+      name: http
+  selector:
+    app: api-gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101          # nginx in the unprivileged image
+        runAsGroup: 101
+      containers:
+        - name: nginx
+          # The unprivileged variant: listens on 8080 and writes its pid and
+          # temp files under /tmp, so it needs neither root nor a writable
+          # /var/run. Pod Security `baseline` would permit the normal image,
+          # but it wants port 80 and root to bind it.
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /gateway/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          # readOnlyRootFilesystem, and nginx still needs scratch space for
+          # client bodies and its pid.
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: conf
+          configMap:
+            name: api-gateway-conf
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

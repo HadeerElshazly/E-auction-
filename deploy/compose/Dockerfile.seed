@@ -1,0 +1,32 @@
+# Demo seeder: a plan's worth of auction history, published as events.
+#
+# Its own image rather than a tool inside the provisioning one, because they are
+# different kinds of thing. Provisioning must run before every release and is
+# part of the deployment; seeding is a demo convenience that must never run
+# against a real tenant's data. Keeping them apart means a seed job cannot be
+# started by a release hook, and the Jeddah install never pulls this image.
+#
+# runtime, not aspnet: the seeder references EAuction.Core only, so none of the
+# ASP.NET framework is needed.
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY src/EAuction.Core/EAuction.Core.csproj src/EAuction.Core/
+COPY tools/seed/EAuction.Seed.csproj tools/seed/
+RUN dotnet restore tools/seed/EAuction.Seed.csproj
+COPY src/EAuction.Core/ src/EAuction.Core/
+COPY tools/seed/ tools/seed/
+RUN dotnet publish tools/seed/EAuction.Seed.csproj -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/runtime:8.0
+WORKDIR /app
+COPY --from=build /app .
+
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin eauction
+USER 10001
+
+# No ENTRYPOINT, matching Dockerfile.provision: the Job names the arguments.
+#   dotnet eauction-seed.dll --kafka kafka:9092 [--count 24]
+#
+# The assembly is eauction-seed.dll, not EAuction.Seed.dll — the project sets
+# AssemblyName.
