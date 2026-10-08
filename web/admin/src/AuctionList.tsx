@@ -251,10 +251,9 @@ function AuctionTable({
                     <button className="link strong" onClick={() => onOpen(a.id)}>
                       {a.nameAr}
                     </button>
-                    <small className="ltr">{a.nameEn}</small>
                   </td>
                   <td>
-                    {a.plotCount} قطعة
+                    {a.channel === 'Onsite' ? 'حضوري' : 'إلكتروني'}
                     <small><span className="num">{a.totalAreaSqm}</span> م²</small>
                   </td>
                   <td>
@@ -262,7 +261,7 @@ function AuctionTable({
                       {sar(bidding ? figures!.priceMinorUnits : a.openingPriceMinorUnits, 'ar')}
                     </span>
                     <small>
-                      {bidding ? 'السعر الحالي' : 'سعر الافتتاح'}
+                      {bidding ? 'السعر الحالي' : 'سعر البداية'}
                       {winnerId && a.status !== 'Cancelled' && (
                         <>
                           {' · '}
@@ -381,7 +380,7 @@ function AuctionCard({
           />
         )}
         <span className="channel">
-          {auction.plotCount} قطعة · <span className="num">{auction.totalAreaSqm}</span> م²
+          <span className="num">{auction.totalAreaSqm}</span> م²
         </span>
         <span className="channel at-end">{onsite ? '📍 حضوري' : '🌐 إلكتروني'}</span>
         <CardClock
@@ -399,7 +398,7 @@ function AuctionCard({
         </div>
 
         <div>
-          <div className="muted small">{bidding ? 'السعر الحالي' : 'سعر الافتتاح'}</div>
+          <div className="muted small">{bidding ? 'السعر الحالي' : 'سعر البداية'}</div>
           <div className="price num">
             {sar(bidding ? figures!.priceMinorUnits : auction.openingPriceMinorUnits, 'ar')}
           </div>
@@ -426,7 +425,6 @@ function AuctionCard({
               <BidderName session={session} id={winnerId} />
             </div>
           )}
-          <div className="ltr small">{auction.nameEn}</div>
         </div>
       </div>
     </div>

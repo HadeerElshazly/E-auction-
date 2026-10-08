@@ -3,7 +3,6 @@ import { api, config, parseRiyals, riyals, sar, when, type Api, type Session } f
 import type { Auction } from './types'
 import { label } from './types'
 import { BidderName, useLeaders } from './winners'
-import { BidHistory } from './AuditViews'
 
 interface Props {
   auction: Auction
@@ -64,15 +63,6 @@ export function AuctionEditor({
 
       {/* قطع الأرض are added on «تفاصيل القطعة», each a row with its details. */}
 
-      {!['Draft', 'PendingReview', 'Rejected', 'Approved', 'Scheduled'].includes(auction.status) && (
-        <details className="card bid-history-card">
-          <summary>
-            <h2 style={{ display: 'inline' }}>سجل المزايدات</h2>
-            <span className="muted small"> — تسلسل المزايدات وقرار المعالج في كل منها (للاطلاع فقط)</span>
-          </summary>
-          <BidHistory session={session} auctionId={auction.id} withDecisions={false} />
-        </details>
-      )}
 
       <Documents
         auction={auction}
@@ -162,7 +152,7 @@ export function Summary({ auction, session }: { auction: Auction; session: Sessi
             </div>
           </div>
         )}
-        <Stat label="سعر الافتتاح" value={sar(auction.openingPriceMinorUnits, 'ar')} />
+        <Stat label="سعر البداية" value={sar(auction.openingPriceMinorUnits, 'ar')} />
         <Stat label="زيادة المزايدة" value={sar(auction.minIncrementMinorUnits, 'ar')} sub="ما تضيفه كل ضغطة زيادة" />
         <Stat label="التأمين" value={sar(auction.depositMinorUnits, 'ar')} />
         <Stat
@@ -179,7 +169,7 @@ export function Summary({ auction, session }: { auction: Auction; session: Sessi
         <span>{auction.channel === 'Online' ? 'مزاد إلكتروني' : 'مزاد حضوري'}</span>
         <span>{auction.bidderVisibility === 'Named' ? 'أسماء المزايدين ظاهرة' : 'هوية المزايدين مخفية'}</span>
         <span>
-          {auction.plotCount} قطعة · <span className="num">{auction.totalAreaSqm}</span> م²
+          <span className="num">{auction.totalAreaSqm}</span> م²
         </span>
         {auction.phase && <span>{auction.phase}</span>}
       </div>
@@ -318,19 +308,28 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
   // that raced a refresh sent the reseeded defaults instead of the typed values, so
   // the auction came back with an end date before its start date.
   const [form, setForm] = useState(() => toForm(auction))
-  useEffect(() => setForm(toForm(auction)), [auction.id])
+  // What was last saved, to tell whether there is anything to save. Not the auction
+  // object: the reserve is write-only and never comes back, so a typed reserve would
+  // look unsaved for ever.
+  const [baseline, setBaseline] = useState(() => toForm(auction))
+  useEffect(() => {
+    setForm(toForm(auction))
+    setBaseline(toForm(auction))
+  }, [auction.id])
+  const dirty = JSON.stringify(form) !== JSON.stringify(baseline)
 
   const [problems, setProblems] = useState<string[]>([])
+  // «فحص البيانات»: what is still missing before the auction can go for approval.
+  const [readiness, setReadiness] = useState<string[] | null>(null)
 
   const amounts: Array<[keyof FormState, string]> = [
-    ['opening', 'سعر الافتتاح'],
+    ['opening', 'سعر البداية'],
     ['increment', 'زيادة المزايدة'],
     ['deposit', 'التأمين'],
     ['booklet', 'سعر الكراسة'],
   ]
 
-  const save = () =>
-    onAct(async () => {
+  const persist = async () => {
       const money = Object.fromEntries(
         amounts.map(([key]) => [key, parseRiyals(String(form[key]))]),
       ) as Record<string, number | null>
@@ -368,6 +367,17 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
         maxExtensions: form.extend ? Number(form.maxExtensions) : 0,
         phase: form.phase || null,
       })
+      setBaseline(form)
+  }
+
+  const save = () => onAct(persist)
+
+  // Saves what was typed, then asks the service what is still missing — the check is
+  // of the saved auction, so it must not run on a stale copy.
+  const check = () =>
+    onAct(async () => {
+      await persist()
+      setReadiness((await client.get<{ problems: string[] }>(`/auctions/${auction.id}/validation`)).problems)
     })
 
   return (
@@ -477,7 +487,7 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
             onChange={(e) => setForm({ ...form, reserve: e.target.value })}
           />
           <small className="muted">
-            أدنى سعر يجوز خفض سعر الافتتاح إليه عند إعادة الطرح — لا يزيد على سعر الافتتاح.
+            أدنى سعر يجوز خفض سعر البداية إليه عند إعادة الطرح — لا يزيد على سعر البداية.
           </small>
         </label>
 
@@ -526,10 +536,33 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
         </div>
       )}
 
-      <div className="row end">
-        <button className="primary" disabled={busy} onClick={save}>
+      {readiness !== null && (
+        <div className={`notice ${readiness.length === 0 ? 'ok' : 'error'}`}>
+          {readiness.length === 0 ? (
+            'البيانات مكتملة — يمكن إرسال المزاد للاعتماد من المربع الجانبي.'
+          ) : (
+            <>
+              يلزم استكمال ما يلي:
+              <ul>
+                {readiness.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Save and check together, held at the bottom of the screen while the form
+          scrolls, and live only when something was changed. */}
+      <div className="form-actions-bar">
+        <button className="primary" disabled={busy || !dirty} onClick={save}>
           حفظ البيانات
         </button>
+        <button disabled={busy || !dirty} onClick={check}>
+          فحص البيانات
+        </button>
+        <span className="muted small">{dirty ? 'تعديلات غير محفوظة' : 'لا تعديلات غير محفوظة'}</span>
       </div>
     </>
   )
@@ -821,97 +854,20 @@ function Attach({
   )
 }
 
-function Workflow({ auction, client, busy, canEdit, canApprove, onAct }: Props) {
-  const [problems, setProblems] = useState<string[] | null>(null)
-  const [rejectReason, setRejectReason] = useState('')
+function Workflow({ auction, client, busy, canEdit, onAct }: Props) {
   const [cancelReason, setCancelReason] = useState('')
-  const open = editable.has(auction.status)
-
-  const check = () =>
-    onAct(async () => {
-      const result = await client.get<{ problems: string[] }>(
-        `/auctions/${auction.id}/validation`,
-      )
-      setProblems(result.problems)
-    })
 
   return (
     <>
       {/* Nothing to act on — an awarded or live auction — means no section. */}
-      {(open && canEdit) || auction.status === 'PendingReview' ? <h3>سير العمل</h3> : null}
-
-      {problems !== null && open && (
-        <div className={`notice ${problems.length === 0 ? 'ok' : 'error'}`}>
-          {problems.length === 0 ? (
-            'البيانات مكتملة — يمكن إرسال المزاد للاعتماد.'
-          ) : (
-            <>
-              يلزم استكمال ما يلي:
-              <ul>
-                {problems.map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
+      {auction.status === 'PendingReview' ? <h3>سير العمل</h3> : null}
 
       <div className="row">
-        {/* Only while it can still be edited. The check is "is this ready to be
-            submitted", and on an approved or finished auction its rules — a start
-            in the future — fail by definition and read as a fault that is not one. */}
-        {canEdit && open && (
-          <button disabled={busy} onClick={check}>
-            فحص البيانات
-          </button>
+        {auction.status === 'PendingReview' && (
+          <span className="muted small">
+            بانتظار لجنة الترسية — يُعتمد المزاد أو يُرفض من صفحته، ولا يعتمد مُعدّ المزاد مزاده بنفسه.
+          </span>
         )}
-
-        {canEdit && editable.has(auction.status) && (
-          <button
-            className="primary"
-            disabled={busy}
-            onClick={() => onAct(() => client.post(`/auctions/${auction.id}/submit`))}
-          >
-            إرسال للاعتماد
-          </button>
-        )}
-
-        {auction.status === 'PendingReview' &&
-          (canApprove ? (
-            <>
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() => onAct(() => client.post(`/auctions/${auction.id}/approve`))}
-              >
-                اعتماد المزاد
-              </button>
-              <input
-                placeholder="سبب الرفض"
-                style={{ width: 220 }}
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-              />
-              <button
-                className="danger"
-                disabled={busy || rejectReason.trim() === ''}
-                onClick={() =>
-                  onAct(() =>
-                    client.post(`/auctions/${auction.id}/reject`, {
-                      reason: rejectReason.trim(),
-                    }),
-                  )
-                }
-              >
-                رفض
-              </button>
-            </>
-          ) : (
-            <span className="muted small">
-              بانتظار لجنة الترسية — لا يعتمد مُعدّ المزاد مزاده بنفسه.
-            </span>
-          ))}
       </div>
 
       {/* «توثيق الإلغاء المصرح به»: withdrawing an approved auction before it

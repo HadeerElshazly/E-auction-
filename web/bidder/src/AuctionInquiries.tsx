@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, api, config, timestamp, type Api } from '@eauction/shared'
+import { ApiError, Icon, api, config, timestamp, type Api, type Session } from '@eauction/shared'
 
 interface Clarification {
   id: string
@@ -30,11 +30,14 @@ const statusAr: Record<MyInquiry['status'], { ar: string; tone: string }> = {
  */
 export function AuctionInquiries({
   auctionId,
+  session,
   participant,
   canAsk,
   open,
 }: {
   auctionId: string
+  /** Who is reading: a visitor gets the clarifications only if «إعدادات العرض للزوار» allows. */
+  session: Session | null
   /** Null when nobody is signed in: then only the public clarifications show. */
   participant: Api | null
   canAsk: boolean
@@ -47,13 +50,17 @@ export function AuctionInquiries({
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [sent, setSent] = useState(false)
+  const [locked, setLocked] = useState(false)
 
   useEffect(() => {
-    api({ baseUrl: config.queryApi, session: null })
-      .get<{ items: Clarification[] }>(`/auctions/${auctionId}/clarifications`)
-      .then((r) => setClarifications(r.items))
+    api({ baseUrl: config.queryApi, session })
+      .get<{ items: Clarification[]; signInRequired: boolean }>(`/auctions/${auctionId}/clarifications`)
+      .then((r) => {
+        setClarifications(r.items)
+        setLocked(r.signInRequired)
+      })
       .catch(() => undefined)
-  }, [auctionId])
+  }, [auctionId, session])
 
   const loadMine = useCallback(() => {
     if (!participant || !canAsk) return
@@ -86,7 +93,19 @@ export function AuctionInquiries({
     }
   }
 
-  if (clarifications.length === 0 && !(canAsk && (open || mine.length > 0))) return null
+  if (locked)
+    return (
+      <div className="card" data-testid="auction-inquiries">
+        <h2>الاستفسارات</h2>
+        <p className="muted">
+          <span className="locked-value">
+            <Icon name="lock" size={14} /> بعد تسجيل الدخول
+          </span>
+        </p>
+      </div>
+    )
+  if (clarifications.length === 0 && !(canAsk && (open || mine.length > 0)))
+    return <p className="muted">لا توجد توضيحات منشورة لهذا المزاد بعد.</p>
 
   return (
     <div className="card" data-testid="auction-inquiries">

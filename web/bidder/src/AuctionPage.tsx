@@ -4,7 +4,7 @@ import type { AuctionDetail, Bidder, Subscription, WinnerAward } from './types'
 import { WinnerPanel } from './WinnerPanel'
 import { BidBox, loadSubmitted } from './BidBox'
 import { useLivePrice } from './useLivePrice'
-import { SubscriptionSteps } from './SubscriptionSteps'
+import { BookletButton, ParticipateDialog } from './Participate'
 import { AuctionInquiries } from './AuctionInquiries'
 import { documentUrl, statusAr } from './Catalogue'
 
@@ -96,14 +96,12 @@ export function AuctionPage({
 
   // Which part of the page is open. «المشاركة» first for a signed-in bidder who has
   // started but not finished qualifying, since that is the thing they came back for.
-  const [tab, setTab] = useState<'info' | 'photos' | 'documents' | 'bids' | 'participation' | 'inquiries'>('info')
+  const [tab, setTab] = useState<'info' | 'photos' | 'documents' | 'bids' | 'inquiries'>('info')
+  // «اشترك في المزاد» — the participation dialog.
+  const [joining, setJoining] = useState(false)
   // «تفاصيل» — everything recorded about the plot, over the page.
   const [plotOpen, setPlotOpen] = useState(false)
   const canParticipate = !!session && canBid && !cancelled
-  useEffect(() => {
-    if (canParticipate && subscription && subscription.status !== 'Eligible' && biddingOpen) setTab('participation')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subscription?.status])
 
   // The land itself, for «تفاصيل الأرض»: the first plot's survey figures, and every
   // use the auction's plots are zoned for.
@@ -126,26 +124,25 @@ export function AuctionPage({
     ? price?.priceMinorUnits ?? auction.openingPriceMinorUnits
     : closingPrice ?? auction.openingPriceMinorUnits
   const priceLabel = live
-    ? price?.priceMinorUnits != null ? 'أعلى مزايدة حالية' : 'سعر الافتتاح'
-    : closingPrice !== null ? 'أعلى سعر عند الإغلاق' : 'سعر الافتتاح'
+    ? price?.priceMinorUnits != null ? 'أعلى مزايدة حالية' : 'سعر البداية'
+    : closingPrice !== null ? 'أعلى سعر عند الإغلاق' : 'سعر البداية'
 
   const tabs: Array<{ key: typeof tab; label: string }> = [
     { key: 'info', label: 'تفاصيل القطعة' },
     { key: 'photos', label: 'الصور' },
     { key: 'documents', label: 'المستندات' },
     { key: 'bids', label: 'المزايدات' },
-    ...(canParticipate ? [{ key: 'participation' as const, label: 'المشاركة' }] : []),
     { key: 'inquiries', label: 'الاستفسارات' },
   ]
 
   return (
     <>
       <PageHead
-        eyebrow={auction.nameEn || 'مزاد أرض'}
+        eyebrow={firstPlot ? `قطعة رقم ${firstPlot.plotNumber}` : 'مزاد أرض'}
         title={auction.nameAr}
         sub={
           <>
-            {auction.plots.length} قطعة · <span className="num">{area(totalArea)}</span> م² ·{' '}
+            <span className="num">{area(totalArea)}</span> م² ·{' '}
             {onsite ? 'مزاد حضوري' : 'مزاد إلكتروني'}
           </>
         }
@@ -252,10 +249,10 @@ export function AuctionPage({
                     <span className="doc-icon"><Icon name="pin" /></span>
                     <div className="grow">
                       <strong>موقع القطعة</strong>
-                      <small>الموقع على الخريطة ووصف القطعة.</small>
+                      <small>الموقع على الخريطة وخطا الطول والعرض.</small>
                     </div>
-                    <button className="ghost small" onClick={() => setPlotOpen(true)} data-testid="plot-details">
-                      عرض
+                    <button className="small" onClick={() => setPlotOpen(true)} data-testid="plot-details">
+                      عرض الموقع
                     </button>
                   </div>
                 )}
@@ -292,8 +289,12 @@ export function AuctionPage({
                           : `${sar(auction.bookletPriceMinorUnits, 'ar')} — تُتاح للتنزيل بعد شرائها من قسم «المشاركة».`}
                     </small>
                   </div>
-                  {canParticipate && (
-                    <button className="small" onClick={() => setTab('participation')}>المشاركة</button>
+                  {session && subscription?.bookletPurchasedAt != null ? (
+                    <BookletButton auction={auction} session={session} participant={participant} onError={setError} />
+                  ) : (
+                    canParticipate && biddingOpen && (
+                      <button className="small" onClick={() => setJoining(true)}>اشترك في المزاد</button>
+                    )
                   )}
                 </div>
 
@@ -327,13 +328,9 @@ export function AuctionPage({
                   <h2>المزايدات</h2>
                   <span className={`pill ${status.tone}`}>{status.ar}</span>
                 </div>
-                <div className="spec-grid">
-                  <div><small>{priceLabel}</small><b className="num">{money(shownPrice)}</b></div>
-                  <div>
-                    <small>المزايد الأعلى</small>
-                    <b>{hidden('livePrice') ? <Locked /> : price?.leaderIsYou ? 'أنت' : price?.leaderLabel ?? 'لا مزايدات بعد'}</b>
-                  </div>
-                  <div><small>زيادة المزايدة</small><b className="num">{money(auction.minIncrementMinorUnits)}</b></div>
+                <div className="kv">
+                  <span>المزايد الأعلى</span>
+                  <b>{hidden('livePrice') ? <Locked /> : price?.leaderIsYou ? 'أنت' : price?.leaderLabel ?? 'لا مزايدات بعد'}</b>
                 </div>
                 {/* Only this bidder's own bids: who else bid what is not theirs to see (D-22). */}
                 {session && canBid ? (
@@ -366,22 +363,12 @@ export function AuctionPage({
               </>
             )}
 
-            {tab === 'participation' && canParticipate && session && (
-              <SubscriptionSteps
-                auction={auction}
-                session={session}
-                subscription={subscription}
-                bidder={bidder}
-                participant={participant}
-                onChanged={loadParticipant}
-                onError={setError}
-              />
-            )}
 
             {tab === 'inquiries' && (
               <>
                 <AuctionInquiries
                   auctionId={auction.id}
+                  session={session}
                   participant={session ? participant : null}
                   canAsk={!!session && canBid}
                   open={biddingOpen}
@@ -427,6 +414,8 @@ export function AuctionPage({
               <CountdownPanel target={endsAt} label="حتى الإغلاق" />
             ) : live && onsite ? (
               <div className="notice info small">جارٍ في القاعة — يُغلق بقرار مدير المزاد.</div>
+            ) : (biddingOpen && hidden('schedule')) ? (
+              <div className="kv"><span>الموعد</span><b><Locked /></b></div>
             ) : null}
 
             <div className="kv"><span>تأمين المشاركة</span><b className="num">{sar(auction.depositMinorUnits, 'ar')}</b></div>
@@ -455,9 +444,8 @@ export function AuctionPage({
               // The prototype's flow: bid right here, from the auction page. The full
               // bidding screen is a tap away for a war fought by the second.
               <>
-                <div className="bid-status">
-                  {price?.leaderIsYou ? 'أنت صاحب أعلى مزايدة حالياً' : 'أهليتك معتمدة والتأمين مؤكد'}
-                </div>
+                {/* Leading is said under the price already; this is for everyone else. */}
+                {!price?.leaderIsYou && <div className="bid-status">أهليتك معتمدة والتأمين مؤكد</div>}
                 <BidBox
                   auction={auction}
                   session={session}
@@ -489,10 +477,13 @@ export function AuctionPage({
               </div>
             ) : canParticipate && biddingOpen ? (
               <>
-                <button className="primary wide" onClick={() => setTab('participation')}>
+                {subscription?.eligibility === 'UnderReview' && (
+                  <div className="bid-status">طلبك قيد المراجعة</div>
+                )}
+                <button className="primary wide" onClick={() => setJoining(true)}>
                   {subscription ? 'استكمال المشاركة' : 'اشترك في المزاد'}
                 </button>
-                <p className="box-help">الكراسة، ثم الموافقة على الشروط، ثم التأمين.</p>
+                <p className="box-help">يلزم إكمال الملف، والموافقة على الشروط، وتأكيد التأمين.</p>
               </>
             ) : (
               <p className="box-help">
@@ -506,41 +497,50 @@ export function AuctionPage({
         </aside>
       </div>
       {plotOpen && firstPlot && <PlotDialog plot={firstPlot} onClose={() => setPlotOpen(false)} />}
+      {joining && session && (
+        <ParticipateDialog
+          auction={auction}
+          session={session}
+          bidder={bidder}
+          subscription={subscription}
+          participant={participant}
+          onChanged={loadParticipant}
+          onClose={() => setJoining(false)}
+        />
+      )}
     </>
   )
 }
 
 /** «تفاصيل» — the plot in full: its figures, its description and its place on the map. */
 function PlotDialog({ plot, onClose }: { plot: AuctionDetail['plots'][number]; onClose: () => void }) {
+  // The plot's figures are on the page; this is where it is.
   const located = !!plot.latitude && !!plot.longitude && !isNaN(Number(plot.latitude)) && !isNaN(Number(plot.longitude))
-  const metres = (v: number | null) => (v != null ? <><span className="num">{v}</span> متر</> : 'غير محدد')
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="تفاصيل القطعة" onClick={onClose}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="موقع القطعة" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <button className="icon-btn" aria-label="إغلاق النافذة" onClick={onClose}>✕</button>
           <div className="grow" style={{ textAlign: 'start' }}>
-            <h2>قطعة رقم {plot.plotNumber}</h2>
-            <p>تفاصيل القطعة</p>
+            <h2>موقع القطعة</h2>
+            <p>قطعة رقم {plot.plotNumber}</p>
           </div>
         </div>
-        <div className="spec-grid" style={{ marginTop: 0 }}>
-          <div><small>المساحة</small><b><span className="num">{area(plot.areaSqm)}</span> م²</b></div>
-          <div><small>الاستخدام</small><b>{landUseAr(plot.landUse)}</b></div>
-          <div><small>عرض الشارع</small><b>{metres(plot.streetWidthMeters)}</b></div>
-          <div><small>الواجهة</small><b>{facingAr(plot.facing)}</b></div>
-          <div><small>طول الواجهة</small><b>{metres(plot.frontageMeters)}</b></div>
-        </div>
-        {plot.descriptionAr && <p>{plot.descriptionAr}</p>}
-        {located && (
+        {located ? (
           <>
-            <PlotMap points={[{ lat: Number(plot.latitude), lng: Number(plot.longitude) }]} height={260} />
-            <p className="small" style={{ marginTop: 8 }}>
+            <PlotMap points={[{ lat: Number(plot.latitude), lng: Number(plot.longitude), label: `قطعة ${plot.plotNumber}` }]} height={300} />
+            <div className="spec-grid" style={{ marginTop: 14 }}>
+              <div><small>خط العرض</small><b className="num ltr">{plot.latitude}</b></div>
+              <div><small>خط الطول</small><b className="num ltr">{plot.longitude}</b></div>
+            </div>
+            <p className="small" style={{ margin: 0 }}>
               <a href={`https://www.google.com/maps?q=${plot.latitude},${plot.longitude}`} target="_blank" rel="noreferrer noopener">
                 فتح الموقع في خرائط Google ↗
               </a>
             </p>
           </>
+        ) : (
+          <p className="muted">لم يُحدَّد موقع القطعة على الخريطة بعد.</p>
         )}
       </div>
     </div>

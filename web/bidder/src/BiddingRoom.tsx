@@ -57,7 +57,7 @@ export function BiddingRoom({ auction, session, onBack, onRefresh }: Props) {
 
       <div className={`room-board${closing ? ' closing' : ''}`}>
         <div className="room-price">
-          <span className="room-label">{bidding ? 'السعر الحالي' : 'سعر الافتتاح'}</span>
+          <span className="room-label">{bidding ? 'السعر الحالي' : 'سعر البداية'}</span>
           <span className="room-figure num">
             {sar(bidding ? price!.priceMinorUnits : auction.openingPriceMinorUnits, 'ar')}
           </span>

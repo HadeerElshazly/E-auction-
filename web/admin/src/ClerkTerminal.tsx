@@ -241,7 +241,7 @@ const refusals: Record<string, string> = {
   NotTheClerk: 'لم تعد مُعيَّناً على هذا المزاد. راجع إدارة المزادات.',
   BadSignature: 'انتهت صلاحية مفتاحك. أعد تحميل الصفحة.',
   OutsideWindow: 'لم يبدأ المزاد بعد.',
-  BelowOpeningPrice: 'المبلغ أقل من سعر الافتتاح.',
+  BelowOpeningPrice: 'المبلغ أقل من سعر البداية.',
   BelowMinimumIncrement: 'المبلغ لا يزيد على السعر الحالي بالحد الأدنى للزيادة.',
   RateLimited: 'مزايدات كثيرة بسرعة. أعد المحاولة بعد لحظة.',
   UnknownAuction: 'المزاد غير معروف لخدمة المزايدة بعد.',

@@ -102,13 +102,17 @@ export function App() {
     }
   }, [client, session])
 
+  // The auction the address names that turned out not to exist.
+  const [missing, setMissing] = useState<string | null>(null)
   const loadAuction = useCallback(
     async (id: string) => {
       setError(null)
       try {
         setSelected(await client.get<Auction>(`/auctions/${id}`))
+        setMissing(null)
       } catch (e) {
-        setError(describe(e))
+        if (e instanceof ApiError && e.status === 404) setMissing(id)
+        else setError(describe(e))
       }
     },
     [client],
@@ -123,10 +127,16 @@ export function App() {
       setSelected(null)
       return
     }
+    // Not before the sign-in has finished: the staff endpoints refuse a request with
+    // no token, and that refusal is not an expired session.
+    if (!session) return
     if (selected?.id !== selectedId) setSelected(null)
     void loadAuction(selectedId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, loadAuction])
+  }, [selectedId, loadAuction, session])
+
+  // An alert belongs to the page it happened on: moving to another clears it.
+  useEffect(() => setError(null), [view, routeId])
 
   // Reload the open auction after anything that changes it. The award workflow runs
   // partly through Kafka — the processor's CandidateOffered arrives on
@@ -258,7 +268,7 @@ export function App() {
           <div>بوابة الموظفين</div>
           <strong>مزادات الأراضي</strong>
           <div className="sidebar-foot">
-            الإصدار الأول <span className="pill teal plain">MVP</span>
+            الإصدار الأول <span className="pill teal plain">تجريبي</span>
           </div>
         </>
       }
@@ -273,7 +283,7 @@ export function App() {
         )}
 
         {view === 'monitor' && canWatch ? (
-          <Monitor session={session} />
+          <Monitor session={session} onOpen={open} />
         ) : view === 'applications' && isAdmin ? (
           <ApplicationsQueue session={session} onOpenAuction={open} />
         ) : view === 'committee' && isCommittee ? (
@@ -318,14 +328,24 @@ export function App() {
               هذا الحساب للقراءة فقط. اختر التقارير أو سجل المراجعة من القائمة الجانبية.
             </p>
           </div>
+        ) : view === 'auction' && routeId && missing === routeId ? (
+          // A link to an auction that is not there — an old bookmark, or one from
+          // before the data was reset — says so, rather than a 404 and a spinner.
+          <div className="card empty-state" data-testid="auction-not-found">
+            <h3>المزاد غير موجود</h3>
+            <p className="muted">ربما حُذف أو أن الرابط قديم. اختر المزاد من القائمة.</p>
+            <button className="primary" onClick={() => navigate('auctions')}>
+              جميع المزادات
+            </button>
+          </div>
         ) : view === 'auction' && !selected ? (
           <p className="muted">…</p>
         ) : selected ? (
           <>
             <PageHead
-              eyebrow={selected.nameEn || 'مزاد'}
+              eyebrow={selected.phase || 'مزاد أرض'}
               title={selected.nameAr}
-              sub={`${selected.plotCount} قطعة · ${selected.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'}`}
+              sub={`${selected.totalAreaSqm} م² · ${selected.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'}`}
               action={<button onClick={() => navigate('auctions')}>جميع المزادات</button>}
             />
 

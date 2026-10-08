@@ -32,7 +32,7 @@ interface Row {
  * seventh auction silently never updating. A two-second poll of one endpoint is a
  * fraction of the traffic and has no such cliff.
  */
-export function Monitor({ session }: { session: Session }) {
+export function Monitor({ session, onOpen }: { session: Session; onOpen: (id: string) => void }) {
   const leaders = useLeaders(session)
   const [rows, setRows] = useState<Row[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -105,7 +105,7 @@ export function Monitor({ session }: { session: Session }) {
 
       <div className="monitor-grid" data-testid="monitor">
         {(rows ?? []).map((r) => (
-          <AuctionTile key={r.auctionId} row={r} session={session} leaderId={leaders[r.auctionId]} />
+          <AuctionTile key={r.auctionId} row={r} session={session} leaderId={leaders[r.auctionId]} onOpen={() => onOpen(r.auctionId)} />
         ))}
       </div>
       <Pager page={paging.page} total={total} noun="مزاد جارٍ" onPage={paging.setPage} />
@@ -113,7 +113,7 @@ export function Monitor({ session }: { session: Session }) {
   )
 }
 
-function AuctionTile({ row, session, leaderId }: { row: Row; session: Session; leaderId?: string }) {
+function AuctionTile({ row, session, leaderId, onOpen }: { row: Row; session: Session; leaderId?: string; onOpen: () => void }) {
   const left = Math.max(0, new Date(row.effectiveEndsAt).getTime() - Date.now())
   const seconds = Math.floor(left / 1000)
 
@@ -132,7 +132,20 @@ function AuctionTile({ row, session, leaderId }: { row: Row; session: Session; l
   const bidding = row.priceMinorUnits !== null
 
   return (
-    <div className={`monitor-card${closing ? ' closing' : ''}`} data-testid="monitor-card">
+    <div
+      className={`monitor-card clickable${closing ? ' closing' : ''}`}
+      data-testid="monitor-card"
+      role="link"
+      tabIndex={0}
+      aria-label={`فتح ${row.nameAr}`}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+    >
       <div className="row" style={{ marginBottom: 10 }}>
         <span className="pill teal plain">
           {row.channel === 'Onsite' ? '📍 في الموقع' : '🌐 عبر الإنترنت'}
@@ -151,7 +164,7 @@ function AuctionTile({ row, session, leaderId }: { row: Row; session: Session; l
         {sar(row.priceMinorUnits ?? row.openingPriceMinorUnits, 'ar')}
       </div>
       <div className="muted small" style={{ marginBottom: 12 }}>
-        {bidding ? 'السعر الحالي' : 'سعر الافتتاح — لا مزايدات بعد'}
+        {bidding ? 'السعر الحالي' : 'سعر البداية — لا مزايدات بعد'}
       </div>
 
       <div className="facts">

@@ -11,7 +11,7 @@
  * enum. reasons.test.ts asserts the set is complete.
  */
 export const reasons: Record<string, string> = {
-  BelowOpeningPrice: 'المبلغ أقل من سعر الافتتاح.',
+  BelowOpeningPrice: 'المبلغ أقل من سعر البداية.',
   BelowMinimumIncrement: 'ارتفع السعر قبل وصول مزايدتك — زايد مرة أخرى على السعر الجديد.',
   OutsideWindow: 'المزاد غير مفتوح للمزايدة الآن.',
   // Reachable by anyone who presses the button as the gavel falls, which is the

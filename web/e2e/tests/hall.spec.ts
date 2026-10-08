@@ -95,16 +95,15 @@ test('a clerk runs an auction from the floor', async ({ browser }) => {
       // Opening and reserve are the same figure, so the clerk's single bid both
       // opens the auction and clears the reserve — otherwise the correct outcome
       // is an exhausted ladder and the committee is offered nobody.
-      await page.getByLabel(/سعر الافتتاح/).fill('1000000.00')
+      await page.getByLabel(/سعر البداية/).fill('1000000.00')
       await page.getByLabel('السعر الاحتياطي').fill('1000000.00')
       await page.getByLabel(/الحد الأدنى للمزايدة/).fill('50000.00')
       await page.getByLabel(/^التأمين/).fill('100000.00')
       await page.getByLabel(/سعر الكراسة/).fill('1000.00')
       await page.getByLabel('نسبة السعي %').fill('2.5')
-      await page.getByRole('button', { name: 'حفظ البيانات' }).click()
-
+      // «فحص البيانات» saves what was typed, then checks it.
       await page.getByRole('button', { name: 'فحص البيانات' }).click()
-      await expect(page.getByText('البيانات مكتملة — يمكن إرسال المزاد للاعتماد.')).toBeVisible()
+      await expect(page.getByText(/البيانات مكتملة — يمكن إرسال المزاد للاعتماد/)).toBeVisible()
     })
 
     await test.step('the clerk is put on the floor', async () => {

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
   clock,
-  parseRiyals,
   riyals,
   finishedStages,
   sar,
@@ -109,11 +108,10 @@ function outcome(bid: Submitted, price: LivePrice | null, verdicts: BidVerdict[]
 
 export function BidBox({ auction, session, price, verdicts, participant, onBid }: Props) {
   const sender = useBidSender(auction.id, session, participant)
-  const { busy, problem, setProblem, catcher } = sender
+  const { busy, problem, catcher } = sender
 
   // Signed in, so «إعدادات العرض للزوار» hid nothing: the figures are always sent.
   const minimum = (price?.minimumNextBidMinorUnits ?? auction.minimumNextBidMinorUnits)!
-  const [text, setText] = useState('')
   const [submitted, setSubmitted] = useState<Submitted[]>(() =>
     loadSubmitted(auction.id, session.subject),
   )
@@ -126,32 +124,9 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
   /// the only thing this page holds that points at one.
   const [certificateFor, setCertificateFor] = useState<number | null>(null)
 
-  // Keep the box prefilled with the cheapest winning bid, but never overwrite what
-  // the bidder is typing — the price moves during a war and a box that resets
-  // mid-keystroke costs them the auction.
-  useEffect(() => {
-    setText((current) => (current === '' ? riyals(minimum) : current))
-  }, [minimum])
-
-  const amount = parseRiyals(text)
-  const tooLow = amount !== null && amount < minimum
   const increment = auction.minIncrementMinorUnits!
   const current = price?.priceMinorUnits ?? null
 
-  // One tap per raise, each showing the exact amount it sends. Built on the price
-  // as it stands, so a press always bids above it: the first is the smallest raise
-  // the rules allow, the others jump further for a bidder who wants to stop a war.
-  const quick = [1, 2, 5].map((steps) => ({
-    steps,
-    amount: minimum + (steps - 1) * increment,
-  }))
-
-  // Said against the current price, not as a "minimum next bid" figure to compare
-  // with: a bidder thinks "the price plus at least the increment", so that is what
-  // the refusal says.
-  const tooLowText = current === null
-    ? `يجب ألا يقل المبلغ عن سعر الافتتاح ${sar(auction.openingPriceMinorUnits, 'ar')}.`
-    : `يجب أن يزيد المبلغ على السعر الحالي بـ ${sar(increment, 'ar')} على الأقل.`
   // Only a lifecycle that has ended is closed. "Scheduled" is not Live either, and
   // treating it as closed told an eligible bidder their upcoming auction was over.
   const closed = price !== null && finishedStages.includes(price.status)
@@ -164,17 +139,12 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
   // is what happened before: the bid sat on screen marked "recorded" for ever.
   const alreadyLeading = price?.leaderIsYou === true
 
-  const submit = async (value: number | null = amount) => {
-    if (value === null) {
-      setProblem('أدخل مبلغاً صحيحاً.')
-      return
-    }
+  const submit = async (value: number) => {
     const sent = await sender.send(value)
     if (!sent) return
     // 202, not 200: recorded, not yet judged. The processor's verdict arrives
     // separately, which is why this says "recorded" and not "you are winning".
     setSubmitted((prior) => [sent, ...prior.slice(0, KEEP - 1)])
-    setText('')
     onBid()
   }
 
@@ -193,65 +163,28 @@ export function BidBox({ auction, session, price, verdicts, participant, onBid }
         <>
           {problem && <div className="notice error">{problem}</div>}
 
-          <div className="quick-raise" role="group" aria-label="زيادة سريعة">
-            {quick.map((q) => (
-              <button
-                key={q.steps}
-                className="quick-raise-btn"
-                disabled={busy || alreadyLeading}
-                aria-label={`مزايدة بـ ${riyals(q.amount)}`}
-                onClick={() => void submit(q.amount)}
-              >
-                <span className="quick-raise-step">
-                  {current !== null ? (
-                    <span className="num">+{riyals(q.amount - current)}</span>
-                  ) : q.amount === minimum ? (
-                    'سعر الافتتاح'
-                  ) : (
-                    <>
-                      <span className="num">+{riyals(q.amount - minimum)}</span> على الافتتاح
-                    </>
-                  )}
-                </span>
-                <span className="quick-raise-amount num">{sar(q.amount, 'ar')}</span>
-              </button>
-            ))}
+          {/* One button: the price as it stands plus «زيادة المزايدة» — or the opening
+              price for the first bid. The amount is the service's own next minimum, so
+              what is pressed is what the rules accept. */}
+          <div className="next-bid">
+            <small>مزايدتك التالية</small>
+            <b className="num">{sar(minimum, 'ar')}</b>
+            <small className="muted">
+              {current === null
+                ? 'سعر البداية — أول مزايدة'
+                : <>السعر الحالي {sar(current, 'ar')} + زيادة المزايدة {sar(increment, 'ar')}</>}
+            </small>
           </div>
+          <button
+            className="primary wide big"
+            disabled={busy || alreadyLeading}
+            aria-label={`مزايدة بـ ${riyals(minimum)}`}
+            onClick={() => void submit(minimum)}
+          >
+            {busy ? 'جارٍ الإرسال…' : 'مزايدة'}
+          </button>
 
-          <div className="row" style={{ alignItems: 'flex-end' }}>
-            <label style={{ flex: '1 1 240px', marginBottom: 0 }}>
-              <span>مبلغ آخر (ر.س)</span>
-              <input
-                className="ltr num"
-                inputMode="decimal"
-                value={text}
-                aria-label="مبلغ المزايدة"
-                onChange={(e) => {
-                  setText(e.target.value)
-                  setProblem(null)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !busy && amount !== null && !tooLow) void submit()
-                }}
-              />
-            </label>
-
-            <button
-              className="primary big"
-              disabled={busy || amount === null || tooLow || alreadyLeading}
-              onClick={() => void submit()}
-            >
-              {busy ? 'جارٍ الإرسال…' : 'إرسال المزايدة'}
-            </button>
-          </div>
-
-          {tooLow && (
-            <div className="small" style={{ color: 'var(--danger)', marginTop: 8 }}>
-              {tooLowText}
-            </div>
-          )}
-
-          {alreadyLeading && !tooLow && (
+          {alreadyLeading && (
             <div className="small muted" style={{ marginTop: 8 }}>
               أنت الأعلى بالفعل — لا حاجة للمزايدة حتى يتجاوزك غيرك.
             </div>

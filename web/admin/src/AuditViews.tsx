@@ -71,7 +71,8 @@ function describeEvent(e: SystemEvent): { ar: string; tone: string } {
   return { ar: `${o.ar} — ${purposeAr[e.purpose ?? ''] ?? e.purpose ?? ''}`, tone: o.tone }
 }
 
-const PAGE = 25
+/** The grids' page size, as on every other screen. */
+const PAGE = PAGE_SIZE
 
 /**
  * أحداث النظام — what the platform did by itself, which no member of staff did and
@@ -102,7 +103,6 @@ export function SystemEvents({ session }: { session: Session }) {
       .catch((e) => setError(e instanceof ApiError ? `تعذّر التحميل (${e.status}).` : String(e)))
   }, [client, auctionId, kind, index])
 
-  const pages = Math.max(1, Math.ceil((page?.total ?? 0) / PAGE))
 
   return (
     <div className="card">
@@ -160,15 +160,7 @@ export function SystemEvents({ session }: { session: Session }) {
               </tbody>
             </table>
           </div>
-          <div className="pager">
-            <span className="muted small">
-              <span className="num">{page.total}</span> حدث
-            </span>
-            <span className="grow" />
-            <button className="ghost" disabled={index === 0} onClick={() => setIndex(index - 1)}>السابق</button>
-            <span className="small">صفحة <span className="num">{index + 1}</span> من <span className="num">{pages}</span></span>
-            <button className="ghost" disabled={index >= pages - 1} onClick={() => setIndex(index + 1)}>التالي</button>
-          </div>
+          <Pager page={index} total={page.total} size={PAGE} noun="حدث" onPage={setIndex} />
         </>
       )}
     </div>
@@ -200,7 +192,7 @@ interface BidHistoryPage {
 
 const rejectionAr: Record<string, string> = {
   BelowMinimumIncrement: 'أقل من الحد الأدنى للزيادة',
-  BelowOpeningPrice: 'أقل من سعر الافتتاح',
+  BelowOpeningPrice: 'أقل من سعر البداية',
   SelfOutbid: 'المزايد متصدّر أصلاً',
   DuplicateBidId: 'مزايدة مكررة',
   AuctionClosed: 'بعد إغلاق المزاد',
@@ -243,6 +235,7 @@ export function BidHistory({
   withDecisions = true,
   preview,
   onOpenFull,
+  live = false,
 }: {
   session: Session
   auctionId: string
@@ -254,6 +247,8 @@ export function BidHistory({
    */
   preview?: number
   onOpenFull?: () => void
+  /** While the auction runs: re-read the log every few seconds so new bids appear. */
+  live?: boolean
 }) {
   const audit = useMemo(() => api({ baseUrl: config.auditApi, session }), [session])
   const [page, setPage] = useState<BidHistoryPage | null>(null)
@@ -277,6 +272,18 @@ export function BidHistory({
         .then((r) => setDecisions(r.items.filter((x) => AWARD_ACTIONS[x.action]).reverse()))
         .catch(() => setDecisions(null))
   }, [audit, auctionId, withDecisions, paging.query])
+
+  // A running auction keeps taking bids: refresh in place, without blanking the table.
+  useEffect(() => {
+    if (!live) return
+    const t = window.setInterval(() => {
+      audit
+        .get<BidHistoryPage>(`/audit/auctions/${auctionId}/bids?${paging.query}`)
+        .then(setPage)
+        .catch(() => undefined)
+    }, 3000)
+    return () => window.clearInterval(t)
+  }, [audit, auctionId, live, paging.query])
 
   const nameOf = (id: string) => bidder(id)?.nameAr ?? `${id.slice(0, 8)}…`
   const actorOf = (payload?: string) => {

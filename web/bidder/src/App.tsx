@@ -62,13 +62,17 @@ export function App() {
 
   // The auction in the address, read whenever the address names a different one.
   const auctionId = page === 'auction' ? id : undefined
+  // The auction the address names that turned out not to exist.
+  const [missing, setMissing] = useState<string | null>(null)
   const loadAuction = useCallback(
     async (target: string) => {
       try {
         setOpenAuction(await publicClient.get<AuctionDetail>(`/auctions/${target}`))
         setError(null)
+        setMissing(null)
       } catch (e) {
-        setError(describe(e))
+        if (e instanceof ApiError && e.status === 404) setMissing(target)
+        else setError(describe(e))
       }
     },
     [publicClient],
@@ -154,7 +158,19 @@ export function App() {
   } else if (page === 'profile' && session && isBidder) {
     body = <Profile session={session} onBack={() => navigate('catalog')} />
   } else if (page === 'auction' && id) {
-    if (!openAuction || openAuction.id !== id) {
+    if (missing === id) {
+      body = (
+          // A link to an auction that is not there — an old bookmark, or one from
+          // before the data was reset — says so, rather than a 404 and a spinner.
+          <div className="card empty-state" data-testid="auction-not-found">
+            <h3>المزاد غير موجود</h3>
+            <p className="muted">ربما حُذف أو أن الرابط قديم. اختر المزاد من القائمة.</p>
+            <button className="primary" onClick={() => navigate('catalog')}>
+              جميع المزادات
+            </button>
+          </div>
+        )
+    } else if (!openAuction || openAuction.id !== id) {
       body = <p className="muted">…</p>
     } else if (sub === 'room' && session) {
       body = (
@@ -204,7 +220,7 @@ export function App() {
           <div>منصة الأمانة</div>
           <strong>مزادات الأراضي</strong>
           <div className="sidebar-foot">
-            الإصدار الأول <span className="pill teal plain">MVP</span>
+            الإصدار الأول <span className="pill teal plain">تجريبي</span>
           </div>
         </>
       }

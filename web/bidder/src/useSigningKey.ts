@@ -10,8 +10,9 @@ import type { SigningKey } from './types'
  *
  *   - It lives in a ref, never in state that could end up in a devtools snapshot of
  *     a rendered tree, and never in localStorage or sessionStorage.
- *   - It is fetched once per auction, on the first bid, not at page load — a tab left
- *     open on the catalogue never holds one.
+ *   - It is fetched once per auction, when the bid box for a live auction the bidder
+ *     is eligible in appears — not at page load; a tab left open on the catalogue
+ *     never holds one.
  *   - `forget()` drops it, and signing out drops it with the rest of the session.
  *
  * It is still a secret in a browser's heap, which is a real exposure: an XSS on this

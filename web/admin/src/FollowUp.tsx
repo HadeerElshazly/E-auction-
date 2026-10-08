@@ -103,21 +103,12 @@ interface Props {
   mode?: 'committee' | 'settlement'
 }
 
-/** A result waiting for the committee: who the processor put forward, at what price. */
-interface PendingResult {
-  id: string
-  nameAr: string
-  candidateId: string | null
-  amountMinorUnits: number | null
-}
 
 export function FollowUp({
   session,
   canRecord,
   canDecide,
-  committeeUserId,
   runDecision,
-  onOpenAuction,
   mode = 'settlement',
 }: Props) {
   const committee = mode === 'committee'
@@ -126,13 +117,10 @@ export function FollowUp({
   const documents = useMemo(() => api({ baseUrl: config.documentsApi, session }), [session])
 
   const [awards, setAwards] = useState<FollowUpEntry[] | null>(null)
-  const [pending, setPending] = useState<PendingResult[]>([])
-  const [reasons, setReasons] = useState<Record<string, string>>({})
   const [deposits, setDeposits] = useState<Deposit[] | null>(null)
   // Each list paged by its service, ten at a time; the totals are the services'.
   const awardsPage = usePage()
   const depositsPage = usePage()
-  const pendingPage = usePage()
   const [totals, setTotals] = useState({ awards: 0, deposits: 0, pending: 0, overdue: 0 })
   // «التسويات والإفراغ» in two tabs, so neither list pushes the other off the screen.
   const [tab, setTab] = useState<'awards' | 'deposits'>('awards')
@@ -155,32 +143,11 @@ export function FollowUp({
       setDeposits(d.items.map((x) => ({ ...x.application, auctionNameAr: x.auctionNameAr })))
       setError(null)
 
-      // Results awaiting the committee. The list gives the auctions; each one's
-      // candidate and amount come from the auction itself.
-      const waiting = await admin.get<{ items: Array<{ id: string; nameAr: string }>; total: number }>(
-        `/auctions?status=PendingAward&${pendingPage.query}`,
-      )
-      setTotals({ awards: a.total, deposits: d.total, pending: waiting.total, overdue: a.overdue })
-      setPending(
-        await Promise.all(
-          waiting.items.map(async (x) => {
-            const full = await admin.get<{
-              pendingCandidateBidderId: string | null
-              pendingCandidateAmountMinorUnits: number | null
-            }>(`/auctions/${x.id}`)
-            return {
-              id: x.id,
-              nameAr: x.nameAr,
-              candidateId: full.pendingCandidateBidderId,
-              amountMinorUnits: full.pendingCandidateAmountMinorUnits,
-            }
-          }),
-        ),
-      )
+      setTotals({ awards: a.total, deposits: d.total, pending: 0, overdue: a.overdue })
     } catch (e) {
       setError(describe(e))
     }
-  }, [admin, participant, awardsPage.query, depositsPage.query, pendingPage.query])
+  }, [admin, participant, awardsPage.query, depositsPage.query])
 
   useEffect(() => {
     void load()
@@ -206,7 +173,6 @@ export function FollowUp({
   // through its staff lookup — the committee and operators read this page too.
   const bidder = useBidders(session, [
     ...(awards?.map((a) => a.award.bidderId) ?? []),
-    ...pending.map((p) => p.candidateId),
   ])
 
   const overdue = totals.overdue
@@ -235,95 +201,6 @@ export function FollowUp({
         <div className="notice error">
           {overdue === 1 ? 'ترسية واحدة متعثرة' : `${overdue} ترسيات متعثرة`} — تجاوزت مهلة السداد
           دون سداد كامل، وتنتظر مراجعة يدوية.
-        </div>
-      )}
-
-      {committee && pending.length === 0 && (
-        <div className="card empty-state">
-          <h3>لا توجد نتائج بانتظار قرار اللجنة</h3>
-          <p className="muted">تظهر هنا المزادات فور إغلاقها وترشيح أعلى مزايد فيها.</p>
-        </div>
-      )}
-
-      {committee && pending.length > 0 && (
-        <div className="card" data-testid="pending-decisions">
-          <div className="section-head">
-            <h2>بانتظار قرار لجنة الترسية</h2>
-            <span className="pill wait">{totals.pending}</span>
-          </div>
-          <p className="lede">
-            نتائج أُغلقت ورشّح المعالج أعلى مزايد فيها. تأكيد الترسية يطلب التحقق بالرمز؛ رفض النتيجة
-            يتطلب سبباً ولا ينقلها إلى المزايد التالي.
-          </p>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>المزاد</th>
-                  <th>المرشّح</th>
-                  <th>المبلغ</th>
-                  <th>{canDecide ? 'القرار' : ''}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pending.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      <div className="strong">{p.nameAr}</div>
-                      {onOpenAuction && (
-                        <button className="ghost small" onClick={() => onOpenAuction(p.id)}>
-                          فتح المزاد
-                        </button>
-                      )}
-                    </td>
-                    <td>{p.candidateId ? bidder(p.candidateId)?.nameAr ?? '…' : '—'}</td>
-                    <td className="num">{p.amountMinorUnits != null ? sar(p.amountMinorUnits, 'ar') : '—'}</td>
-                    <td>
-                      {canDecide ? (
-                        <div className="decision-cell">
-                          <button
-                            className="primary"
-                            disabled={busy || !p.candidateId}
-                            onClick={() =>
-                              void decide(() =>
-                                admin.post(`/auctions/${p.id}/award`, { committeeUserId }),
-                              )
-                            }
-                          >
-                            تأكيد الترسية
-                          </button>
-                          <input
-                            placeholder="سبب رفض النتيجة"
-                            aria-label={`سبب رفض نتيجة ${p.nameAr}`}
-                            value={reasons[p.id] ?? ''}
-                            onChange={(e) => setReasons({ ...reasons, [p.id]: e.target.value })}
-                          />
-                          <button
-                            className="danger"
-                            disabled={busy || !(reasons[p.id] ?? '').trim()}
-                            onClick={() => {
-                              if (!window.confirm('رفض النتيجة يجعل المزاد غير مُرسى ولا ينتقل للمزايد التالي. متابعة؟'))
-                                return
-                              void decide(() =>
-                                admin.post(`/auctions/${p.id}/result/reject`, {
-                                  reason: (reasons[p.id] ?? '').trim(),
-                                }),
-                              )
-                            }}
-                          >
-                            رفض النتيجة
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="muted small">قرار لجنة الترسية</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <Pager page={pendingPage.page} total={totals.pending} noun="نتيجة" onPage={pendingPage.setPage} />
         </div>
       )}
 

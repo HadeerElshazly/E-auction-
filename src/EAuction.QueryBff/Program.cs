@@ -166,10 +166,14 @@ app.MapGet("/staff/leaders", (CatalogueState catalogue) =>
 
 // «التوضيحات العامة» (الخاصية 10): what staff published, after approval, for
 // everyone reading the auction — anonymous, like the auction itself.
-app.MapGet("/auctions/{id:guid}/clarifications", (Guid id, HttpContext http, Clarifications store, PublicVisibilityState visibility) =>
-    visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.Clarifications)
-        ? Results.Ok(new { items = Array.Empty<Clarification>(), signInRequired = true })
-        : Results.Ok(new { items = store.For(id), signInRequired = false })).AllowAnonymous();
+app.MapGet("/auctions/{id:guid}/clarifications", (Guid id, int? skip, int? take, HttpContext http, Clarifications store, PublicVisibilityState visibility) =>
+{
+    if (visibility.For(http) is { } visitor && !visitor.Shows(PublicFields.Clarifications))
+        return Results.Ok(new { total = 0, items = Array.Empty<Clarification>(), signInRequired = true });
+    var slice = Slice.From(skip, take, Slice.MaxTake);
+    var all = store.For(id);
+    return Results.Ok(new { total = all.Count, skip = slice.Skip, take = slice.Take, items = slice.Of(all), signInRequired = false });
+}).AllowAnonymous();
 
 app.MapGet("/auctions/{id:guid}", (Guid id, HttpContext http, CatalogueState catalogue, PublicVisibilityState visibility) =>
     catalogue.TryGet(id, out var a)

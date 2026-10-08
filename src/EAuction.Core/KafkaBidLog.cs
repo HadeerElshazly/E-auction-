@@ -84,6 +84,25 @@ public sealed class KafkaBidLog : IBidLog
         _verifiedTopics[topic] = true;
     }
 
+    private IAdminClient? _warmer;
+
+    /// <summary>
+    /// Keeps the produce path ready for the auctions given: a metadata request on
+    /// the producer's own client, so its broker connection stays open and it already
+    /// knows each topic's leader. Without it the first bid after a quiet spell pays
+    /// for reconnecting and looking the topic up — a second or more, which a bidder
+    /// sees as a button that hangs.
+    /// </summary>
+    public void Warm(IEnumerable<Guid> auctionIds)
+    {
+        _warmer ??= new DependentAdminClientBuilder(_producer.Handle).Build();
+        foreach (var id in auctionIds)
+        {
+            try { _warmer.GetMetadata(TopicFor(id), TimeSpan.FromSeconds(5)); }
+            catch (KafkaException) { /* the next round tries again */ }
+        }
+    }
+
     public async ValueTask<long> AppendAsync(
         Guid auctionId, ReadOnlyMemory<byte> frame, CancellationToken ct)
     {
@@ -168,6 +187,7 @@ public sealed class KafkaBidLog : IBidLog
 
     public ValueTask DisposeAsync()
     {
+        _warmer?.Dispose();
         _producer.Flush(TimeSpan.FromSeconds(10));
         _producer.Dispose();
         return ValueTask.CompletedTask;

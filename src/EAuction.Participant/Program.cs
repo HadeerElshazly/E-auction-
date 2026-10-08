@@ -699,15 +699,18 @@ app.MapPost("/auctions/{auctionId:guid}/inquiries", async (
 
 // The bidder's own questions on one auction, with the private replies.
 app.MapGet("/auctions/{auctionId:guid}/inquiries/mine", async (
-    HttpContext http, Guid auctionId, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
+    HttpContext http, Guid auctionId, int? skip, int? take, IDbContextFactory<ParticipantDbContext> f, CancellationToken ct) =>
 {
     var subject = http.User.SubjectId();
+    var slice = Slice.From(skip, take, Slice.MaxTake);
     await using var db = await f.CreateDbContextAsync(ct);
-    var rows = await db.Inquiries.AsNoTracking()
-        .Where(i => i.AuctionId == auctionId && i.BidderId == subject)
+    var mine = db.Inquiries.AsNoTracking().Where(i => i.AuctionId == auctionId && i.BidderId == subject);
+    var total = await mine.CountAsync(ct);
+    var rows = await mine
         .OrderByDescending(i => i.AskedAt)
+        .Skip(slice.Skip).Take(slice.Take)
         .ToListAsync(ct);
-    return Results.Ok(new { items = rows.Select(InquiryResponse.Mine) });
+    return Results.Ok(new { total, skip = slice.Skip, take = slice.Take, items = rows.Select(InquiryResponse.Mine) });
 }).RequireAuthorization(Policies.Bidder);
 
 // The bidder's own questions across every auction, newest first, with the auction's

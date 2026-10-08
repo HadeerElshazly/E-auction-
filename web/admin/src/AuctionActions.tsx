@@ -186,24 +186,24 @@ export function Reoffer({
               النزول عن السعر الاحتياطي. يبقى هذا المزاد وسجله كما انتهى.
             </p>
             <div className="kv">
-              <span>سعر الافتتاح السابق</span>
+              <span>سعر البداية السابق</span>
               <b className="num">{sar(auction.openingPriceMinorUnits, 'ar')}</b>
             </div>
             <label style={{ display: 'block', marginTop: 12 }}>
               <span>
-                سعر الافتتاح الجديد <span className="muted">(ر.س)</span>
+                سعر البداية الجديد <span className="muted">(ر.س)</span>
               </span>
               <input
                 className="ltr num"
                 inputMode="decimal"
-                aria-label="سعر الافتتاح الجديد"
+                aria-label="سعر البداية الجديد"
                 value={price}
                 placeholder={riyals(auction.openingPriceMinorUnits, 'en')}
                 onChange={(e) => setPrice(e.target.value)}
               />
             </label>
             {minor != null && !valid && (
-              <p className="notice error small">يجب أن يكون السعر الجديد أقل من سعر الافتتاح السابق.</p>
+              <p className="notice error small">يجب أن يكون السعر الجديد أقل من سعر البداية السابق.</p>
             )}
             <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
               <button onClick={() => setOpen(false)}>تراجع</button>
@@ -305,6 +305,37 @@ export function ReviewDecision({
           </div>
         </Dialog>
       )}
+    </div>
+  )
+}
+
+/**
+ * «إرسال للاعتماد» — the preparer's last step, in the side box. The service checks
+ * the auction is complete and says what is missing if it is not.
+ */
+export function SubmitForApproval({
+  auction,
+  client,
+  busy,
+  onAct,
+}: {
+  auction: Auction
+  client: Api
+  busy: boolean
+  onAct: (work: () => Promise<unknown>) => Promise<void>
+}) {
+  return (
+    <div className="review-decision">
+      <button
+        className="primary wide"
+        disabled={busy}
+        onClick={() => void onAct(() => client.post(`/auctions/${auction.id}/submit`))}
+      >
+        إرسال للاعتماد
+      </button>
+      <p className="box-help" style={{ margin: 0 }}>
+        احفظ التعديلات أولاً. يُرسل المزاد إلى لجنة الترسية لاعتماده.
+      </p>
     </div>
   )
 }

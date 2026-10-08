@@ -120,6 +120,17 @@ public sealed class CatcherState(byte[] bidderMasterKey)
     public void UpdateCurrentPrice(Guid auctionId, long price) =>
         _currentPrice[auctionId] = price;
 
+    /// <summary>
+    /// Auctions taking bids now or about to: from shortly before the start to well
+    /// after the scheduled end, since late bids extend it.
+    /// </summary>
+    public IEnumerable<Guid> AuctionsOpenAround(DateTimeOffset now) =>
+        _auctions.Values
+            .Where(a => !_cancelled.ContainsKey(a.AuctionId)
+                && a.StartsAt - TimeSpan.FromMinutes(10) <= now
+                && now <= a.EndsAt + TimeSpan.FromHours(1))
+            .Select(a => a.AuctionId);
+
     public bool TryGetAuction(Guid id, out AuctionDefinition auction) =>
         _auctions.TryGetValue(id, out auction!);
 

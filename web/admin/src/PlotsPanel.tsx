@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { FACINGS, Icon, LAND_USES, PlotMap, facingAr, landUseAr, type Api } from '@eauction/shared'
+import { FACINGS, Icon, LAND_USES, PlotMap, type Api } from '@eauction/shared'
 import type { Auction } from './types'
 
 type Plot = Auction['plots'][number]
@@ -202,7 +202,7 @@ export function PlotsPanel({
     <div className="row-actions">
       {plot && (
         <button className="small" onClick={() => setShown(true)} data-testid="plot-details">
-          تفاصيل
+          عرض الموقع
         </button>
       )}
       {canEdit && (
@@ -232,37 +232,26 @@ export function PlotsPanel({
   )
 }
 
-/** «تفاصيل» — everything recorded about the plot, with its place on the map. */
+/** «عرض الموقع» — where the plot is: the map and its coordinates. Its figures are on the page. */
 function PlotDetails({ plot, onClose }: { plot: Plot; onClose: () => void }) {
-  const metres = (v: number | null) => (v != null ? <><span className="num">{v}</span> متر</> : 'غير محدد')
   return (
-    <Modal title={`قطعة رقم ${plot.plotNumber}`} sub="تفاصيل القطعة" onClose={onClose}>
-      <div className="spec-grid" style={{ marginTop: 0 }}>
-        <div><small>رقم القطعة</small><b className="num">{plot.plotNumber}</b></div>
-        <div><small>المساحة</small><b><span className="num">{plot.areaSqm}</span> م²</b></div>
-        <div><small>الاستخدام</small><b>{landUseAr(plot.landUse)}</b></div>
-        <div><small>عرض الشارع</small><b>{metres(plot.streetWidthMeters)}</b></div>
-        <div><small>الواجهة</small><b>{facingAr(plot.facing)}</b></div>
-        <div><small>طول الواجهة</small><b>{metres(plot.frontageMeters)}</b></div>
-        <div>
-          <small>الإحداثيات</small>
-          <b>{located(plot) ? <span className="ltr num">{plot.latitude}, {plot.longitude}</span> : 'غير محدد'}</b>
-        </div>
-      </div>
-      {plot.descriptionAr && (
-        <>
-          <h3>الوصف</h3>
-          <p style={{ marginTop: 0 }}>{plot.descriptionAr}</p>
-        </>
-      )}
-      {located(plot) && (
-        <div style={{ marginTop: 14 }}>
-          <PlotMap
-            points={[{ lat: Number(plot.latitude), lng: Number(plot.longitude), label: `قطعة ${plot.plotNumber}` }]}
-            height={260}
-          />
-        </div>
-      )}
+    <Modal title="موقع القطعة" sub={`قطعة رقم ${plot.plotNumber}`} onClose={onClose}>
+        {located(plot) ? (
+          <>
+            <PlotMap points={[{ lat: Number(plot.latitude), lng: Number(plot.longitude), label: `قطعة ${plot.plotNumber}` }]} height={300} />
+            <div className="spec-grid" style={{ marginTop: 14 }}>
+              <div><small>خط العرض</small><b className="num ltr">{plot.latitude}</b></div>
+              <div><small>خط الطول</small><b className="num ltr">{plot.longitude}</b></div>
+            </div>
+            <p className="small" style={{ margin: 0 }}>
+              <a href={`https://www.google.com/maps?q=${plot.latitude},${plot.longitude}`} target="_blank" rel="noreferrer noopener">
+                فتح الموقع في خرائط Google ↗
+              </a>
+            </p>
+          </>
+        ) : (
+          <p className="muted">لم يُحدَّد موقع القطعة على الخريطة بعد.</p>
+        )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
         <button onClick={onClose}>إغلاق</button>
       </div>

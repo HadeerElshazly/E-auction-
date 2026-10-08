@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageHead,ApiError, api, config, timestamp as when, type Session } from '@eauction/shared'
+import { ApiError, PAGE_SIZE, PageHead, Pager, api, config, timestamp as when, type Session } from '@eauction/shared'
 import { BidHistoryScreen, SystemEvents, WithNames } from './AuditViews'
 
 /**
@@ -175,7 +175,6 @@ function StaffTrail({ session }: { session: Session }) {
   // changes, so a narrower search never opens on an empty page 7.
   const [pageIndex, setPageIndex] = useState(0)
   useEffect(() => setPageIndex(0), [action, subject])
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   /** Bumped by تحديث, so a manual refresh re-runs the fetch below. */
   const [refresh, setRefresh] = useState(0)
@@ -307,7 +306,7 @@ function StaffTrail({ session }: { session: Session }) {
         </p>
       ) : (
         <>
-          <Pager index={pageIndex} pages={pages} total={total} onGo={setPageIndex} />
+          <Pager page={pageIndex} total={total} noun="إجراء" onPage={setPageIndex} />
           <div className="table-scroll">
             <table data-testid="audit-table">
               <thead>
@@ -351,45 +350,13 @@ function StaffTrail({ session }: { session: Session }) {
               </tbody>
             </table>
           </div>
-          {pages > 1 && <Pager index={pageIndex} pages={pages} total={total} onGo={setPageIndex} />}
+          <Pager page={pageIndex} total={total} noun="إجراء" onPage={setPageIndex} />
         </>
       )}
     </div>
   )
 }
 
-const PAGE_SIZE = 25
-
-/** Newest first: page 1 is the latest PAGE_SIZE actions. */
-function Pager({
-  index,
-  pages,
-  total,
-  onGo,
-}: {
-  index: number
-  pages: number
-  total: number
-  onGo: (i: number) => void
-}) {
-  const from = total === 0 ? 0 : index * PAGE_SIZE + 1
-  const to = Math.min(total, (index + 1) * PAGE_SIZE)
-  return (
-    <div className="pager" data-testid="audit-pager">
-      <span className="muted small">
-        <span className="num">{from}–{to}</span> من <span className="num">{total}</span> إجراء
-      </span>
-      <span className="grow" />
-      <button className="ghost" disabled={index === 0} onClick={() => onGo(0)} aria-label="الصفحة الأولى">«</button>
-      <button className="ghost" disabled={index === 0} onClick={() => onGo(index - 1)}>السابق</button>
-      <span className="small">
-        صفحة <span className="num">{index + 1}</span> من <span className="num">{pages}</span>
-      </span>
-      <button className="ghost" disabled={index >= pages - 1} onClick={() => onGo(index + 1)}>التالي</button>
-      <button className="ghost" disabled={index >= pages - 1} onClick={() => onGo(pages - 1)} aria-label="الصفحة الأخيرة">»</button>
-    </div>
-  )
-}
 
 /**
  * The verdict, which is the point of the screen.

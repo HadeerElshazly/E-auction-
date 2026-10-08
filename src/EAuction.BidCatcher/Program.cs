@@ -218,7 +218,10 @@ app.MapPost("/bids", async (HttpContext http, CancellationToken ct) =>
             clerk ?? Guid.Empty);
 
         // acks=all: this does not return until the bid is durable (D-11).
+        var appending = System.Diagnostics.Stopwatch.StartNew();
         var offset = await bidLog.AppendAsync(BidFrame.AuctionId(frame.Span), frame, ct);
+        if (appending.ElapsedMilliseconds > 200)
+            app.Logger.LogWarning("Slow bid append: {Ms} ms to offset {Offset}.", appending.ElapsedMilliseconds, offset);
 
         var receipt = BuildReceipt(frame.Span, offset, receiptKey);
 
@@ -323,6 +326,35 @@ app.MapGet("/auctions/{auctionId:guid}/bids/{offset:long}/certificate", async (
         ? Results.Ok(certificate)
         : Results.Forbid();
 }).RequireAuthorization();
+
+// Keep the bid path warm, so the first bid after a quiet spell is as quick as the
+// rest: the token-signing keys fetched once at start (the first authenticated
+// request would otherwise fetch them), and every open auction's topic touched on the
+// producer's own connection every few seconds.
+app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(async () =>
+{
+    var stopping = app.Lifetime.ApplicationStopping;
+    try
+    {
+        var jwt = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<
+            Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerOptions>>()
+            .Get(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme);
+        if (jwt.ConfigurationManager is { } config) await config.GetConfigurationAsync(stopping);
+    }
+    catch (Exception e) when (e is not OperationCanceledException)
+    {
+        app.Logger.LogWarning(e, "Could not prefetch the token-signing keys; the first bid will.");
+    }
+
+    if (bidLog is not KafkaBidLog kafka) return;
+    while (!stopping.IsCancellationRequested)
+    {
+        try { kafka.Warm(state.AuctionsOpenAround(DateTimeOffset.UtcNow)); }
+        catch (Exception e) { app.Logger.LogDebug(e, "Bid path warm-up failed; retrying."); }
+        try { await Task.Delay(TimeSpan.FromSeconds(15), stopping); }
+        catch (OperationCanceledException) { return; }
+    }
+}));
 
 app.Run();
 

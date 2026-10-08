@@ -90,16 +90,15 @@ test('an auction runs from draft to award through the portals', async ({ browser
       await page.getByLabel('بداية المزاد').fill(localInput(startsAt))
       await page.getByLabel('نهاية المزاد').fill(localInput(endsAt))
 
-      await page.getByLabel(/سعر الافتتاح/).fill(OPENING)
+      await page.getByLabel(/سعر البداية/).fill(OPENING)
       await page.getByLabel('السعر الاحتياطي').fill(RESERVE)
       await page.getByLabel(/الحد الأدنى للمزايدة/).fill(INCREMENT)
       await page.getByLabel(/^التأمين/).fill('100000.00')
       await page.getByLabel(/سعر الكراسة/).fill('1000.00')
       await page.getByLabel('نسبة السعي %').fill('2.5')
-      await page.getByRole('button', { name: 'حفظ البيانات' }).click()
-
+      // «فحص البيانات» saves what was typed, then checks it.
       await page.getByRole('button', { name: 'فحص البيانات' }).click()
-      await expect(page.getByText('البيانات مكتملة — يمكن إرسال المزاد للاعتماد.')).toBeVisible()
+      await expect(page.getByText(/البيانات مكتملة — يمكن إرسال المزاد للاعتماد/)).toBeVisible()
 
       await page.getByRole('button', { name: 'إرسال للاعتماد' }).click()
       await expect(page.getByText('بانتظار الاعتماد').first()).toBeVisible()

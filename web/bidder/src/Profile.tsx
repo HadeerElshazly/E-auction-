@@ -100,8 +100,7 @@ export function Profile({ session, onBack }: Props) {
         {bidder === null && (
           <>
             <div className="notice info">
-              لم تُسجَّل بعد كمزايد. التسجيل يربط هويتك الوطنية من نفاذ بحسابك، ويتطلب
-              تأكيد هويتك.
+              لم تُسجَّل بعد كمزايد. التسجيل يربط هويتك الوطنية من نفاذ بحسابك.
             </div>
             <button
               className="primary"

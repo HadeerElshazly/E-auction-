@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, Icon, PageHead, Pager, api, config, riyals, usePage, type Session } from '@eauction/shared'
+import { ApiError, Icon, PageHead, Pager, api, config, riyals, stageLabel, usePage, type Session } from '@eauction/shared'
 import { useBidders } from './winners'
 import { BidHistory } from './AuditViews'
 
@@ -212,9 +212,7 @@ export function Committee({
                   <span className="num">{riyals(w.amountMinorUnits, 'ar')}</span>
                 </div>
               </div>
-              <span className={`pill ${a.status === 'Settled' ? 'done' : 'live'}`}>
-                {a.status === 'Settled' ? 'تمت التسوية' : 'ترسية معتمدة'}
-              </span>
+              <span className={`pill ${stageLabel(a.status).tone}`}>{stageLabel(a.status).ar}</span>
             </div>
             <hr className="divider" />
             <div className="inline-actions">
@@ -237,7 +235,7 @@ export function Committee({
               </button>
               {a.status === 'Awarded' && !w.signedLetterDocumentId && (
                 <button className="small" disabled={busy} onClick={() => setSignedFor(a)}>
-                  رفع الخطاب الموقع
+                  رفع الخطاب الموقّع
                 </button>
               )}
               {a.status === 'Awarded' && w.signedLetterDocumentId && !w.winnerNotifiedAt && (
@@ -245,7 +243,7 @@ export function Committee({
                   إشعار الفائز
                 </button>
               )}
-              {w.signedLetterDocumentId && <span className="pill live">الخطاب الموقع محفوظ</span>}
+              {w.signedLetterDocumentId && <span className="pill live">الخطاب الموقّع محفوظ</span>}
               {a.status === 'Awarded' && w.winnerNotifiedAt && (
                 <button
                   className="primary small"
@@ -348,7 +346,7 @@ function AwardLetter({ entry, winner, onClose }: { entry: Awarded; winner: strin
   )
 }
 
-/** إرفاق الخطاب الموقع — the prototype's dialog: a file, or none for a placeholder. */
+/** إرفاق الخطاب الموقّع — the prototype's dialog: a file, or none for a placeholder. */
 function SignedLetter({
   busy,
   onClose,
@@ -361,11 +359,11 @@ function SignedLetter({
   const [file, setFile] = useState<File | null>(null)
   const tooBig = !!file && file.size > 5 * 1024 * 1024
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="إرفاق الخطاب الموقع" onClick={onClose}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="إرفاق الخطاب الموقّع" onClick={onClose}>
       <div className="modal narrow" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div className="grow">
-            <h2>إرفاق الخطاب الموقع</h2>
+            <h2>إرفاق الخطاب الموقّع</h2>
           </div>
           <button className="icon-btn" aria-label="إغلاق" onClick={onClose}>
             <Icon name="close" size={18} />
@@ -376,7 +374,7 @@ function SignedLetter({
           <input
             type="file"
             accept=".pdf,.png,.jpg,.jpeg"
-            aria-label="ملف الخطاب الموقع"
+            aria-label="ملف الخطاب الموقّع"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             style={{ width: '100%', marginTop: 8 }}
           />

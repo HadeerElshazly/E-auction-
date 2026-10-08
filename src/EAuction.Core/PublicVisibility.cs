@@ -51,7 +51,7 @@ public static class PublicFields
     public static readonly IReadOnlyList<PublicField> Configurable =
     [
         new(Schedule, "مواعيد المزاد", "موعد البدء والإغلاق والعدّ التنازلي.", PublicByDefault: true),
-        new(OpeningPrice, "سعر الافتتاح", "السعر الذي تبدأ منه المزايدة.", PublicByDefault: false),
+        new(OpeningPrice, "سعر البداية", "السعر الذي تبدأ منه المزايدة.", PublicByDefault: false),
         new(MinIncrement, "زيادة المزايدة", "المبلغ الذي تضيفه كل مزايدة على السعر الحالي.", PublicByDefault: false),
         new(LivePrice, "السعر الحالي وعدد المزايدات", "أعلى مزايدة أثناء المزاد وبعده، والحد الأدنى للمزايدة التالية.", PublicByDefault: false),
         new(Fees, "الرسوم", "نسبة السعي، وقيمة كراسة الشروط إن لم تكن مجانية.", PublicByDefault: false),

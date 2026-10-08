@@ -199,7 +199,7 @@ function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id:
         )}
         <span className={`pill ${s.tone} lot-badge`}>{s.ar}</span>
         <span className="lot-number">
-          {a.plotCount} قطعة · {a.channel === 'Onsite' ? 'حضوري' : 'إلكتروني'}
+          {a.channel === 'Onsite' ? 'مزاد حضوري' : 'مزاد إلكتروني'}
         </span>
       </button>
 
@@ -209,7 +209,6 @@ function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id:
             {a.nameAr}
           </button>
         </h3>
-        {a.nameEn && <p className="lot-subtitle ltr">{a.nameEn}</p>}
         <div className="lot-specs">
           <span>
             <Icon name="area" size={15} />
@@ -224,7 +223,7 @@ function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id:
         {(bidding ? a.priceMinorUnits : a.openingPriceMinorUnits) == null ? (
           // Hidden from a visitor by «إعدادات العرض للزوار».
           <div className="lot-price locked-value">
-            <Icon name="lock" size={16} /> يظهر بعد تسجيل الدخول
+            <Icon name="lock" size={16} /> بعد تسجيل الدخول
           </div>
         ) : (
           <div className="lot-price">
@@ -235,7 +234,16 @@ function LotCard({ auction: a, onOpen }: { auction: AuctionSummary; onOpen: (id:
         <div className="card-bottom">
           <div className="time-text">
             {t.caption}
-            {t.clock && <b className="num">{t.clock}</b>}
+            {t.clock ? (
+              <b className="num">{t.clock}</b>
+            ) : (
+              ticking && a.hidden.includes('schedule') && (
+                // The schedule is kept from visitors: said, not left blank.
+                <b className="locked-value">
+                  <Icon name="lock" size={14} /> بعد تسجيل الدخول
+                </b>
+              )
+            )}
           </div>
           <button className="small" onClick={() => onOpen(a.id)}>
             تفاصيل المزاد

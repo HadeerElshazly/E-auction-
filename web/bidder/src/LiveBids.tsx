@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { PageHead, api, config, parseRiyals, riyals, sar, when, type Api, type Session } from '@eauction/shared'
+import { PageHead, api, config, riyals, sar, when, type Api, type Session } from '@eauction/shared'
 import type { AuctionDetail, AuctionSummary, LivePrice, Subscription } from './types'
 import { useBidSender } from './useBidSender'
 import { recordSubmitted } from './BidBox'
@@ -22,24 +22,16 @@ interface Props {
  */
 export function LiveBids({ session, auctions, onOpenRoom, onBack }: Props) {
   const participant = useMemo(() => api({ baseUrl: config.participantApi, session }), [session])
+  // One request, unpaged: a bidder qualifies for a handful of auctions, and this is
+  // the screen bids are made from — nothing extra between them and the price.
   const [eligible, setEligible] = useState<Set<string> | null>(null)
 
   useEffect(() => {
     participant
-      // Each row wraps the subscription; running vs upcoming comes from the catalogue.
       .get<{ items: Array<{ subscription: Subscription }> }>(
-        `/bidders/${session.subject}/subscriptions`,
+        `/bidders/${session.subject}/subscriptions?eligibility=Accepted`,
       )
-      .then((r) =>
-        setEligible(
-          new Set(
-            r.items
-              .map((x) => x.subscription)
-              .filter((s) => s.status === 'Eligible')
-              .map((s) => s.auctionId),
-          ),
-        ),
-      )
+      .then((r) => setEligible(new Set(r.items.map((x) => x.subscription.auctionId))))
       .catch(() => setEligible(new Set()))
   }, [participant, session.subject])
 
@@ -48,7 +40,7 @@ export function LiveBids({ session, auctions, onOpenRoom, onBack }: Props) {
   const running = mine.filter((a) => a.status === 'Live')
   const upcoming = mine
     .filter((a) => a.status === 'Scheduled')
-    .sort((x, y) => x.startsAt!.localeCompare(y.startsAt!))
+    .sort((x, y) => (x.startsAt ?? '').localeCompare(y.startsAt ?? ''))
 
   return (
     <>
@@ -156,20 +148,10 @@ function LiveCard({
   const closing = live && seconds <= 120
   const leading = price?.leaderIsYou === true
 
-  const raises = increment === null ? [] : [1, 2, 5].map((k) => minimum + (k - 1) * increment)
-
-  // Any other amount, typed on the card. Checked against the price the card shows
-  // so an obviously low figure is caught here rather than sent and refused.
-  const [text, setText] = useState('')
-  const typed = parseRiyals(text)
-  const typedTooLow = typed !== null && typed < minimum
-
+  // One button: the price plus «زيادة المزايدة», or the opening price for the first bid.
   const bid = async (amount: number) => {
     const sent = await sender.send(amount)
-    if (sent) {
-      recordSubmitted(summary.id, session.subject, sent)
-      setText('')
-    }
+    if (sent) recordSubmitted(summary.id, session.subject, sent)
   }
 
   const canBid = live && !leading && !sender.busy
@@ -210,54 +192,21 @@ function LiveCard({
 
       {sender.problem && <div className="notice error small">{sender.problem}</div>}
 
-      <div className="live-card-raises" role="group" aria-label={`زيادة سريعة — ${summary.nameAr}`}>
-        {raises.map((amount, i) => (
-          <button
-            key={amount}
-            className="quick-raise-btn"
-            disabled={!canBid}
-            aria-label={`مزايدة بـ ${riyals(amount)} على ${summary.nameAr}`}
-            onClick={() => void bid(amount)}
-          >
-            <span className="quick-raise-step">
-              {current === null && i === 0 ? 'أول مزايدة' : <span className="num">+{riyals(amount - (current ?? minimum))}</span>}
-            </span>
-            <span className="quick-raise-amount num">{sar(amount, 'ar')}</span>
-          </button>
-        ))}
+      <div className="next-bid compact">
+        <small>مزايدتك التالية</small>
+        <b className="num">{sar(minimum, 'ar')}</b>
+        {increment !== null && current !== null && (
+          <small className="muted">+ زيادة المزايدة {sar(increment, 'ar')}</small>
+        )}
       </div>
-
-      <div className="live-card-custom">
-        <input
-          className="ltr num"
-          inputMode="decimal"
-          value={text}
-          placeholder={`مبلغ آخر — ${riyals(minimum)} فأكثر`}
-          aria-label={`مبلغ المزايدة على ${summary.nameAr}`}
-          disabled={!live}
-          onChange={(e) => {
-            setText(e.target.value)
-            sender.setProblem(null)
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && canBid && typed !== null && !typedTooLow) void bid(typed)
-          }}
-        />
-        <button
-          className="primary"
-          disabled={!canBid || typed === null || typedTooLow}
-          onClick={() => typed !== null && void bid(typed)}
-        >
-          زايد
-        </button>
-      </div>
-      {typedTooLow && (
-        <div className="small" style={{ color: 'var(--danger)', marginTop: -4 }}>
-          {current === null
-            ? 'أقل من سعر الافتتاح.'
-            : `يجب أن يزيد على السعر الحالي بـ ${sar(increment ?? 0, 'ar')} على الأقل.`}
-        </div>
-      )}
+      <button
+        className="primary wide"
+        disabled={!canBid}
+        aria-label={`مزايدة بـ ${riyals(minimum)} على ${summary.nameAr}`}
+        onClick={() => void bid(minimum)}
+      >
+        {sender.busy ? 'جارٍ الإرسال…' : 'مزايدة'}
+      </button>
 
       <button className="ghost live-card-more" onClick={onOpenRoom}>
         شاشة المزايدة الكاملة ←

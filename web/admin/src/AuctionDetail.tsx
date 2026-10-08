@@ -3,6 +3,8 @@ import {
   CountdownPanel,
   Icon,
   PhotoGallery,
+  Pager,
+  usePage,
   facingAr,
   landUseAr,
   api,
@@ -22,7 +24,7 @@ import { AwardPanel } from './AwardPanel'
 import { ClerkTerminal } from './ClerkTerminal'
 import { BidHistory } from './AuditViews'
 import { BidderName, useLeaders } from './winners'
-import { EndAuction, Reoffer, ReviewDecision } from './AuctionActions'
+import { EndAuction, Reoffer, ReviewDecision, SubmitForApproval } from './AuctionActions'
 import { PlotsPanel } from './PlotsPanel'
 
 type Tab = 'info' | 'gallery' | 'documents' | 'bids' | 'inquiries' | 'setup' | 'applicants' | 'award' | 'hall'
@@ -99,17 +101,17 @@ export function AuctionDetail({
   useEffect(() => {
     if (!opened(auction.status)) return
     api({ baseUrl: config.auditApi, session })
-      .get<{ read: number }>(`/audit/auctions/${auction.id}/bids`)
+      .get<{ read: number }>(`/audit/auctions/${auction.id}/bids?take=1`)
       .then((r) => setBidCount(r.read))
       .catch(() => setBidCount(null))
   }, [auction.id, auction.status, session])
 
   const price = figures?.priceMinorUnits ?? null
   const priceLabel = live
-    ? price != null ? 'أعلى مزايدة حالية' : 'سعر الافتتاح'
+    ? price != null ? 'أعلى مزايدة حالية' : 'سعر البداية'
     : award
       ? 'مبلغ الترسية'
-      : price != null ? 'أعلى سعر عند الإغلاق' : 'سعر الافتتاح'
+      : price != null ? 'أعلى سعر عند الإغلاق' : 'سعر البداية'
   const shown = award?.amountMinorUnits ?? price ?? auction.openingPriceMinorUnits
   const endsAt = figures?.effectiveEndsAt ?? auction.endsAt
 
@@ -162,7 +164,7 @@ export function AuctionDetail({
                 <h2>سجل المزايدات</h2>
                 {bidCount != null && <span className="muted">{bidCount} مزايدة</span>}
               </div>
-              <BidHistory session={session} auctionId={auction.id} withDecisions={false} />
+              <BidHistory session={session} auctionId={auction.id} withDecisions={false} live={live} />
             </>
           )}
           {current === 'inquiries' && <AuctionQuestions auctionId={auction.id} session={session} />}
@@ -282,6 +284,9 @@ export function AuctionDetail({
           {/* The administrator's way out of a running auction, and back into an
               unsold one. */}
           {isAdmin && live && <EndAuction auction={auction} client={client} busy={busy} onAct={onAct} />}
+          {isAdmin && ['Draft', 'Rejected'].includes(auction.status) && (
+            <SubmitForApproval auction={auction} client={client} busy={busy} onAct={onAct} />
+          )}
           {isCommittee && auction.status === 'PendingReview' && (
             <ReviewDecision auction={auction} client={client} busy={busy} onAct={onAct} />
           )}
@@ -360,9 +365,9 @@ function Info({
       <div className="document-row">
         <span className="doc-icon"><Icon name="pin" /></span>
         <div className="grow">
-          <strong>القطعة</strong>
+          <strong>موقع القطعة</strong>
           <small>
-            {auction.plots[0] ? 'الموقع على الخريطة والوصف وبقية البيانات.' : 'لم تُضف القطعة بعد.'}
+            {auction.plots[0] ? 'الموقع على الخريطة وخطا الطول والعرض.' : 'لم تُضف القطعة بعد.'}
           </small>
         </div>
         <PlotsPanel auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
@@ -386,12 +391,17 @@ interface Question {
 /** This auction's questions, read-only: the inquiries desk answers them on its own page. */
 function AuctionQuestions({ auctionId, session }: { auctionId: string; session: Session }) {
   const [rows, setRows] = useState<Question[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const paging = usePage()
   useEffect(() => {
     api({ baseUrl: config.participantApi, session })
-      .get<{ items: Question[] }>(`/inquiries?auctionId=${auctionId}`)
-      .then((r) => setRows(r.items))
+      .get<{ items: Question[]; total: number }>(`/inquiries?auctionId=${auctionId}&${paging.query}`)
+      .then((r) => {
+        setRows(r.items)
+        setTotal(r.total)
+      })
       .catch(() => setRows([]))
-  }, [auctionId, session])
+  }, [auctionId, session, paging.query])
   const published = rows?.filter((q) => q.clarification === 'Published') ?? []
   return (
     <>
@@ -418,6 +428,7 @@ function AuctionQuestions({ auctionId, session }: { auctionId: string; session: 
         </div>
       ))}
       {rows && rows.length === 0 && <p className="muted">لا توجد استفسارات على هذا المزاد.</p>}
+      <Pager page={paging.page} total={total} noun="استفسار" onPage={paging.setPage} />
     </>
   )
 }
