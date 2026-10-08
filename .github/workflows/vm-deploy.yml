@@ -1,0 +1,229 @@
+# Deploy the demo to the Azure VM over SSH.
+#
+# Manual only, and from a runner rather than from a developer's machine, because
+# the one credential involved is a GitHub secret and never leaves it.
+#
+# The first job does nothing but try to reach port 22. The cloud session that
+# wrote this cannot — outbound 22 is blocked there, confirmed against a second
+# host — so whether a GitHub runner can is still an open question, and twenty
+# seconds answers it before a twenty-minute build does not.
+name: vm-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      reachability_only:
+        description: "Only test SSH, deploy nothing"
+        type: boolean
+        default: false
+      bootstrap:
+        description: "Install Docker and set kernel limits first"
+        type: boolean
+        default: false
+      rebuild:
+        description: "Rebuild images from scratch (--no-cache)"
+        type: boolean
+        default: false
+      seed:
+        description: "Seed demo data after deploying"
+        type: boolean
+        default: true
+
+concurrency:
+  # One deploy at a time: two `docker compose up` runs against one host fight
+  # over the same container names and leave half the stack down.
+  group: vm-deploy
+  cancel-in-progress: false
+
+env:
+  VM_HOST: 48.202.57.47
+  VM_NAME: auctions.westus2.cloudapp.azure.com
+  VM_USER: auctionvmuser
+  REMOTE_DIR: /home/auctionvmuser/e-auction
+
+jobs:
+  reach:
+    name: Can a runner reach the VM?
+    runs-on: ubuntu-latest
+    steps:
+      - name: Port 22
+        run: |
+          if timeout 10 bash -c "cat </dev/null >/dev/tcp/${VM_HOST}/22" 2>/dev/null; then
+            echo "port 22 is open from this runner"
+          else
+            echo "::error::TCP ${VM_HOST}:22 is unreachable from a GitHub runner."
+            echo "::error::Add this runner's egress IP to the VM's network security group:"
+            curl -sS --max-time 10 https://api.ipify.org || true
+            echo
+            echo "::error::GitHub's ranges are large and change; allowing the whole set is"
+            echo "::error::not advisable. Running deploy/vm/deploy.sh from your own"
+            echo "::error::terminal is the better answer if this keeps failing."
+            exit 1
+          fi
+
+      - name: Who are we talking to
+        env:
+          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/vm.pem && chmod 600 ~/.ssh/vm.pem
+
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+            STRICT=yes
+          else
+            # Trust on first use. Weaker than a pinned host key, and called out
+            # rather than hidden: on the first connection there is nothing to
+            # compare against, so this accepts whatever answers and pins it for
+            # the rest of the run. Set VM_SSH_KNOWN_HOSTS from the line printed
+            # below to close the gap.
+            echo "::warning::VM_SSH_KNOWN_HOSTS is not set; accepting the host key on first use."
+            STRICT=accept-new
+          fi
+
+          cat > ~/.ssh/config <<CFG
+          Host vm
+            HostName ${VM_HOST}
+            User ${VM_USER}
+            IdentityFile ~/.ssh/vm.pem
+            IdentitiesOnly yes
+            StrictHostKeyChecking ${STRICT}
+            ConnectTimeout 15
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+          ssh vm 'echo "host: $(hostname)"; echo "os:   $(. /etc/os-release && echo "$PRETTY_NAME")"; echo "cpu:  $(nproc) vCPU"; echo "ram:  $(free -g | awk "/^Mem:/ {print \$2}") GiB"; echo "disk: $(df -h / | awk "NR==2 {print \$4}") free"; echo "docker: $(docker compose version 2>/dev/null || echo NOT INSTALLED)"'
+
+          echo
+          echo "Pin the host key by setting VM_SSH_KNOWN_HOSTS to this line:"
+          ssh-keyscan -t ed25519 "${VM_HOST}" 2>/dev/null || true
+
+  deploy:
+    name: Deploy
+    needs: reach
+    if: ${{ !inputs.reachability_only }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check it builds and passes before shipping it
+        run: |
+          # The VM has four vCPUs and will take twenty minutes to build these
+          # images. Finding out here that a test fails costs far less.
+          dotnet test EAuction.sln --nologo -v q
+          cd web
+          # ci, not install: a package.json that has drifted from the lockfile
+          # must fail here. That is exactly how this branch broke once already.
+          npm ci
+          npm run typecheck
+          npm test
+
+      - name: Open the connection
+        env:
+          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VM_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/vm.pem && chmod 600 ~/.ssh/vm.pem
+          STRICT=accept-new
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+            STRICT=yes
+          fi
+          cat > ~/.ssh/config <<CFG
+          Host vm
+            HostName ${VM_HOST}
+            User ${VM_USER}
+            IdentityFile ~/.ssh/vm.pem
+            IdentitiesOnly yes
+            StrictHostKeyChecking ${STRICT}
+            ConnectTimeout 15
+            ServerAliveInterval 30
+          CFG
+          chmod 600 ~/.ssh/config
+
+      - name: Copy the repository to the VM
+        run: |
+          set -euo pipefail
+          # rsync from the runner's checkout rather than a clone on the VM: the
+          # VM then needs no git credential of its own, and what is deployed is
+          # exactly the commit this run tested.
+          #
+          # .env is excluded explicitly. It is generated on the VM and must
+          # survive every deploy — regenerating the document grant key would
+          # invalidate every grant already issued.
+          ssh vm "mkdir -p '${REMOTE_DIR}'"
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'bin' --exclude 'obj' \
+            --exclude 'deploy/vm/.env' \
+            ./ "vm:${REMOTE_DIR}/"
+          # Written from here: .git is not copied, so the VM cannot work out
+          # for itself what it is running.
+          printf '%s\n' "${GITHUB_SHA}" | ssh vm "cat > '${REMOTE_DIR}/.deployed-commit'"
+          echo "deployed ${GITHUB_SHA::12}"
+
+      - name: Bootstrap the VM
+        if: ${{ inputs.bootstrap }}
+        run: ssh vm "cd '${REMOTE_DIR}' && bash deploy/vm/bootstrap.sh"
+
+      - name: Deploy
+        env:
+          REBUILD: ${{ inputs.rebuild }}
+          SEED: ${{ inputs.seed }}
+        run: |
+          set -euo pipefail
+          ARGS=""
+          [ "$REBUILD" = "true" ] && ARGS="$ARGS --rebuild"
+          [ "$SEED" = "true" ]    || ARGS="$ARGS --no-seed"
+          echo "deploy.sh$ARGS"
+          # ServerAliveInterval keeps the connection from being dropped during
+          # the build, which is quiet for minutes at a time on four vCPUs.
+          ssh -o ServerAliveInterval=30 vm \
+            "cd '${REMOTE_DIR}' && bash deploy/vm/deploy.sh $ARGS"
+
+      - name: Prove it answers
+        run: |
+          set -euo pipefail
+          fail=0
+          check() {
+            local what="$1" url="$2" want="${3:-200}"
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)
+            if [ "$code" = "$want" ]; then
+              echo "  ok    $what  ($code)"
+            else
+              echo "  FAIL  $what  ($code, wanted $want)  $url"
+              fail=1
+            fi
+          }
+          B="http://${VM_NAME}"
+          check "bidder portal"   "$B/"
+          check "admin portal"    "http://${VM_NAME}:8081/"
+          check "edge health"     "$B/edge/health"
+          check "keycloak realm"  "$B/auth/realms/eauction"
+          check "sandbox"         "$B/sandbox/"
+          check "public auctions" "$B/api/query/auctions"
+          # 401 is the right answer here: the endpoint exists and refuses an
+          # anonymous caller. A 200 would mean the staff surface is open.
+          check "staff endpoint refuses anonymous" "$B/api/query/staff/leaders" 401
+          exit $fail
+
+      - name: What is running
+        if: always()
+        run: |
+          ssh vm "cd '${REMOTE_DIR}' && docker compose --env-file deploy/vm/.env -f deploy/compose/docker-compose.yml -f deploy/vm/docker-compose.vm.yml ps" || true
+          echo "--- anything unhealthy or restarting"
+          ssh vm "docker ps --filter health=unhealthy --filter status=restarting --format '{{.Names}}: {{.Status}}'" || true
+
+      - name: Where to click
+        run: |
+          echo "bidder   http://${VM_NAME}/"
+          echo "admin    http://${VM_NAME}:8081/"
+          echo "sandbox  http://${VM_NAME}/sandbox/   <- open this one first"
