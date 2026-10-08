@@ -40,6 +40,7 @@ public sealed class ProcessorService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         registry.AuctionReady += definition => supervisor.Start(definition, stoppingToken);
+        registry.AuctionRedefined += definition => supervisor.Redefine(definition, stoppingToken);
 
         await RecoverAsync(stoppingToken);
         await supervisor.ResumeAsync(stoppingToken);

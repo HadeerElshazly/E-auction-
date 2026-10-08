@@ -89,6 +89,42 @@ public sealed class AuctionSupervisor(
         return running;
     }
 
+    /// <summary>
+    /// Replaces an auction's definition before it opens (§6.5): the committee approved
+    /// an amendment, and the dates, the opening price or the step may have moved. The
+    /// pump is stopped and started again on the new terms — before the start there are
+    /// no bids on the log, so nothing replays differently. Once announced, the auction
+    /// runs on the terms it opened with and the new definition is logged and dropped:
+    /// auction-admin refuses an amendment to an open auction, so reaching here after
+    /// the start is a race with the clock, not a decision to honour.
+    /// </summary>
+    public void Redefine(AuctionDefinition definition, CancellationToken ct)
+    {
+        if (_cancelled.ContainsKey(definition.AuctionId)) return;
+
+        if (!_running.TryGetValue(definition.AuctionId, out var current))
+        {
+            Start(definition, ct);
+            return;
+        }
+
+        if (current.Announced)
+        {
+            logger.LogWarning(
+                "Auction {AuctionId} was redefined after it opened; it keeps the terms it opened with.",
+                definition.AuctionId);
+            return;
+        }
+
+        current.Stop();
+        _running.TryRemove(definition.AuctionId, out _);
+        logger.LogInformation(
+            "Auction {AuctionId} redefined before opening: now {Start:o} to {End:o}.",
+            definition.AuctionId, definition.StartsAt, definition.EndsAt);
+
+        Start(definition, ct);
+    }
+
     private void Launch(RunningAuction running, CancellationToken ct)
     {
         if (running.Pump is not null) return;
@@ -108,7 +144,21 @@ public sealed class AuctionSupervisor(
         // Always from offset 0: the engine's price, ladder, extensions and
         // ledger are rebuilt by replaying every bid, which is deterministic.
         // The checkpoint only decides which of those replayed bids stay silent.
-        running.Task = Task.Run(() => running.Pump.RunAsync(0, ct), ct);
+        //
+        // On the auction's own lifetime token as well as the host's, so a
+        // redefinition can stop this pump without stopping every other auction.
+        var lifetime = running.Lifetime(ct);
+        running.Task = Task.Run(async () =>
+        {
+            try
+            {
+                await running.Pump.RunAsync(0, lifetime);
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+                // Stopped on purpose: the host shutting down, or the auction redefined.
+            }
+        }, CancellationToken.None);
     }
 
     /// <summary>
@@ -597,6 +647,18 @@ public sealed class RunningAuction(AuctionDefinition definition)
     public AuctionDefinition Definition { get; } = definition;
     public AuctionPump? Pump { get; internal set; }
     public Task? Task { get; internal set; }
+
+    private CancellationTokenSource? _lifetime;
+
+    /// <summary>A token that ends with the host or with <see cref="Stop"/>, whichever is first.</summary>
+    internal CancellationToken Lifetime(CancellationToken host)
+    {
+        _lifetime = CancellationTokenSource.CreateLinkedTokenSource(host);
+        return _lifetime.Token;
+    }
+
+    /// <summary>Stops the pump, if one was launched. The auction is being replaced, not closed.</summary>
+    internal void Stop() => _lifetime?.Cancel();
 
     public bool Announced { get; internal set; }
     public bool Closed { get; internal set; }

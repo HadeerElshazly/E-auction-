@@ -68,6 +68,14 @@ public enum NotificationKind
 
     /// <summary>اكتمل الإفراغ — the title passed to the winner at the notary.</summary>
     TransferCompleted = 15,
+
+    /// <summary>
+    /// عُدّلت بيانات المزاد — a published auction's terms, files or booklet changed and
+    /// the committee approved the change (§6.5). The deposit and the booklet fee
+    /// cannot have: the notice says so, because that is the first thing a bidder who
+    /// has paid them will want to know.
+    /// </summary>
+    AuctionAmended = 16,
 }
 
 /// <summary>

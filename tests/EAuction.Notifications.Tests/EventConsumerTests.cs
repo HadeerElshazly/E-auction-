@@ -126,6 +126,44 @@ public class EventConsumerTests : IAsyncLifetime, IAsyncDisposable
     }
 
     [Fact]
+    public async Task An_approved_amendment_tells_the_eligible_bidders_once_per_approval()
+    {
+        // §6.5: the terms a bidder relied on changed with the committee's approval.
+        // The republished definition renames the auction here; the lifecycle event
+        // is the notice — once per approval, however often the record is delivered.
+        await ApproveAsync("مخطط السعيد");
+        await StartAsync();
+
+        await EligibleAsync(_sara, true);
+        await EligibleAsync(_khalid, true);
+        await WaitForAsync(_khalid, NotificationKind.Eligible);
+        await EligibleAsync(_khalid, false);
+        await WaitForAsync(_khalid, NotificationKind.Revoked);
+
+        var at = new DateTimeOffset(2026, 10, 2, 10, 0, 0, TimeSpan.Zero);
+        await ApproveAsync("مخطط السعيد — قطعة 1 (معدَّل)");
+        await LifecycleAsync("AuctionAmended", new { auctionId = _auction, at });
+
+        var amended = await WaitForAsync(_sara, NotificationKind.AuctionAmended);
+        Assert.Equal("عُدّلت بيانات المزاد", amended.TitleAr);
+        Assert.Contains("معدَّل", amended.BodyAr);
+        Assert.Contains("لا يتغيّر مبلغ التأمين", amended.BodyAr);
+        Assert.True(amended.Actionable);
+
+        // Redelivered: still one. A second approval, at another time, is a second notice.
+        await LifecycleAsync("AuctionAmended", new { auctionId = _auction, at });
+        await Settle();
+        Assert.Single(await AllFor(_sara, NotificationKind.AuctionAmended));
+
+        await LifecycleAsync("AuctionAmended", new { auctionId = _auction, at = at.AddDays(1) });
+        await WaitUntilAsync(async () => (await AllFor(_sara, NotificationKind.AuctionAmended)).Count == 2,
+            "the second amendment notice");
+
+        // Khalid, revoked, is not waiting for this auction.
+        Assert.Empty(await AllFor(_khalid, NotificationKind.AuctionAmended));
+    }
+
+    [Fact]
     public async Task A_revocation_is_its_own_notice_and_eligibility_again_is_news_again()
     {
         await ApproveAsync("مخطط السعيد");

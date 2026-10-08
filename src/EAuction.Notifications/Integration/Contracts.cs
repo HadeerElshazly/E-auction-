@@ -12,6 +12,7 @@ public static class InboundEvents
     public const string ParticipantEligibilityChanged = "ParticipantEligibilityChanged";
     public const string BankGuaranteeRejected = "BankGuaranteeRejected";
     public const string AuctionCancelled = "AuctionCancelled";
+    public const string AuctionAmended = "AuctionAmended";
     public const string AuctionUnsold = "AuctionUnsold";
     public const string PaymentSettled = "PaymentSettled";
     public const string AuctionStarted = "AuctionStarted";
@@ -85,6 +86,13 @@ public sealed record AuctionCancelledPayload
 
     /// <summary>Whether the bidders' deposits and booklet fees go back. Older events said nothing and did refund.</summary>
     public bool Refund { get; init; } = true;
+}
+
+/// <summary>A published auction's terms changed, with the committee's approval (§6.5).</summary>
+public sealed record AuctionAmendedPayload
+{
+    public Guid AuctionId { get; init; }
+    public DateTimeOffset At { get; init; }
 }
 
 public sealed record CurrentWinnerPayload

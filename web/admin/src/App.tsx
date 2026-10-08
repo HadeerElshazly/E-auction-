@@ -21,7 +21,7 @@ import { AuditTrail } from './AuditTrail'
 import { FollowUp } from './FollowUp'
 import { Inquiries } from './Inquiries'
 import { ApplicationsQueue } from './ApplicationsQueue'
-import { Committee } from './Committee'
+import { Committee, useAwaitingApproval } from './Committee'
 import { BidLogPage } from './AuditViews'
 import { AuctionDetail } from './AuctionDetail'
 import { Monitor } from './Monitor'
@@ -118,6 +118,31 @@ export function App() {
     [client],
   )
   const open = useCallback((id: string) => navigate(`auction/${id}`), [navigate])
+
+  // «حذف المسودة»: the row goes, and so does the page that showed it. Not through
+  // `act`, which reloads the open auction afterwards and would find it gone.
+  const remove = useCallback(
+    async (id: string) => {
+      setBusy(true)
+      setError(null)
+      try {
+        await client.del(`/auctions/${id}`)
+        setSelected(null)
+        navigate('auctions')
+        await refreshList()
+      } catch (e) {
+        setError(describe(e))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [client, navigate, refreshList],
+  )
+
+  // What the committee has waiting — a count on their menu entry, so an auction
+  // submitted for approval is noticed without anyone having to look for it.
+  // Re-read with the list, so an approval made here clears it at once.
+  const awaiting = useAwaitingApproval(session, isCommittee, auctions)
 
   // The auction in the address, read whenever the address names a different one.
   const selectedId = view === 'auction' ? routeId : undefined
@@ -228,7 +253,7 @@ export function App() {
 
   // This person's workspace: only the screens their roles open.
   const nav: NavItem[] = [
-    ...(isCommittee ? [{ to: 'committee', label: 'لجنة الترسية', icon: 'gavel' }] : []),
+    ...(isCommittee ? [{ to: 'committee', label: 'لجنة الترسية', icon: 'gavel', badge: awaiting.total }] : []),
     ...(isAdmin || isCommittee || isClerk ? [{ to: 'auctions', label: 'إدارة المزادات', icon: 'grid' }] : []),
     ...(isAdmin ? [{ to: 'applications', label: 'طلبات المشاركة', icon: 'shield' }] : []),
     ...(canWatch ? [{ to: 'monitor', label: 'المتابعة المباشرة', icon: 'live' }] : []),
@@ -359,6 +384,7 @@ export function App() {
               isClerk={isClerk}
               onAct={act}
               onOpen={open}
+              onDelete={remove}
             />
           </>
         ) : (
@@ -368,6 +394,7 @@ export function App() {
             canCreate={isAdmin}
             busy={busy}
             onOpen={open}
+            onDelete={remove}
             onCreate={(body) =>
               act(async () => {
                 // The draft, its terms and its plot in one request, saved together.

@@ -128,18 +128,30 @@ public class PreparationWorkflowTests
     }
 
     [Fact]
-    public void Editing_is_refused_once_the_auction_is_approved()
+    public void Editing_is_refused_once_the_auction_has_opened()
     {
-        // Bidders have relied on the published terms. Changing the dates or
-        // the deposit underneath them is not an edit — it is a different auction.
+        // Bidders have relied on the published terms. Before the auction opens a
+        // change is an amendment the committee approves again (§6.5, AmendmentTests);
+        // once bidding is open, nothing changes — the deposit and the booklet price
+        // not even before.
         var auction = Build.ReadyAuction(Now);
         auction.SubmitForReview(Now);
         auction.Approve(Now);
 
-        Assert.Throws<InvalidAuctionTransitionException>(() =>
+        var paidOn = Assert.Throws<AuctionValidationException>(() =>
             auction.UpdateDetails("x", "x", BidChannel.Online, BidderVisibility.Masked,
                 Now.AddDays(9), Now.AddDays(10),
                 1, 2, 1, 1, 0m, 0, null, 3));
+        Assert.Contains(paidOn.Problems, p => p.Contains("التأمين"));
+        Assert.Equal(AmendmentStatus.None, auction.Amendment);
+
+        auction.MarkScheduled();
+        auction.MarkLive();
+
+        Assert.Throws<InvalidAuctionTransitionException>(() =>
+            auction.UpdateDetails("x", "x", BidChannel.Online, BidderVisibility.Masked,
+                Now.AddDays(9), Now.AddDays(10),
+                1, 2, 1, 100_000_00, 0m, 1_000_00, null, 3));
 
         Assert.Throws<InvalidAuctionTransitionException>(() =>
             auction.AddPlot(new Plot(auction.Id, "SA-9999", 10m)));

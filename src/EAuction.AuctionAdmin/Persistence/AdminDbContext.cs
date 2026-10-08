@@ -22,6 +22,15 @@ public sealed class AdminDbContext(DbContextOptions<AdminDbContext> options) : D
             e.Property(x => x.Id).ValueGeneratedNever();
             e.Property(x => x.Status).HasConversion<int>();
             e.Property(x => x.Channel).HasConversion<int>();
+            e.Property(x => x.Amendment).HasConversion<int>();
+
+            // رقم المزاد: sequential and store-assigned. An identity column rather
+            // than a counter this service keeps, so two replicas cannot hand out the
+            // same number and a rolled-back draft does not leave a gap anyone has to
+            // explain — a gap is what a sequence does, and the number is for quoting,
+            // not for counting.
+            e.Property(x => x.Number).ValueGeneratedOnAdd().UseIdentityByDefaultColumn();
+            e.HasIndex(x => x.Number).IsUnique();
             e.Property(x => x.NameAr).HasMaxLength(300).IsRequired();
             e.Property(x => x.NameEn).HasMaxLength(300).IsRequired();
             e.Property(x => x.Phase).HasMaxLength(100);

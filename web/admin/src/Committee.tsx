@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, Icon, PageHead, Pager, api, config, riyals, stageLabel, usePage, type Session } from '@eauction/shared'
+import {
+  ApiError,
+  Icon,
+  PageHead,
+  Pager,
+  api,
+  config,
+  riyals,
+  stageLabel,
+  timestamp,
+  usePage,
+  when,
+  type Session,
+} from '@eauction/shared'
 import { useBidders } from './winners'
 import { BidHistory } from './AuditViews'
 
@@ -24,6 +37,60 @@ interface Awarded {
     remainingMinorUnits: number
     settledAt: string | null
   }
+}
+
+/** One thing waiting on the committee's approval: a new auction, or a change to a published one (§6.5). */
+export interface AwaitingApproval {
+  id: string
+  number: number
+  nameAr: string
+  nameEn: string
+  phase: string | null
+  status: string
+  kind: 'New' | 'Amendment'
+  submittedAt: string | null
+  startsAt: string | null
+  openingPriceMinorUnits: number
+  plotCount: number
+}
+
+/**
+ * «بانتظار الاعتماد» — what the committee has waiting, polled: the count on their
+ * menu entry and the list at the top of their board. A submission is the
+ * administrator's act and the committee's news, and nothing else would tell them.
+ */
+export function useAwaitingApproval(
+  session: Session | null,
+  enabled: boolean,
+  /** Anything whose change should re-read the list at once — the app's own auction list. */
+  refreshOn?: unknown,
+): { items: AwaitingApproval[]; total: number } {
+  const [page, setPage] = useState<{ items: AwaitingApproval[]; total: number }>({ items: [], total: 0 })
+  useEffect(() => {
+    if (!session || !enabled) {
+      setPage({ items: [], total: 0 })
+      return
+    }
+    const client = api({ baseUrl: config.adminApi, session })
+    let stop = false
+    const load = () =>
+      client
+        .get<{ items: AwaitingApproval[]; total: number }>('/auctions/awaiting-approval?take=50')
+        .then((p) => !stop && setPage(p))
+        .catch(() => undefined)
+    void load()
+    const tick = () => {
+      if (!document.hidden) void load()
+    }
+    const timer = window.setInterval(tick, 30_000)
+    document.addEventListener('visibilitychange', tick)
+    return () => {
+      stop = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', tick)
+    }
+  }, [session, enabled, refreshOn])
+  return page
 }
 
 /**
@@ -62,6 +129,8 @@ export function Committee({
   const pendingPage = usePage()
   const awardedPage = usePage()
   const [totals, setTotals] = useState({ pending: 0, awarded: 0 })
+  // Auctions and amendments waiting for approval, re-read whenever the board reloads.
+  const awaiting = useAwaitingApproval(session, true, pending)
 
   const load = useCallback(async () => {
     try {
@@ -128,11 +197,45 @@ export function Committee({
         التالي تلقائياً.
       </div>
       {error && <div className="notice error">{error}</div>}
+
+      {/* Approvals first: an auction cannot open, and an amendment cannot reach its
+          bidders, until the committee has looked at it. The decision itself is made
+          on the auction's page, where its data, plot and documents are. */}
+      {awaiting.total > 0 && (
+        <section className="card" data-testid="committee-awaiting">
+          <div className="panel-title">
+            <h2>مزادات بانتظار الاعتماد</h2>
+            <span className="pill wait num">{awaiting.total}</span>
+          </div>
+          <p className="muted small">تُعتمد أو تُرفض من صفحة المزاد، حيث بياناته وقطعته ومستنداته.</p>
+          <ul className="doc-list">
+            {awaiting.items.map((a) => (
+              <li key={a.id} data-testid="awaiting-approval">
+                <span>
+                  <b className="num">#{a.number}</b> {a.nameAr}{' '}
+                  <span className={`pill ${a.kind === 'Amendment' ? 'wait' : 'teal'} small`}>
+                    {a.kind === 'Amendment' ? 'تعديل على مزاد منشور' : 'مزاد جديد'}
+                  </span>
+                  <small className="muted">
+                    {' '}
+                    · أُرسل {a.submittedAt ? timestamp(a.submittedAt) : '—'}
+                    {a.startsAt && <> · يبدأ {when(a.startsAt)}</>}
+                  </small>
+                </span>
+                <button className="primary small" onClick={() => onOpenAuction(a.id)}>
+                  فتح للاعتماد
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {pending === null && <p className="muted">…</p>}
-      {pending !== null && totals.pending === 0 && totals.awarded === 0 && (
+      {pending !== null && totals.pending === 0 && totals.awarded === 0 && awaiting.total === 0 && (
         <div className="card empty-state">
           <h3>لا توجد قرارات بانتظار اللجنة</h3>
-          <p className="muted">تظهر هنا المزادات فور إغلاقها وترشيح أعلى مزايد فيها.</p>
+          <p className="muted">تظهر هنا المزادات المرسلة للاعتماد، ثم فور إغلاقها وترشيح أعلى مزايد فيها.</p>
         </div>
       )}
 

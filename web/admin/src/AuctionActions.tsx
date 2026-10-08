@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { parseRiyals, riyals, sar, type Api } from '@eauction/shared'
+import { Icon, parseRiyals, riyals, sar, type Api } from '@eauction/shared'
 import type { Auction } from './types'
 
 type Ending = 'close' | 'cancel'
@@ -241,23 +241,36 @@ export function ReviewDecision({
   client,
   busy,
   onAct,
+  amendment = false,
 }: {
   auction: Auction
   client: Api
   busy: boolean
   onAct: (work: () => Promise<unknown>) => Promise<void>
+  /**
+   * The decision is on a change to a published auction (§6.5), not on a new one:
+   * approving publishes the new terms and tells the bidders; refusing sends it
+   * back to the administrator with the reason, and what was published stands.
+   */
+  amendment?: boolean
 }) {
   const [refusing, setRefusing] = useState(false)
   const [reason, setReason] = useState('')
 
   return (
     <div className="review-decision" data-testid="review-decision">
+      {amendment && (
+        <p className="box-help" style={{ margin: 0 }}>
+          تعديل على مزاد منشور: باعتماده تُنشر البيانات الجديدة ويُبلَّغ المتقدمون؛ وبرفضه يعود لمدير المزادات بالسبب
+          ويبقى ما نُشر كما هو.
+        </p>
+      )}
       <button
         className="primary wide"
         disabled={busy}
         onClick={() => void onAct(() => client.post(`/auctions/${auction.id}/approve`))}
       >
-        اعتماد المزاد
+        {amendment ? 'اعتماد التعديل' : 'اعتماد المزاد'}
       </button>
       <button className="danger wide" disabled={busy} onClick={() => setRefusing(true)}>
         رفض
@@ -265,14 +278,14 @@ export function ReviewDecision({
 
       {refusing && (
         <Dialog>
-          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="رفض المزاد">
+          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={amendment ? 'رفض التعديل' : 'رفض المزاد'}>
             <div className="modal">
               <div className="modal-head">
                 <button className="icon-btn" aria-label="إغلاق النافذة" onClick={() => setRefusing(false)}>
                   ✕
                 </button>
                 <div className="grow" style={{ textAlign: 'start' }}>
-                  <h2>رفض المزاد</h2>
+                  <h2>{amendment ? 'رفض التعديل' : 'رفض المزاد'}</h2>
                   <p>{auction.nameAr}</p>
                 </div>
               </div>
@@ -298,7 +311,7 @@ export function ReviewDecision({
                     })
                   }
                 >
-                  رفض المزاد
+                  {amendment ? 'رفض التعديل' : 'رفض المزاد'}
                 </button>
               </div>
             </div>
@@ -318,11 +331,14 @@ export function SubmitForApproval({
   client,
   busy,
   onAct,
+  amendment = false,
 }: {
   auction: Auction
   client: Api
   busy: boolean
   onAct: (work: () => Promise<unknown>) => Promise<void>
+  /** A change to a published auction goes to the committee the way the auction first did (§6.5). */
+  amendment?: boolean
 }) {
   return (
     <div className="review-decision">
@@ -331,11 +347,144 @@ export function SubmitForApproval({
         disabled={busy}
         onClick={() => void onAct(() => client.post(`/auctions/${auction.id}/submit`))}
       >
-        إرسال للاعتماد
+        {amendment ? 'إرسال التعديل للاعتماد' : 'إرسال للاعتماد'}
       </button>
       <p className="box-help" style={{ margin: 0 }}>
-        احفظ التعديلات أولاً. يُرسل المزاد إلى لجنة الترسية لاعتماده.
+        {amendment
+          ? 'احفظ التعديلات أولاً. يُرسل التعديل إلى لجنة الترسية؛ يبقى ما نُشر للمزايدين حتى اعتماده.'
+          : 'احفظ التعديلات أولاً. يُرسل المزاد إلى لجنة الترسية لاعتماده.'}
       </p>
     </div>
+  )
+}
+
+/**
+ * «حذف المسودة» — a draft that will not be held. Nothing was published and nobody
+ * paid, so the row goes; سجل المراجعة keeps the deletion. A published auction is
+ * withdrawn with «حذف المزاد» below instead, because it has bidders.
+ */
+export function DeleteDraft({
+  auction,
+  busy,
+  onDelete,
+}: {
+  auction: Auction
+  busy: boolean
+  onDelete: (id: string) => Promise<void>
+}) {
+  return (
+    <button
+      className="danger wide"
+      disabled={busy}
+      data-testid="delete-draft"
+      onClick={() => {
+        if (!window.confirm(`حذف المسودة «${auction.nameAr}» نهائياً؟ لا يمكن التراجع.`)) return
+        void onDelete(auction.id)
+      }}
+    >
+      <Icon name="close" size={16} /> حذف المسودة
+    </button>
+  )
+}
+
+/**
+ * «حذف المزاد» for an upcoming auction — published, with bidders who have paid or
+ * may be about to. It leaves as a cancellation with the reason on record: the sale
+ * is withdrawn from القادمة, the applicants are told, and the auction manager decides
+ * here whether their deposits and booklet fees go back through the gateway. The
+ * record stays, marked «أُلغي»: a published auction is not erased from the trail.
+ */
+export function WithdrawUpcoming({
+  auction,
+  client,
+  busy,
+  onAct,
+}: {
+  auction: Auction
+  client: Api
+  busy: boolean
+  onAct: (work: () => Promise<unknown>) => Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [refund, setRefund] = useState(true)
+
+  const submit = () => {
+    const confirmText = refund
+      ? 'سيُحذف المزاد من القادمة ويُلغى نهائياً، ويُبلَّغ المتقدمون، وتُرد مبالغ التأمين ورسوم الكراسة المدفوعة. لا يمكن التراجع. متابعة؟'
+      : 'سيُحذف المزاد من القادمة ويُلغى نهائياً دون رد التأمين ورسوم الكراسة. لا يمكن التراجع. متابعة؟'
+    if (!window.confirm(confirmText)) return
+    void onAct(() => client.post(`/auctions/${auction.id}/cancel`, { reason: reason.trim(), refund })).then(() => {
+      setOpen(false)
+      setReason('')
+    })
+  }
+
+  return (
+    <>
+      <button className="danger wide" disabled={busy} data-testid="withdraw-upcoming" onClick={() => setOpen(true)}>
+        <Icon name="close" size={16} /> حذف المزاد
+      </button>
+
+      {open && (
+        <Dialog>
+          <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="حذف المزاد">
+            <div className="modal">
+              <div className="modal-head">
+                <button className="icon-btn" aria-label="إغلاق النافذة" onClick={() => setOpen(false)}>
+                  ✕
+                </button>
+                <div className="grow" style={{ textAlign: 'start' }}>
+                  <h2>حذف مزاد قادم</h2>
+                  <p>{auction.nameAr}</p>
+                </div>
+              </div>
+
+              <p className="muted small" style={{ margin: '0 0 12px' }}>
+                يُسحب المزاد من المزادات القادمة ويُبلَّغ المتقدمون بذلك. يبقى سجله محفوظاً بحالة «أُلغي» ولا يُمحى من
+                سجل المراجعة.
+              </p>
+
+              <div className="refund-choice">
+                <label className="check-row">
+                  <input type="checkbox" checked={refund} onChange={(e) => setRefund(e.target.checked)} />
+                  <span>
+                    <b>رد مبالغ التأمين والكراسة المدفوعة للمتقدمين</b>
+                    <small>
+                      {refund
+                        ? 'يُطلب الرد من بوابة الدفع لكل مبلغ سُدّد إلكترونياً، بقرار مدير المزادات هنا. لا شيء يُرد إن لم يُسدَّد شيء.'
+                        : 'تحتفظ الأمانة بمبالغ التأمين ورسوم الكراسة، ويُبلَّغ المتقدمون بذلك.'}
+                    </small>
+                  </span>
+                </label>
+                <p className="muted small" style={{ margin: '8px 0 0' }}>
+                  الضمانات البنكية لا تمر ببوابة الدفع: تُحرَّر إدارياً من شاشة «التسويات والإفراغ».
+                </p>
+              </div>
+
+              <label style={{ display: 'block', marginTop: 16 }}>
+                <span>
+                  السبب <span className="muted">(يظهر للمتقدمين)</span>
+                </span>
+                <textarea
+                  rows={3}
+                  aria-label="سبب حذف المزاد"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </label>
+
+              <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+                <button onClick={() => setOpen(false)}>تراجع</button>
+                <button className="danger" disabled={busy || reason.trim() === ''} onClick={submit}>
+                  حذف المزاد
+                </button>
+              </div>
+            </div>
+          </div>
+        </Dialog>
+      )}
+    </>
   )
 }

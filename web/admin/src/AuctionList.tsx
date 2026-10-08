@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CardClock, Icon, PageHead, Pager, Stats, api, config, sar, usePage, when, type Session } from '@eauction/shared'
 import type { AuctionListItem } from './types'
-import { label } from './types'
+import { amendmentLabel, isDraft, label } from './types'
 import { BidderName, useLeaders } from './winners'
 import { NewAuction, type NewAuctionBody } from './NewAuction'
 
@@ -13,6 +13,8 @@ interface Props {
   onOpen: (id: string) => void
   /** The bid step in halalas, when given up front; else set later in the details. */
   onCreate: (body: NewAuctionBody) => void
+  /** «حذف المسودة» from the row, for a draft the administrator will not keep. */
+  onDelete: (id: string) => Promise<void>
 }
 
 /**
@@ -39,7 +41,7 @@ const filters = [
 
 type FilterKey = (typeof filters)[number]['key']
 
-export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCreate }: Props) {
+export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCreate, onDelete }: Props) {
   const live = useLiveFigures()
   const leaders = useLeaders(session)
   const [creating, setCreating] = useState(false)
@@ -174,7 +176,16 @@ export function AuctionList({ session, auctions, canCreate, busy, onOpen, onCrea
         </div>
       ) : (
         layout === 'table' ? (
-          <AuctionTable session={session} auctions={visible} live={live} leaders={leaders} onOpen={onOpen} />
+          <AuctionTable
+            session={session}
+            auctions={visible}
+            live={live}
+            leaders={leaders}
+            busy={busy}
+            canDelete={canCreate}
+            onOpen={onOpen}
+            onDelete={onDelete}
+          />
         ) : (
           <div className="lot-grid">
             {visible.map((a) => (
@@ -209,13 +220,19 @@ function AuctionTable({
   auctions,
   live,
   leaders,
+  busy,
+  canDelete,
   onOpen,
+  onDelete,
 }: {
   session: Session
   auctions: AuctionListItem[]
   live: Record<string, LiveFigures>
   leaders: Record<string, string>
+  busy: boolean
+  canDelete: boolean
   onOpen: (id: string) => void
+  onDelete: (id: string) => Promise<void>
 }) {
   return (
     <div className="card table-card">
@@ -223,6 +240,7 @@ function AuctionTable({
         <table data-testid="auction-table">
           <thead>
             <tr>
+              <th>رقم</th>
               <th>المزاد</th>
               <th>القطع والمساحة</th>
               <th>أعلى عرض</th>
@@ -234,6 +252,7 @@ function AuctionTable({
           <tbody>
             {auctions.map((a) => {
               const l = label(a.status)
+              const amending = amendmentLabel(a.amendment)
               const figures = live[a.id]
               const bidding = a.status === 'Live' && figures?.priceMinorUnits != null
               const winnerId = a.status === 'Live' ? leaders[a.id] : a.winnerBidderId ?? leaders[a.id]
@@ -247,6 +266,7 @@ function AuctionTable({
                     if (!(e.target as HTMLElement).closest('button, a')) onOpen(a.id)
                   }}
                 >
+                  <td className="num">{a.number}</td>
                   <td>
                     <button className="link strong" onClick={() => onOpen(a.id)}>
                       {a.nameAr}
@@ -272,6 +292,7 @@ function AuctionTable({
                   </td>
                   <td>
                     <span className={`pill ${l.tone}`}>{l.ar}</span>
+                    {amending && <small><span className="pill wait small">{amending}</span></small>}
                   </td>
                   <td className="small">{a.startsAt ? when(a.startsAt) : <span className="muted">لم يُجدول</span>}</td>
                   <td>
@@ -283,6 +304,18 @@ function AuctionTable({
                         <a className="button small" href="#monitor">
                           المتابعة
                         </a>
+                      )}
+                      {canDelete && isDraft(a) && (
+                        <button
+                          className="danger small"
+                          disabled={busy}
+                          onClick={() => {
+                            if (!window.confirm(`حذف المسودة «${a.nameAr}» نهائياً؟ لا يمكن التراجع.`)) return
+                            void onDelete(a.id)
+                          }}
+                        >
+                          حذف
+                        </button>
                       )}
                     </div>
                   </td>
@@ -393,8 +426,9 @@ function AuctionCard({
 
       <div className="body">
         <p className="title">{auction.nameAr}</p>
-        <div>
+        <div className="row" style={{ gap: 6 }}>
           <span className={`pill ${l.tone}`}>{l.ar}</span>
+          <span className="muted small num">#{auction.number}</span>
         </div>
 
         <div>

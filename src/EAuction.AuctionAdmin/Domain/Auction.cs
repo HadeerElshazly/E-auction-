@@ -28,6 +28,29 @@ public sealed class Auction
     public Guid Id { get; private set; } = Guid.NewGuid();
     public AuctionStatus Status { get; private set; } = AuctionStatus.Draft;
 
+    /// <summary>
+    /// رقم المزاد — the number staff quote and bidders read. Sequential, assigned by
+    /// the store when the draft is first saved, never reused. The id is a GUID that
+    /// nobody can read out over a telephone; this is the number that can be.
+    /// </summary>
+    public long Number { get; private set; }
+
+    /// <summary>
+    /// Where a change made after approval stands (§6.5). None for an auction whose
+    /// published terms are the terms its administrator last saved — which is every
+    /// auction that was never published, too.
+    /// </summary>
+    public AmendmentStatus Amendment { get; private set; } = AmendmentStatus.None;
+
+    /// <summary>When the open amendment began: the first edit since the auction was published.</summary>
+    public DateTimeOffset? AmendedAt { get; private set; }
+
+    /// <summary>
+    /// When it was last put before the committee — as a new auction, or as an
+    /// amendment to a published one. What «بانتظار الاعتماد» is ordered by.
+    /// </summary>
+    public DateTimeOffset? SubmittedAt { get; private set; }
+
     /// <summary>Grouping label — Phase 1 / Phase 2. Not a bidding concept.</summary>
     public string? Phase { get; private set; }
 
@@ -174,14 +197,64 @@ public sealed class Auction
     // -- إعداد المزاد ------------------------------------------------------
 
     /// <summary>
-    /// Edits are confined to Draft. Once approved the auction is public and
-    /// bidders have relied on its terms, so changing the dates or the deposit
-    /// underneath them is not an edit — it is a different auction.
+    /// Approved and on (or on its way to) the catalogue, and not yet open: the window
+    /// in which an amendment is possible.
     /// </summary>
-    private void RequireDraft(string action)
+    public bool IsPublished => Status is AuctionStatus.Approved or AuctionStatus.Scheduled;
+
+    /// <summary>
+    /// Edits are confined to a draft — and, since §6.5, to a published auction before
+    /// it opens, as an amendment. Bidders have relied on the published terms, so an
+    /// amendment changes nothing they see until the committee approves it again: the
+    /// edited values wait here and what was published stays published. The deposit
+    /// and the booklet price are not amendable at all (see <see cref="UpdateDetails"/>),
+    /// because money has changed hands on them. Once the auction is open, nothing is.
+    /// </summary>
+    private void RequireEditable(string action)
+    {
+        if (Status is AuctionStatus.Draft or AuctionStatus.Rejected) return;
+        if (!IsPublished) throw new InvalidAuctionTransitionException(Status, action);
+        if (Amendment == AmendmentStatus.PendingReview)
+            throw new AuctionValidationException(
+                new[] { "التعديل بانتظار اعتماد لجنة الترسية؛ لا يمكن تعديل المزاد حتى تبتّ فيه." });
+    }
+
+    /// <summary>
+    /// A change to a published auction opens an amendment — once, and it stays open
+    /// until the committee decides. A draft's edits open nothing.
+    /// </summary>
+    private void NoteEdit()
+    {
+        if (!IsPublished || Amendment != AmendmentStatus.None) return;
+        Amendment = AmendmentStatus.Editing;
+        AmendedAt = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// A draft is deleted outright: nothing was published, nobody paid, and the
+    /// audit row the deletion writes is the only trace it needs to leave. Anything
+    /// published has bidders, and leaves through <see cref="Cancel"/>, which tells
+    /// them and returns their money.
+    /// </summary>
+    public void EnsureDeletable()
     {
         if (Status is not (AuctionStatus.Draft or AuctionStatus.Rejected))
-            throw new InvalidAuctionTransitionException(Status, action);
+            throw new InvalidAuctionTransitionException(Status, "delete");
+    }
+
+    /// <summary>
+    /// «اسم المزاد والمرحلة», edited on their own — on تفاصيل القطعة, beside the land
+    /// they name — so correcting a name does not mean restating the dates and prices.
+    /// </summary>
+    public void Rename(string nameAr, string nameEn, string? phase)
+    {
+        RequireEditable("rename");
+
+        var before = (NameAr, NameEn, Phase);
+        NameAr = nameAr?.Trim() ?? "";
+        NameEn = nameEn?.Trim() ?? "";
+        Phase = string.IsNullOrWhiteSpace(phase) ? null : phase.Trim();
+        if (before != (NameAr, NameEn, Phase)) NoteEdit();
     }
 
     public void UpdateDetails(
@@ -192,7 +265,25 @@ public sealed class Auction
         decimal brokerageFeePercent, long bookletPriceMinorUnits,
         int? quietPeriodSeconds, int maxExtensions, string? phase = null)
     {
-        RequireDraft("edit");
+        RequireEditable("edit");
+
+        if (IsPublished)
+        {
+            // What a bidder has already paid on is not amendable: the deposit and the
+            // booklet fee were charged at the published figures, and whether bidders
+            // are named was part of what they agreed to (D-22). Everything else is a
+            // term the committee re-approves and the bidders are told about.
+            var locked = new List<string>();
+            if (depositMinorUnits != DepositMinorUnits)
+                locked.Add("لا يمكن تغيير مبلغ التأمين بعد نشر المزاد؛ سدّده المشتركون على هذا الأساس.");
+            if (bookletPriceMinorUnits != BookletPriceMinorUnits)
+                locked.Add("لا يمكن تغيير سعر الكراسة بعد نشر المزاد.");
+            if (bidderVisibility != BidderVisibility)
+                locked.Add("لا يمكن تغيير ظهور المزايدين بعد نشر المزاد.");
+            if (locked.Count > 0) throw new AuctionValidationException(locked);
+        }
+
+        var before = AuctionChanges.Of(this);
 
         NameAr = nameAr?.Trim() ?? "";
         NameEn = nameEn?.Trim() ?? "";
@@ -219,6 +310,9 @@ public sealed class Auction
         QuietPeriodSeconds = quietPeriodSeconds;
         MaxExtensions = maxExtensions;
         Phase = phase;
+
+        // Saving a form unchanged is not an amendment.
+        if (before != AuctionChanges.Of(this)) NoteEdit();
     }
 
     /// <summary>
@@ -227,37 +321,43 @@ public sealed class Auction
     /// </summary>
     public void AddPlot(Plot plot)
     {
-        RequireDraft("add a plot to");
+        RequireEditable("add a plot to");
         if (_plots.Count > 0)
             throw new AuctionValidationException(
                 new[] { "المزاد لقطعة واحدة فقط. عدّل القطعة الحالية، أو أنشئ مزاداً آخر للقطعة الجديدة." });
         _plots.Add(plot);
+        NoteEdit();
     }
 
-    /// <summary>«تعديل القطعة» — the auction's one plot, replaced while it is a draft.</summary>
+    /// <summary>«تعديل القطعة» — the auction's one plot, replaced while it can still be edited.</summary>
     public void ReplacePlot(Plot plot)
     {
-        RequireDraft("edit the plot of");
+        RequireEditable("edit the plot of");
         _plots.Clear();
         _plots.Add(plot);
+        NoteEdit();
     }
 
     public void RemovePlot(Guid plotId)
     {
-        RequireDraft("remove a plot from");
-        _plots.RemoveAll(p => p.Id == plotId);
+        RequireEditable("remove a plot from");
+        if (_plots.RemoveAll(p => p.Id == plotId) > 0) NoteEdit();
     }
 
     public void AttachBooklet(Guid documentId)
     {
-        RequireDraft("attach a booklet to");
+        RequireEditable("attach a booklet to");
+        if (BookletDocumentId == documentId) return;
         BookletDocumentId = documentId;
+        NoteEdit();
     }
 
     public void AttachCoverImage(Guid documentId)
     {
-        RequireDraft("attach a cover image to");
+        RequireEditable("attach a cover image to");
+        if (CoverImageDocumentId == documentId) return;
         CoverImageDocumentId = documentId;
+        NoteEdit();
     }
 
     /// <summary>A catalogue page is not a file share; this is a backstop, not a policy.</summary>
@@ -267,7 +367,7 @@ public sealed class Auction
     {
         if (kind is not (null or "Photo" or "Document"))
             throw new AuctionValidationException(new[] { "نوع المرفق يجب أن يكون صورة أو مستنداً." });
-        RequireDraft("attach a public document to");
+        RequireEditable("attach a public document to");
 
         var problems = new List<string>();
         if (string.IsNullOrWhiteSpace(titleAr)) problems.Add("عنوان المرفق مطلوب.");
@@ -282,12 +382,13 @@ public sealed class Auction
 
         if (_attachments.Any(a => a.DocumentId == documentId)) return;
         _attachments.Add(new PublicAttachment(documentId, titleAr.Trim(), kind));
+        NoteEdit();
     }
 
     public void RemoveAttachment(Guid documentId)
     {
-        RequireDraft("remove a public document from");
-        _attachments.RemoveAll(a => a.DocumentId == documentId);
+        RequireEditable("remove a public document from");
+        if (_attachments.RemoveAll(a => a.DocumentId == documentId) > 0) NoteEdit();
     }
 
     /// <summary>Everything that must be true before anyone can approve this.</summary>
@@ -344,11 +445,18 @@ public sealed class Auction
 
     public void SubmitForReview(DateTimeOffset now)
     {
-        RequireDraft("submit");
+        // An amendment goes before the committee the way the auction first did; the
+        // auction itself stays where it is for everyone else.
+        var amending = IsPublished && Amendment == AmendmentStatus.Editing;
+        if (!amending && Status is not (AuctionStatus.Draft or AuctionStatus.Rejected))
+            throw new InvalidAuctionTransitionException(Status, "submit");
+
         var problems = Validate(now);
         if (problems.Count > 0) throw new AuctionValidationException(problems);
 
-        Status = AuctionStatus.PendingReview;
+        if (amending) Amendment = AmendmentStatus.PendingReview;
+        else Status = AuctionStatus.PendingReview;
+        SubmittedAt = now;
         RejectionReason = null;
     }
 
@@ -359,6 +467,12 @@ public sealed class Auction
     /// </summary>
     public void Approve(DateTimeOffset now)
     {
+        if (IsPublished && Amendment == AmendmentStatus.PendingReview)
+        {
+            ApproveAmendment(now);
+            return;
+        }
+
         if (Status != AuctionStatus.PendingReview)
             throw new InvalidAuctionTransitionException(Status, "approve");
 
@@ -366,7 +480,34 @@ public sealed class Auction
         if (problems.Count > 0) throw new AuctionValidationException(problems);
 
         Status = AuctionStatus.Approved;
+        PublishDefinition();
+    }
 
+    /// <summary>
+    /// The committee approves an amendment to a published auction (§6.5). The
+    /// definition goes out again, whole, on the same two topics as the first time —
+    /// every read model upserts on the auction's key, so bidders see the new terms
+    /// the moment the relay publishes — and the auction's bidders are told it
+    /// changed. The status does not move: it was scheduled and it still is.
+    /// </summary>
+    private void ApproveAmendment(DateTimeOffset now)
+    {
+        var problems = Validate(now);
+        if (problems.Count > 0) throw new AuctionValidationException(problems);
+
+        Amendment = AmendmentStatus.None;
+        AmendedAt = null;
+        PublishDefinition();
+        _events.Add(new AuctionAmended { AuctionId = Id, At = now });
+    }
+
+    /// <summary>
+    /// The public-safe definition and the reserve, as two events on two topics with
+    /// two ACLs, so the reserve is kept from the public read path by configuration
+    /// rather than by care.
+    /// </summary>
+    private void PublishDefinition()
+    {
         _events.Add(new AuctionApproved
         {
             AuctionId = Id,
@@ -388,6 +529,7 @@ public sealed class Auction
             Phase = Phase,
             PlotCount = _plots.Count,
             TotalAreaSqm = TotalAreaSqm,
+            Number = Number == 0 ? null : Number,
             Plots = _plots
                 .OrderBy(p => p.PlotNumber, StringComparer.Ordinal)
                 .Select(p => new PublicPlot(
@@ -409,13 +551,23 @@ public sealed class Auction
 
     public void Reject(string reason)
     {
-        if (Status != AuctionStatus.PendingReview)
+        var amending = IsPublished && Amendment == AmendmentStatus.PendingReview;
+        if (!amending && Status != AuctionStatus.PendingReview)
             throw new InvalidAuctionTransitionException(Status, "reject");
         if (string.IsNullOrWhiteSpace(reason))
             throw new AuctionValidationException(new[] { "A rejection reason is required." });
 
-        Status = AuctionStatus.Rejected;
         RejectionReason = reason.Trim();
+
+        if (amending)
+        {
+            // Back to the administrator with the reason. Nothing public changed, so
+            // nothing is published: bidders still see the approved terms.
+            Amendment = AmendmentStatus.Editing;
+            return;
+        }
+
+        Status = AuctionStatus.Rejected;
         _events.Add(new AuctionRejected { AuctionId = Id, Reason = RejectionReason });
     }
 

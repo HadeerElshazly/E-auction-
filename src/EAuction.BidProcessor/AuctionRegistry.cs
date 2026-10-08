@@ -27,6 +27,15 @@ public sealed class AuctionRegistry(ILogger<AuctionRegistry> logger)
     /// <summary>Raised once, when an auction has both halves and can be run.</summary>
     public event Action<AuctionDefinition>? AuctionReady;
 
+    /// <summary>
+    /// Raised when an auction that is already assembled gets a different definition:
+    /// the committee approved an amendment to it (§6.5) and auction-admin republished
+    /// it whole, on the same two topics. Not raised for a replay of the same record —
+    /// the long-running consumers re-read every topic from the beginning, and an
+    /// unchanged definition is not news.
+    /// </summary>
+    public event Action<AuctionDefinition>? AuctionRedefined;
+
     public IReadOnlyCollection<AuctionDefinition> Ready => _ready.Values.ToList();
 
     public bool TryGet(Guid auctionId, out AuctionDefinition definition) =>
@@ -67,9 +76,34 @@ public sealed class AuctionRegistry(ILogger<AuctionRegistry> logger)
     {
         if (!_approved.TryGetValue(auctionId, out var approved)) return;
         if (!_reserves.TryGetValue(auctionId, out var reserve)) return;
-        if (_ready.ContainsKey(auctionId)) return;
 
-        var definition = new AuctionDefinition
+        var definition = Assemble(approved, reserve);
+
+        // Already assembled: either the same record replayed, which changes nothing,
+        // or an amendment, which replaces the definition and tells the supervisor.
+        if (_ready.TryGetValue(auctionId, out var current))
+        {
+            if (current == definition) return;
+            _ready[auctionId] = definition;
+            logger.LogInformation(
+                "Auction {AuctionId} redefined: {Start:o} to {End:o}, opening {Opening}.",
+                auctionId, definition.StartsAt, definition.EndsAt, definition.OpeningPriceMinorUnits);
+            AuctionRedefined?.Invoke(definition);
+            return;
+        }
+
+        if (!_ready.TryAdd(auctionId, definition)) return;
+
+        logger.LogInformation(
+            "Auction {AuctionId} is ready: {Start:o} to {End:o}, quiet period {Quiet}.",
+            auctionId, definition.StartsAt, definition.EndsAt,
+            definition.QuietPeriod?.ToString() ?? "disabled");
+
+        AuctionReady?.Invoke(definition);
+    }
+
+    private static AuctionDefinition Assemble(AuctionApprovedPayload approved, long reserve) =>
+        new()
         {
             AuctionId = approved.AuctionId,
             StartsAt = approved.StartsAt,
@@ -85,14 +119,4 @@ public sealed class AuctionRegistry(ILogger<AuctionRegistry> logger)
                 ? channel
                 : BidChannel.Online
         };
-
-        if (!_ready.TryAdd(auctionId, definition)) return;
-
-        logger.LogInformation(
-            "Auction {AuctionId} is ready: {Start:o} to {End:o}, quiet period {Quiet}.",
-            auctionId, definition.StartsAt, definition.EndsAt,
-            definition.QuietPeriod?.ToString() ?? "disabled");
-
-        AuctionReady?.Invoke(definition);
-    }
 }
