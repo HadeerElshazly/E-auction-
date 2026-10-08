@@ -14,7 +14,7 @@
   "ssoSessionMaxLifespan": 36000,
   "refreshTokenMaxReuse": 0,
   "revokeRefreshToken": true,
-  "sslRequired": "none",
+  "sslRequired": "external",
   "registrationAllowed": false,
   "bruteForceProtected": true,
   "permanentLockout": false,
