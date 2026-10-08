@@ -1,0 +1,167 @@
+# Manual deploy of the demo to the VM, from a runner on that VM.
+#
+# Separate from vm-deploy.yml rather than a change to it: that one seeds a
+# plan's worth of Kafka history, which is right for a first bring-up and wrong
+# for a box people are already demonstrating from. This one never touches the
+# history and can optionally add a handful of live auctions instead.
+#
+# Dispatch only. Nothing here should run because a branch moved.
+name: deploy-demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Rebuild images from scratch (--rebuild)"
+        type: boolean
+        default: false
+      seed_auctions:
+        description: "Add demo auctions after deploying (seed-auctions.sh)"
+        type: boolean
+        default: false
+
+concurrency:
+  # One at a time. Two `docker compose up` runs against one host fight over the
+  # same container names and leave half the stack down.
+  group: deploy-demo
+  cancel-in-progress: false
+
+env:
+  DEMO_HOST: auctions.westus2.cloudapp.azure.com
+  # Pinned, so the named volumes keep their prefix whatever the runner's
+  # workspace path is. See the comment in deploy/vm/deploy.sh.
+  COMPOSE_PROJECT_NAME: eauction
+
+jobs:
+  deploy:
+    name: Deploy on the VM
+    runs-on: self-hosted
+    timeout-minutes: 60       # fourteen images on four vCPUs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight
+        run: |
+          set -uo pipefail
+          fail=0
+
+          echo "host    $(hostname)"
+          echo "cpu     $(nproc) vCPU"
+          echo "ram     $(free -g | awk '/^Mem:/ {print $2}') GiB"
+          echo "disk    $(df -h / | awk 'NR==2 {print $4}') free on /"
+
+          if docker compose version >/dev/null 2>&1; then
+            echo "docker  $(docker --version), compose $(docker compose version --short)"
+          else
+            echo "::error::docker or the compose plugin is missing. Run deploy/vm/bootstrap.sh on the VM."
+            fail=1
+          fi
+
+          # The runner needs the docker group. Without it this fails here with a
+          # clear message rather than inside a build twenty minutes later.
+          if ! docker ps >/dev/null 2>&1; then
+            echo "::error::This runner cannot reach the Docker socket. Run: sudo usermod -aG docker \$USER, then restart the runner service."
+            fail=1
+          fi
+
+          # Fourteen images and their layers come to roughly 12G. Below 20 the
+          # build tends to die part-way with an error that names no cause.
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail:-0}" -lt 20 ]; then
+            echo "::error::Only ${avail}G free on /. The images need about 12G. Try: docker system prune -af"
+            fail=1
+          fi
+
+          exit $fail
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          # Both toolchains run in containers, so the VM needs neither the .NET
+          # SDK nor Node — only Docker. And a failing test costs seconds here
+          # rather than twenty minutes of image building.
+          docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 \
+            dotnet test EAuction.sln --nologo -v q
+          docker run --rm -v "$PWD:/src" -w /src/web node:22-alpine sh -euc '
+            npm ci --no-audit --no-fund && npm run typecheck && npm test
+          '
+
+      - name: Deploy
+        env:
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          set -euo pipefail
+          # --no-seed always. deploy.sh's seeder publishes a plan's worth of
+          # history to Kafka, which must not be re-run against a demo that is
+          # already carrying data.
+          ARGS="--no-seed"
+          [ "$REBUILD" = "true" ] && ARGS="$ARGS --rebuild"
+          echo "deploy.sh $ARGS"
+          bash deploy/vm/deploy.sh $ARGS
+
+      - name: Seed demo auctions
+        if: ${{ inputs.seed_auctions }}
+        env:
+          SEED_BASE: https://auctions.westus2.cloudapp.azure.com
+        run: |
+          set -uo pipefail
+          out="$(bash deploy/vm/seed-auctions.sh --count 6 2>&1)"; rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            # A second run is expected to refuse rather than duplicate. That is
+            # the script working, not the deploy failing.
+            if printf '%s' "$out" | grep -qi "already exist"; then
+              echo "::notice::The seeder refused because the auctions already exist. Nothing was added; this is not a failure."
+            else
+              echo "::error::seed-auctions.sh failed for a reason other than existing auctions."
+              exit "$rc"
+            fi
+          fi
+
+      - name: Prove it answers
+        run: |
+          set -uo pipefail
+          fail=0
+          check() {
+            local what="$1" url="$2" want="$3"
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)
+            if [ "$code" = "$want" ]; then
+              printf '  ok    %-42s %s\n' "$what" "$code"
+            else
+              printf '  FAIL  %-42s %s (wanted %s)  %s\n' "$what" "$code" "$want" "$url"
+              fail=1
+            fi
+          }
+
+          B="https://${DEMO_HOST}"
+          check "edge health (on the VM)"  "http://localhost/edge/health"  200
+          check "bidder portal"            "$B/"                           200
+          check "admin portal"             "$B:8081/"                      200
+          check "keycloak realm"           "$B/auth/realms/eauction"       200
+          check "public auctions"          "$B/api/query/auctions"         200
+          # 401 is the pass. The endpoint exists and refuses an anonymous
+          # caller; a 200 would mean the staff surface is open to the internet.
+          check "staff list refuses anonymous" "$B/api/query/staff/leaders" 401
+
+          exit $fail
+
+      - name: What is running
+        if: always()
+        run: |
+          docker ps --filter 'name=eauction-' \
+            --format 'table {{.Names}}\t{{.Status}}' || true
+          echo "--- unhealthy or restarting"
+          docker ps --filter 'name=eauction-' --filter health=unhealthy \
+            --format '{{.Names}}: {{.Status}}' || true
+          docker ps --filter 'name=eauction-' --filter status=restarting \
+            --format '{{.Names}}: {{.Status}}' || true
+
+      - name: Logs from anything that exited
+        if: failure()
+        run: |
+          for c in $(docker ps -a --filter 'name=eauction-' --filter status=exited \
+                       --format '{{.Names}}' || true); do
+            echo "::group::$c"
+            docker logs --tail=40 "$c" 2>&1 || true
+            echo "::endgroup::"
+          done

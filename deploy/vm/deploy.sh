@@ -96,7 +96,18 @@ echo "  ok"
 # couple of minutes after that, since only the layers whose inputs changed are
 # rebuilt. The portals are the slow ones: each runs its own npm ci.
 say "Building images (this is the long part)"
-dc build ${REBUILD} --progress plain 2>&1 | grep -E "^#[0-9]+ (DONE|ERROR)|naming to|ERROR" | tail -40 || true
+#
+# Not piped through grep any more. The pipeline's exit status was grep's, and
+# the `|| true` swallowed what was left, so a failed build was indistinguishable
+# from a quiet one — and `dc up` then started whatever images were already on
+# the host. A deploy that silently serves the previous build is worse than one
+# that stops.
+BUILD_LOG="$(mktemp)"
+if ! dc build ${REBUILD} --progress plain >"$BUILD_LOG" 2>&1; then
+  tail -80 "$BUILD_LOG"; rm -f "$BUILD_LOG"
+  die "the image build failed; nothing was started."
+fi
+rm -f "$BUILD_LOG"
 
 # --- up ---------------------------------------------------------------------
 say "Starting"
