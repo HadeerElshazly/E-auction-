@@ -406,3 +406,92 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: minio-data
+---
+# --- صندوق التجارب: the Nafath and payment sandbox ------------------------
+#
+# Here rather than in the chart, for the same reason as Kafka and Postgres: in
+# production Nafath is Elm/NIC under contract and the gateway is PayTabs or
+# SADAD, and a chart that shipped a simulator would be a chart that could put
+# one in front of a real auction. The product chart has no sandbox template at
+# all, which is the correct shape.
+#
+# Without it the demo cannot proceed past registration. Buying a booklet and
+# paying a deposit are both behind a second factor, and this is the only place
+# the six-digit code can be read — docs/DEMO.md once gave the wrong advice here
+# and the whole cycle stalled on it.
+#
+# Reached at /sandbox/ through the API gateway rather than on a NodePort of its
+# own. Its page uses relative fetch paths ('api/nafath', no leading slash) and
+# a data: URI favicon, so it works unchanged under a prefix — and that keeps a
+# NodePort spare out of the five the namespace allows.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+  selector:
+    app: sandbox
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sandbox
+  template:
+    metadata:
+      labels:
+        app: sandbox
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: sandbox
+          # Tag substituted by the workflow, which is also what builds it.
+          image: IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: ASPNETCORE_URLS
+              value: http://+:8080
+            # The service refuses to start without this, by design: a sandbox
+            # that could be switched on by omission is a sandbox that ends up
+            # in front of a real auction.
+            - name: Sandbox__Enabled
+              value: "true"
+            # Already public — it is the secret deploy/keycloak/eauction-realm.json
+            # seeds on the dev bidders, and that file is in git. This service may
+            # never be given a real one.
+            - name: Sandbox__TotpSecret
+              value: "eauctiondevsecret1234567890"
+            - name: Sandbox__PaymentsBaseUrl
+              value: http://eauction-payments.e-auctions.svc.cluster.local:80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 150m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

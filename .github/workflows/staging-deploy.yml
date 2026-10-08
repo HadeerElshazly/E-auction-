@@ -226,6 +226,10 @@ jobs:
         with:
           version: v3.16.3
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
       - name: Open the tunnel
         env:
           SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
@@ -244,28 +248,37 @@ jobs:
           for i in $(seq 1 20); do kubectl version -o json >/dev/null 2>&1 && break; sleep 1; done
           kubectl -n "$NAMESPACE" get all >/dev/null
 
-      - name: Render the chart before touching the cluster
+      - name: The chart's own portability tests
+        run: ./deploy/helm/test-chart.sh
+
+      - name: Render everything, then assert what the namespace will refuse
         run: |
-          # helm lint and a template render catch a values typo here rather than
-          # as a half-applied release. Nothing in this repository has ever been
-          # rendered by a real helm: the session that wrote the chart could not
-          # install one, so this step is the first real check it has had.
+          set -euo pipefail
           helm lint deploy/helm/e-auction -f deploy/helm/e-auction/values-staging.yaml
+
           helm template "$RELEASE" deploy/helm/e-auction \
             -f deploy/helm/e-auction/values-staging.yaml \
             -n "$NAMESPACE" --set image.tag="${{ needs.build.outputs.tag }}" > /tmp/rendered.yaml
-          echo "rendered $(grep -c '^kind:' /tmp/rendered.yaml) objects"
 
-          # The chart must not reach outside our namespace, and must not carry a
-          # credential. Both are assertions the owner's access notes demand.
-          if grep -nE '^kind: (ClusterRole|ClusterRoleBinding|CustomResourceDefinition|StorageClass|IngressClass|MutatingWebhookConfiguration|ValidatingWebhookConfiguration)' /tmp/rendered.yaml; then
-            echo "::error::The chart renders a cluster-scoped object. We cannot create those; send the owner the exact objects."
-            exit 1
-          fi
-          if grep -nE '^kind: Ingress' /tmp/rendered.yaml; then
-            echo "::error::An Ingress was rendered. The only IngressClass belongs to the archive tenant."
-            exit 1
-          fi
+          sed "s|IMAGE_PLACEHOLDER|${REGISTRY}/e-auction/sandbox:${{ needs.build.outputs.tag }}|" \
+            deploy/staging/dependencies.yaml > /tmp/deps.yaml
+
+          # Eleven assertions, each matching a limit in the access note: nothing
+          # cluster-scoped, no Ingress, no LoadBalancer, at most five NodePorts
+          # and never the archive's two, a CPU and memory limit on every
+          # container, no PDB or autoscaler, bid-processor pinned at one, Pod
+          # Security baseline, no credential in the output, and the CPU budget.
+          # The script is negative-tested: it fails when a guard is removed.
+          ./deploy/staging/check-render.sh /tmp/rendered.yaml /tmp/deps.yaml deploy/staging/api-gateway.yaml
+
+      - name: Validate against the cluster's own schemas
+        run: |
+          set -euo pipefail
+          # 1.33 to match the node's k3s. Strict, so an unknown field is an
+          # error rather than something the API server silently drops.
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
+          "$(go env GOPATH)/bin/kubeconform" -kubernetes-version 1.33.0 -strict -summary \
+            /tmp/rendered.yaml /tmp/deps.yaml deploy/staging/api-gateway.yaml
 
       - name: Secrets, created once and kept
         run: ./deploy/staging/secrets.sh
@@ -277,16 +290,24 @@ jobs:
             --from-file=eauction-realm.json=deploy/keycloak/eauction-realm.json \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Kafka, Postgres, Keycloak, MinIO
+      - name: Kafka, Postgres, Keycloak, MinIO, sandbox
         run: |
-          kubectl -n "$NAMESPACE" apply -f deploy/staging/dependencies.yaml
+          set -euo pipefail
+          # The sandbox is the only one of these whose image we build, so its
+          # tag is substituted here rather than hard-coded in the manifest.
+          sed "s|IMAGE_PLACEHOLDER|${REGISTRY}/e-auction/sandbox:${{ needs.build.outputs.tag }}|" \
+            deploy/staging/dependencies.yaml | kubectl -n "$NAMESPACE" apply -f -
           kubectl -n "$NAMESPACE" apply -f deploy/staging/api-gateway.yaml
+
           # The chart's pre-install hooks create topics and run migrations, so
-          # both Kafka and Postgres have to be serving before Helm starts.
-          kubectl -n "$NAMESPACE" rollout status deploy/postgres --timeout=300s
-          kubectl -n "$NAMESPACE" rollout status deploy/kafka    --timeout=300s
-          kubectl -n "$NAMESPACE" rollout status deploy/minio    --timeout=300s
-          kubectl -n "$NAMESPACE" rollout status deploy/keycloak --timeout=600s
+          # Kafka and Postgres have to be serving before Helm starts.
+          kubectl -n "$NAMESPACE" rollout status deploy/postgres    --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deploy/kafka       --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deploy/minio       --timeout=300s
+          kubectl -n "$NAMESPACE" rollout status deploy/api-gateway --timeout=180s
+          # Keycloak last and with the longest timeout: it imports the realm on
+          # every boot, because start-dev keeps it in memory.
+          kubectl -n "$NAMESPACE" rollout status deploy/keycloak    --timeout=600s
 
       - name: The pull secret
         run: |
@@ -306,6 +327,13 @@ jobs:
             -n "$NAMESPACE" \
             --set image.tag="${{ needs.build.outputs.tag }}" \
             --wait --timeout 15m
+
+      - name: The sandbox, once payments exists
+        run: |
+          # Checked after the release, not with the other dependencies: the
+          # sandbox reads the payment service's state, and that Service is
+          # created by the chart.
+          kubectl -n "$NAMESPACE" rollout status deploy/sandbox --timeout=300s
 
       - name: What came up
         if: always()
@@ -341,6 +369,10 @@ jobs:
           echo "admin    http://${NODE_IP}:30081"
           echo "keycloak http://${NODE_IP}:30082"
           echo "api      http://${NODE_IP}:30083/gateway/health"
+          echo "sandbox  http://${NODE_IP}:30083/sandbox/   <- open this FIRST"
+          echo
+          echo "Registering and paying a deposit are behind a second factor and"
+          echo "the sandbox is the only place that code can be read."
           echo
           echo "Each of those four ports must be opened in the Azure network"
           echo "security group before a browser outside the VM can reach it."

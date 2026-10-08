@@ -27,6 +27,14 @@
 #        30082  keycloak
 #        30083  api-gateway -> the eight APIs
 #
+#   4. Every PodDisruptionBudget and every autoscaler is off. Rendering the
+#      chart is what caught this: the defaults produced five PDBs with
+#      minAvailable 1 against replicas 1, which makes the pod impossible to
+#      evict and blocks `kubectl drain` on a node we do not own — hostile to
+#      the other tenant, whose operator may need to drain it. One autoscaler
+#      also came out with minReplicas 2 against replicas 1, which would have
+#      doubled a portal's cost against a budget that did not allow for it.
+#
 # Pod Security is `baseline` (enforced). The chart was already compliant — no
 # privileged containers, no hostPath, no hostPorts, no hostNetwork — so nothing
 # here loosens it.
@@ -96,6 +104,11 @@ bidCatcher:
     limits: { cpu: 400m, memory: 512Mi }
 
 bidProcessor:
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   # Never raise this. Auctions are not sharded across processor instances, so a
   # second replica drives every auction in parallel and publishes duplicate
   # winners. NOTES.txt warns about it; the quota would not stop you.
@@ -123,6 +136,11 @@ queryBff:
 
 auctionAdmin:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   expose:
     enabled: false
   secretEnv:
@@ -143,6 +161,11 @@ auctionAdmin:
 
 participant:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   expose:
     enabled: false
   secretEnv:
@@ -164,6 +187,11 @@ participant:
 
 payments:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   expose:
     enabled: false
   env:
@@ -188,6 +216,11 @@ payments:
 
 documents:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   expose:
     enabled: false
   secretEnv:
@@ -215,6 +248,11 @@ documents:
 
 notifications:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   secretEnv:
     - name: ConnectionStrings__Notifications
       secretName: eauction-notifications-db
@@ -228,6 +266,11 @@ notifications:
 
 audit:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   secretEnv:
     - name: ConnectionStrings__Audit
       secretName: eauction-audit-db
@@ -241,6 +284,11 @@ audit:
 
 reporting:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   secretEnv:
     - name: ConnectionStrings__Reporting
       secretName: eauction-reporting-db
@@ -260,6 +308,11 @@ reporting:
 
 bidderPortal:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   expose:
     enabled: false
   service:
@@ -272,6 +325,11 @@ bidderPortal:
 
 adminPortal:
   replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  spreadAcrossNodes: false
   expose:
     enabled: false
   service:
@@ -299,12 +357,13 @@ adminPortal:
 #   ---------------------------------------------
 #   chart services       1 200m          2 750m
 #   api-gateway             50m            200m
+#   sandbox                 50m            150m
 #   dependencies.yaml    1 050m          2 150m
 #   provision hooks        200m            400m
 #   ---------------------------------------------
-#   total                2 500m          5 500m
+#   total                2 550m          5 650m
 #   quota                3 000m          6 000m
-#   headroom               500m            500m
+#   headroom               450m            350m
 #
 # The hooks are counted even though they are pre-install: on an upgrade they
 # run while the services are still up, so for one moment both are charged

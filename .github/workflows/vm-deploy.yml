@@ -1,0 +1,197 @@
+# Deploy the demo to the Azure VM, from a runner on that VM.
+#
+# A self-hosted runner rather than SSH from a GitHub-hosted one, and the reason
+# is the firewall. A hosted runner would need inbound port 22 open to GitHub's
+# address ranges, which are large and change often — close enough to opening SSH
+# broadly, on a host that runs a payment simulator settling every charge for
+# free. The runner here polls GitHub outbound instead:
+#
+#   * no inbound port open at all
+#   * no SSH key in GitHub secrets — that credential stops existing
+#   * no rsync: actions/checkout puts the commit on the VM directly
+#
+# Setting the runner up, once, on the VM:
+#
+#   Settings -> Actions -> Runners -> New self-hosted runner  (Linux x64)
+#   follow the curl + ./config.sh it gives you, then:
+#     sudo ./svc.sh install && sudo ./svc.sh start
+#     sudo usermod -aG docker "$USER"      # the runner must reach the socket
+#   and restart the service so the group applies.
+name: vm-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      preflight_only:
+        description: "Only check the VM, deploy nothing"
+        type: boolean
+        default: false
+      bootstrap:
+        description: "Install Docker and set kernel limits first"
+        type: boolean
+        default: false
+      rebuild:
+        description: "Rebuild images from scratch (--no-cache)"
+        type: boolean
+        default: false
+      seed:
+        description: "Seed demo data after deploying"
+        type: boolean
+        default: true
+
+concurrency:
+  # One deploy at a time. Two `docker compose up` runs against one host fight
+  # over the same container names and leave half the stack down.
+  group: vm-deploy
+  cancel-in-progress: false
+
+env:
+  VM_NAME: auctions.westus2.cloudapp.azure.com
+  # Pinned so the named volumes keep their prefix whatever the runner's
+  # workspace path is. See the comment in deploy/vm/deploy.sh.
+  COMPOSE_PROJECT_NAME: eauction
+
+jobs:
+  deploy:
+    name: Deploy on the VM
+    runs-on: self-hosted
+    timeout-minutes: 60      # fourteen images on four vCPUs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is this VM able to run it
+        run: |
+          set -uo pipefail
+          fail=0
+          echo "host    $(hostname)"
+          echo "os      $(. /etc/os-release && echo "$PRETTY_NAME")"
+          echo "cpu     $(nproc) vCPU"
+          echo "ram     $(free -g | awk '/^Mem:/ {print $2}') GiB"
+          echo "disk    $(df -h / | awk 'NR==2 {print $4}') free on /"
+          echo "workdir $(pwd)"
+
+          if ! docker compose version >/dev/null 2>&1; then
+            echo "::error::docker compose is missing. Re-run with 'Install Docker' ticked."
+            fail=1
+          else
+            echo "docker  $(docker --version), $(docker compose version --short)"
+          fi
+
+          # The runner must be able to talk to the socket. Without the docker
+          # group this fails here with a clear message rather than three steps
+          # later inside a build.
+          if ! docker ps >/dev/null 2>&1; then
+            echo "::error::This runner cannot reach the Docker socket."
+            echo "::error::  sudo usermod -aG docker \$USER   then restart the runner service"
+            fail=1
+          fi
+
+          # Fourteen images and their layers. Measured at about 12 GiB; below
+          # 20 the build is likely to die part-way with a confusing error.
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail:-0}" -lt 20 ]; then
+            echo "::error::Only ${avail}G free on /. The images need roughly 12G; clear space first."
+            echo "::error::  docker system prune -af --volumes   (removes stopped containers and unused images)"
+            fail=1
+          fi
+
+          exit $fail
+
+      - name: Bootstrap
+        if: ${{ inputs.bootstrap }}
+        run: bash deploy/vm/bootstrap.sh
+
+      - name: Test before building
+        if: ${{ !inputs.preflight_only }}
+        run: |
+          set -euo pipefail
+          # The VM has four vCPUs and will spend twenty minutes on the images.
+          # A failing test should cost seconds, not that.
+          #
+          # Both toolchains run inside containers, so the VM needs neither the
+          # .NET SDK nor Node installed — only Docker, which it has.
+          docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:8.0 \
+            dotnet test EAuction.sln --nologo -v q
+          docker run --rm -v "$PWD:/src" -w /src/web node:22-alpine sh -euc '
+            # ci, not install: a package.json that has drifted from the
+            # lockfile must fail here. That is how this branch broke once.
+            npm ci --no-audit --no-fund
+            npm run typecheck
+            npm test
+          '
+
+      - name: Deploy
+        if: ${{ !inputs.preflight_only }}
+        env:
+          REBUILD: ${{ inputs.rebuild }}
+          SEED: ${{ inputs.seed }}
+        run: |
+          set -euo pipefail
+          ARGS=""
+          [ "$REBUILD" = "true" ] && ARGS="$ARGS --rebuild"
+          [ "$SEED" = "true" ]    || ARGS="$ARGS --no-seed"
+          echo "deploy.sh$ARGS"
+          bash deploy/vm/deploy.sh $ARGS
+
+      - name: Prove it answers
+        if: ${{ !inputs.preflight_only }}
+        run: |
+          set -uo pipefail
+          fail=0
+          check() {
+            local what="$1" url="$2" want="${3:-200}"
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)
+            if [ "$code" = "$want" ]; then printf '  ok    %-38s (%s)\n' "$what" "$code"
+            else printf '  FAIL  %-38s (%s, wanted %s)  %s\n' "$what" "$code" "$want" "$url"; fail=1; fi
+          }
+
+          # Over localhost first: this is the stack answering, independent of
+          # whether the network security group has been opened yet.
+          echo "--- on the VM itself"
+          check "edge health"      "http://localhost/edge/health"
+          check "bidder portal"    "http://localhost/"
+          check "admin portal"     "http://localhost:8081/"
+          check "keycloak realm"   "http://localhost/auth/realms/eauction"
+          check "sandbox"          "http://localhost/sandbox/"
+          check "public auctions"  "http://localhost/api/query/auctions"
+          # 401 is the right answer: the endpoint exists and refuses an
+          # anonymous caller. A 200 would mean the staff surface is open.
+          check "staff list refuses anonymous" "http://localhost/api/query/staff/leaders" 401
+
+          # Then over the public name. A failure here and a pass above means the
+          # stack is fine and the firewall is not open — a different problem
+          # with a different fix, which is why they are reported separately.
+          echo "--- through ${VM_NAME} (needs ports 80 and 8081 open)"
+          for u in "http://${VM_NAME}/edge/health" "http://${VM_NAME}:8081/edge/health"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$u" || echo 000)
+            if [ "$code" = "200" ]; then printf '  ok    %s\n' "$u"
+            else printf '  note  %s -> %s (open it in the NSG, scoped to your own range)\n' "$u" "$code"; fi
+          done
+
+          exit $fail
+
+      - name: What is running
+        if: always()
+        run: |
+          docker compose --env-file "${EAUCTION_ENV_FILE:-$HOME/.config/eauction/.env}" \
+            -f deploy/compose/docker-compose.yml -f deploy/vm/docker-compose.vm.yml \
+            ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || true
+          echo "--- unhealthy or restarting"
+          docker ps --filter health=unhealthy --filter status=restarting \
+            --format '{{.Names}}: {{.Status}}' || true
+
+      - name: Logs from anything that failed
+        if: failure()
+        run: |
+          for c in $(docker ps -a --filter status=exited --format '{{.Names}}' | grep '^eauction-' || true); do
+            echo "::group::$c"
+            docker logs --tail=40 "$c" 2>&1 || true
+            echo "::endgroup::"
+          done
+
+      - name: Where to click
+        if: ${{ !inputs.preflight_only }}
+        run: |
+          echo "bidder   http://${VM_NAME}/"
+          echo "admin    http://${VM_NAME}:8081/"
+          echo "sandbox  http://${VM_NAME}/sandbox/   <- open this one first"

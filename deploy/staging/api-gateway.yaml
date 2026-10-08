@@ -126,6 +126,19 @@ data:
         include /etc/nginx/conf.d/proxy-common.inc;
       }
 
+      # صندوق التجارب. A trailing slash matters: the page's fetches are
+      # relative, so at /sandbox (no slash) they would resolve against / and
+      # miss the prefix entirely. The redirect makes the shorter address work.
+      location = /sandbox {
+        return 301 /sandbox/;
+      }
+
+      location /sandbox/ {
+        set $up http://sandbox.e-auctions.svc.cluster.local:8080;
+        proxy_pass $up/;
+        include /etc/nginx/conf.d/proxy-common.inc;
+      }
+
       # The gateway's own liveness, answered without touching a service.
       location = /gateway/health {
         access_log off;
