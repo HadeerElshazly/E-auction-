@@ -39,95 +39,110 @@ services:
   provision-migrate:
     environment:
       Admin__BidderMasterKeyHex: ${BIDDER_MASTER_KEY}
+      ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Notifications: "Host=postgres;Database=eauction_notifications;Username=eauction;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Audit: "Host=postgres;Database=eauction_audit;Username=eauction;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Reporting: "Host=postgres;Database=eauction_reporting;Username=eauction;Password=${POSTGRES_PASSWORD}"
   auction-admin:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com,http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com,https://auctions.westus2.cloudapp.azure.com:8081
       Admin__BidderMasterKeyHex: ${BIDDER_MASTER_KEY}
       Documents__GrantKeyHex: ${DOCUMENT_GRANT_KEY}
+      ConnectionStrings__Admin: "Host=postgres;Database=eauction;Username=eauction;Password=${POSTGRES_PASSWORD}"
     restart: unless-stopped
   participant:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com,http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com,https://auctions.westus2.cloudapp.azure.com:8081
       Participant__BidderMasterKeyHex: ${BIDDER_MASTER_KEY}
       Documents__GrantKeyHex: ${DOCUMENT_GRANT_KEY}
+      ConnectionStrings__Participant: "Host=postgres;Database=eauction_participant;Username=eauction;Password=${POSTGRES_PASSWORD}"
     restart: unless-stopped
   bid-catcher:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com,http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com,https://auctions.westus2.cloudapp.azure.com:8081
       Catcher__BidderMasterKeyHex: ${BIDDER_MASTER_KEY}
       Catcher__ReceiptKeyHex: ${BID_RECEIPT_KEY}
     restart: unless-stopped
   query-bff:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com,http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com,https://auctions.westus2.cloudapp.azure.com:8081
     restart: unless-stopped
   documents:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com,http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com,https://auctions.westus2.cloudapp.azure.com:8081
       Documents__GrantKeyHex: ${DOCUMENT_GRANT_KEY}
+      Storage__AccessKey: ${MINIO_ROOT_USER}
+      Storage__SecretKey: ${MINIO_ROOT_PASSWORD}
     restart: unless-stopped
   notifications:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com,http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com,https://auctions.westus2.cloudapp.azure.com:8081
+      ConnectionStrings__Notifications: "Host=postgres;Database=eauction_notifications;Username=eauction;Password=${POSTGRES_PASSWORD}"
     restart: unless-stopped
   audit:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com:8081
+      ConnectionStrings__Audit: "Host=postgres;Database=eauction_audit;Username=eauction;Password=${POSTGRES_PASSWORD}"
     restart: unless-stopped
   reporting:
     environment:
-      Jwt__Issuer: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+      Jwt__Issuer: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
       Jwt__Authority: http://keycloak:8080/auth/realms/eauction
-      Cors__AllowedOrigins: http://auctions.westus2.cloudapp.azure.com:8081
+      Cors__AllowedOrigins: https://auctions.westus2.cloudapp.azure.com:8081
+      ConnectionStrings__Reporting: "Host=postgres;Database=eauction_reporting;Username=eauction;Password=${POSTGRES_PASSWORD}"
     restart: unless-stopped
   bidder-portal:
     build:
       args:
-        VITE_ISSUER: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
-        VITE_ADMIN_API: http://auctions.westus2.cloudapp.azure.com/api/admin
-        VITE_PARTICIPANT_API: http://auctions.westus2.cloudapp.azure.com/api/participant
-        VITE_CATCHER_API: http://auctions.westus2.cloudapp.azure.com/api/catcher
-        VITE_QUERY_API: http://auctions.westus2.cloudapp.azure.com/api/query
-        VITE_DOCUMENTS_API: http://auctions.westus2.cloudapp.azure.com/api/documents
-        VITE_NOTIFICATIONS_API: http://auctions.westus2.cloudapp.azure.com/api/notifications
-        VITE_AUDIT_API: http://auctions.westus2.cloudapp.azure.com/api/audit
-        VITE_REPORTING_API: http://auctions.westus2.cloudapp.azure.com/api/reporting
+        VITE_ISSUER: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+        VITE_ADMIN_API: https://auctions.westus2.cloudapp.azure.com/api/admin
+        VITE_PARTICIPANT_API: https://auctions.westus2.cloudapp.azure.com/api/participant
+        VITE_CATCHER_API: https://auctions.westus2.cloudapp.azure.com/api/catcher
+        VITE_QUERY_API: https://auctions.westus2.cloudapp.azure.com/api/query
+        VITE_DOCUMENTS_API: https://auctions.westus2.cloudapp.azure.com/api/documents
+        VITE_NOTIFICATIONS_API: https://auctions.westus2.cloudapp.azure.com/api/notifications
+        VITE_AUDIT_API: https://auctions.westus2.cloudapp.azure.com/api/audit
+        VITE_REPORTING_API: https://auctions.westus2.cloudapp.azure.com/api/reporting
     restart: unless-stopped
   admin-portal:
     build:
       args:
-        VITE_ISSUER: http://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
-        VITE_ADMIN_API: http://auctions.westus2.cloudapp.azure.com/api/admin
-        VITE_PARTICIPANT_API: http://auctions.westus2.cloudapp.azure.com/api/participant
-        VITE_CATCHER_API: http://auctions.westus2.cloudapp.azure.com/api/catcher
-        VITE_QUERY_API: http://auctions.westus2.cloudapp.azure.com/api/query
-        VITE_DOCUMENTS_API: http://auctions.westus2.cloudapp.azure.com/api/documents
-        VITE_NOTIFICATIONS_API: http://auctions.westus2.cloudapp.azure.com/api/notifications
-        VITE_AUDIT_API: http://auctions.westus2.cloudapp.azure.com/api/audit
-        VITE_REPORTING_API: http://auctions.westus2.cloudapp.azure.com/api/reporting
+        VITE_ISSUER: https://auctions.westus2.cloudapp.azure.com/auth/realms/eauction
+        VITE_ADMIN_API: https://auctions.westus2.cloudapp.azure.com/api/admin
+        VITE_PARTICIPANT_API: https://auctions.westus2.cloudapp.azure.com/api/participant
+        VITE_CATCHER_API: https://auctions.westus2.cloudapp.azure.com/api/catcher
+        VITE_QUERY_API: https://auctions.westus2.cloudapp.azure.com/api/query
+        VITE_DOCUMENTS_API: https://auctions.westus2.cloudapp.azure.com/api/documents
+        VITE_NOTIFICATIONS_API: https://auctions.westus2.cloudapp.azure.com/api/notifications
+        VITE_AUDIT_API: https://auctions.westus2.cloudapp.azure.com/api/audit
+        VITE_REPORTING_API: https://auctions.westus2.cloudapp.azure.com/api/reporting
     restart: unless-stopped
   keycloak:
     environment:
       KC_HTTP_RELATIVE_PATH: /auth
-      KC_HOSTNAME: http://auctions.westus2.cloudapp.azure.com/auth
+      KC_HOSTNAME: https://auctions.westus2.cloudapp.azure.com/auth
       KC_HOSTNAME_STRICT: 'false'
       KC_PROXY_HEADERS: xforwarded
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    healthcheck:
+      # Keycloak lives under /auth here (KC_HTTP_RELATIVE_PATH), so the base file's /realms/eauction is a 404.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /auth/realms/eauction HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep 200"]
     restart: unless-stopped
   postgres:
     environment:
@@ -144,9 +159,12 @@ services:
     restart: unless-stopped
     ports:
     - 80:80
+    - 443:443
     - 8081:8081
     volumes:
-    - ./nginx-edge.conf:/etc/nginx/nginx.conf:ro
+    - ../vm/nginx-edge.conf:/etc/nginx/nginx.conf:ro
+    - /home/auctionvmuser/eauction-tls/www:/var/www/acme:ro
+    - /home/auctionvmuser/eauction-tls/etc:/etc/letsencrypt:ro
     depends_on:
       bidder-portal:
         condition: service_started

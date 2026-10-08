@@ -14,7 +14,7 @@
   "ssoSessionMaxLifespan": 36000,
   "refreshTokenMaxReuse": 0,
   "revokeRefreshToken": true,
-  "sslRequired": "external",
+  "sslRequired": "none",
   "registrationAllowed": false,
   "bruteForceProtected": true,
   "permanentLockout": false,
@@ -63,7 +63,8 @@
       "serviceAccountsEnabled": false,
       "redirectUris": [
         "http://localhost:3000/*",
-        "https://mazad.jeddah.gov.sa/*"
+        "https://mazad.jeddah.gov.sa/*",
+        "https://auctions.westus2.cloudapp.azure.com/*"
       ],
       "webOrigins": [
         "+"
@@ -182,7 +183,8 @@
       "serviceAccountsEnabled": false,
       "redirectUris": [
         "http://localhost:3001/*",
-        "https://mazad-admin.jeddah.gov.sa/*"
+        "https://mazad-admin.jeddah.gov.sa/*",
+        "https://auctions.westus2.cloudapp.azure.com:8081/*"
       ],
       "webOrigins": [
         "+"
