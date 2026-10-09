@@ -16,14 +16,21 @@ import {
   type Session,
 } from '@eauction/shared'
 import type { Auction } from './types'
-import { label } from './types'
+import { amendmentLabel, canEditNow, isDraft, isUpcoming, label } from './types'
 import { AuctionEditor, usePublicPrice } from './AuctionEditor'
 import { Applicants } from './Applicants'
 import { AwardPanel } from './AwardPanel'
 import { ClerkTerminal } from './ClerkTerminal'
 import { BidHistory } from './AuditViews'
 import { BidderName, useLeaders } from './winners'
-import { EndAuction, Reoffer, ReviewDecision, SubmitForApproval } from './AuctionActions'
+import {
+  DeleteDraft,
+  EndAuction,
+  Reoffer,
+  ReviewDecision,
+  SubmitForApproval,
+  WithdrawUpcoming,
+} from './AuctionActions'
 import { PlotsPanel } from './PlotsPanel'
 
 type Tab = 'info' | 'gallery' | 'documents' | 'bids' | 'inquiries' | 'setup' | 'applicants' | 'award' | 'hall'
@@ -46,6 +53,7 @@ export function AuctionDetail({
   isClerk,
   onAct,
   onOpen,
+  onDelete,
 }: {
   auction: Auction
   client: Api
@@ -57,6 +65,8 @@ export function AuctionDetail({
   onAct: (work: () => Promise<unknown>) => Promise<void>
   /** Opens another auction — the new draft a re-offer creates. */
   onOpen: (id: string) => void
+  /** «حذف المسودة»: deletes the draft and leaves its page. */
+  onDelete: (id: string) => Promise<void>
 }) {
   const l = label(auction.status)
   const figures = usePublicPrice(auction, session)
@@ -64,6 +74,9 @@ export function AuctionDetail({
   const award = auction.currentAward ?? auction.followUpAward
   const live = auction.status === 'Live'
   const onsite = auction.channel === 'Onsite'
+  // A draft's data and files, and an upcoming auction's as an amendment (§6.5).
+  const editable = isAdmin && canEditNow(auction)
+  const amending = amendmentLabel(auction.amendment)
 
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: 'info', label: 'تفاصيل القطعة' },
@@ -71,16 +84,16 @@ export function AuctionDetail({
     { key: 'documents', label: 'المستندات' },
     ...(opened(auction.status) ? [{ key: 'bids' as const, label: 'المزايدات' }] : []),
     { key: 'inquiries', label: 'الاستفسارات' },
-    ...(isAdmin ? [{ key: 'setup' as const, label: 'الإعداد والاعتماد' }] : []),
+    ...(isAdmin ? [{ key: 'setup' as const, label: 'تفاصيل المزاد' }] : []),
     ...(isAdmin ? [{ key: 'applicants' as const, label: 'المتقدّمون' }] : []),
     ...(isClerk && onsite ? [{ key: 'hall' as const, label: 'القاعة' }] : []),
     { key: 'award', label: 'النتيجة والترسية' },
   ]
 
-  // The part this person came for: an admin's draft to finish, a result waiting for
-  // the committee, the clerk's hall — else the auction itself.
+  // The part this person came for: an admin's draft (or amendment) to finish, a
+  // result waiting for the committee, the clerk's hall — else the auction itself.
   const preferred: Tab =
-    isAdmin && ['Draft', 'Rejected'].includes(auction.status)
+    isAdmin && (isDraft(auction) || auction.amendment === 'Editing')
       ? 'setup'
       : isCommittee && ['PendingAward', 'WinnerDisqualified', 'Awarded'].includes(auction.status)
           ? 'award'
@@ -124,7 +137,7 @@ export function AuctionDetail({
           client={client}
           session={session}
           busy={busy}
-          canEdit={isAdmin && ['Draft', 'Rejected'].includes(auction.status)}
+          canEdit={editable}
           onAct={onAct}
           badge={<span className={`pill ${l.tone}`}>{l.ar}</span>}
         />
@@ -150,7 +163,7 @@ export function AuctionDetail({
               auction={auction}
               client={client}
               busy={busy}
-              canEdit={isAdmin && ['Draft', 'Rejected'].includes(auction.status)}
+              canEdit={editable}
               onAct={onAct}
             />
           )}
@@ -175,7 +188,6 @@ export function AuctionDetail({
               session={session}
               busy={busy}
               canEdit={isAdmin}
-              canApprove={isCommittee}
               onAct={onAct}
             />
           )}
@@ -202,8 +214,15 @@ export function AuctionDetail({
       <aside>
         <div className="card auction-box" data-testid="auction-box">
           <div className="kv">
+            <span>رقم المزاد</span>
+            <b className="num" data-testid="auction-number">{auction.number}</b>
+          </div>
+          <div className="kv">
             <span>حالة المزاد</span>
-            <span className={`pill ${l.tone}`}>{l.ar}</span>
+            <span>
+              <span className={`pill ${l.tone}`}>{l.ar}</span>
+              {amending && <> <span className="pill wait">{amending}</span></>}
+            </span>
           </div>
           {/* The price now and where it started, side by side. */}
           <div className="price-pair">
@@ -240,6 +259,12 @@ export function AuctionDetail({
             <div className="kv"><span>التمديد</span><b className="num">{figures.extensionsUsed} من {figures.maxExtensions}</b></div>
           )}
           <hr className="divider" />
+
+          {/* An amendment the committee had not approved when the auction opened: the
+              published terms ran, and the trail says what was asked for. */}
+          {opened(auction.status) && auction.amendment !== 'None' && (
+            <div className="notice info small">بدأ المزاد قبل اعتماد التعديل؛ جرى على البيانات المنشورة.</div>
+          )}
 
           {/* What the auction's state means, in one sentence, with the person behind it. */}
           <div className="result-note">
@@ -285,6 +310,10 @@ export function AuctionDetail({
               <>مسودة — تُستكمل البيانات ثم تُرفع للاعتماد.</>
             ) : auction.status === 'PendingReview' ? (
               <>بانتظار اعتماد لجنة الترسية.</>
+            ) : auction.amendment === 'PendingReview' ? (
+              <>معتمد — وعليه تعديل بانتظار اعتماد لجنة الترسية. يبقى ما نُشر للمزايدين حتى ذلك.</>
+            ) : auction.amendment === 'Editing' ? (
+              <>معتمد — يُعدَّل حالياً؛ يبقى ما نُشر للمزايدين حتى تعتمد اللجنة التعديل.</>
             ) : (
               <>معتمد — يفتح في موعده.</>
             )}
@@ -292,20 +321,33 @@ export function AuctionDetail({
           {/* The administrator's way out of a running auction, and back into an
               unsold one. */}
           {isAdmin && live && <EndAuction auction={auction} client={client} busy={busy} onAct={onAct} />}
-          {isAdmin && ['Draft', 'Rejected'].includes(auction.status) && (
+          {isAdmin && isDraft(auction) && (
             <SubmitForApproval auction={auction} client={client} busy={busy} onAct={onAct} />
+          )}
+          {/* An amendment to a published auction goes to the committee the same way (§6.5). */}
+          {isAdmin && isUpcoming(auction) && auction.amendment === 'Editing' && (
+            <SubmitForApproval auction={auction} client={client} busy={busy} onAct={onAct} amendment />
           )}
           {isCommittee && auction.status === 'PendingReview' && (
             <ReviewDecision auction={auction} client={client} busy={busy} onAct={onAct} />
           )}
+          {isCommittee && isUpcoming(auction) && auction.amendment === 'PendingReview' && (
+            <ReviewDecision auction={auction} client={client} busy={busy} onAct={onAct} amendment />
+          )}
           {isAdmin && auction.status === 'Unsold' && (
             <Reoffer auction={auction} client={client} busy={busy} onAct={onAct} onOpen={onOpen} />
+          )}
+          {/* The two ways out before bidding: a draft is deleted; an upcoming auction
+              is withdrawn, its applicants told and their money returned. */}
+          {isAdmin && isDraft(auction) && <DeleteDraft auction={auction} busy={busy} onDelete={onDelete} />}
+          {isAdmin && isUpcoming(auction) && (
+            <WithdrawUpcoming auction={auction} client={client} busy={busy} onAct={onAct} />
           )}
           <p className="box-help">
             <Icon name="shield" size={16} /> كل إجراء هنا يُسجَّل في سجل المراجعة باسم من نفّذه.
           </p>
           <p className="box-help">
-            رقم المزاد: <code className="muted small ltr">{auction.id}</code>
+            المعرّف التقني: <code className="muted small ltr">{auction.id}</code>
           </p>
         </div>
       </aside>
@@ -314,8 +356,9 @@ export function AuctionDetail({
 }
 
 /**
- * تفاصيل القطعة — for every staff role. The auction's terms are edited under
- * الإعداد; the plots are added right here, while it is a draft.
+ * تفاصيل القطعة — for every staff role. The auction's name and phase are edited
+ * right here, with the land they name, and so is the plot; the terms, the files and
+ * the booklet are under «تفاصيل المزاد».
  */
 function Info({
   auction,
@@ -327,7 +370,7 @@ function Info({
   auction: Auction
   client: Api
   busy: boolean
-  /** The plots are added and removed here while the auction is a draft. */
+  /** The name, the phase and the plot are changed here while the auction can be edited. */
   canEdit: boolean
   onAct: (work: () => Promise<unknown>) => Promise<void>
 }) {
@@ -339,6 +382,8 @@ function Info({
           أُلغي المزاد{auction.cancelledAt && <> في {when(auction.cancelledAt)}</>} — السبب: {auction.cancellationReason}
         </div>
       )}
+      <h2>اسم المزاد والمرحلة</h2>
+      <NameAndPhase auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
       {/* As the prototype has it: the land, its six figures, and the papers. The
           deposit, the step, the dates and the fees are in the box beside it. */}
       <h2>تفاصيل الأرض</h2>
@@ -379,6 +424,90 @@ function Info({
           </small>
         </div>
         <PlotsPanel auction={auction} client={client} busy={busy} canEdit={canEdit} onAct={onAct} />
+      </div>
+    </>
+  )
+}
+
+/**
+ * «اسم المزاد والمرحلة» — the Arabic and English names and the phase (المخطط), on
+ * تفاصيل القطعة with the land they name. Saved on their own, apart from the terms:
+ * correcting a name should not mean restating the dates and prices.
+ */
+function NameAndPhase({
+  auction,
+  client,
+  busy,
+  canEdit,
+  onAct,
+}: {
+  auction: Auction
+  client: Api
+  busy: boolean
+  canEdit: boolean
+  onAct: (work: () => Promise<unknown>) => Promise<void>
+}) {
+  const current = { nameAr: auction.nameAr, nameEn: auction.nameEn, phase: auction.phase ?? '' }
+  const [form, setForm] = useState(current)
+  // Reseeded on the saved values, not on the auction object: the page refreshes its
+  // auction every few seconds while it is upcoming, and a refresh that brought the
+  // same names back must not wipe what is being typed.
+  useEffect(() => {
+    setForm({ nameAr: auction.nameAr, nameEn: auction.nameEn, phase: auction.phase ?? '' })
+  }, [auction.id, auction.nameAr, auction.nameEn, auction.phase])
+  const dirty = form.nameAr !== current.nameAr || form.nameEn !== current.nameEn || form.phase !== current.phase
+  const complete = form.nameAr.trim() !== '' && form.nameEn.trim() !== ''
+
+  const save = () =>
+    onAct(() =>
+      client.put(`/auctions/${auction.id}/name`, {
+        nameAr: form.nameAr.trim(),
+        nameEn: form.nameEn.trim(),
+        phase: form.phase.trim() || null,
+      }),
+    )
+
+  if (!canEdit)
+    return (
+      <div className="spec-grid" style={{ marginBottom: 18 }}>
+        <div><small>الاسم (عربي)</small><b>{auction.nameAr}</b></div>
+        <div><small>الاسم (إنجليزي)</small><b className="ltr">{auction.nameEn}</b></div>
+        <div><small>المرحلة</small><b>{auction.phase ?? '—'}</b></div>
+      </div>
+    )
+
+  return (
+    <>
+      <div className="form-row-3">
+        <label>
+          <span>الاسم (عربي)</span>
+          <input aria-label="الاسم (عربي)" value={form.nameAr} onChange={(e) => setForm({ ...form, nameAr: e.target.value })} />
+        </label>
+        <label>
+          <span>الاسم (إنجليزي)</span>
+          <input
+            className="ltr"
+            aria-label="الاسم (إنجليزي)"
+            value={form.nameEn}
+            onChange={(e) => setForm({ ...form, nameEn: e.target.value })}
+          />
+        </label>
+        <label>
+          <span>المرحلة</span>
+          <input
+            className="ltr"
+            aria-label="المرحلة"
+            placeholder="phase-1"
+            value={form.phase}
+            onChange={(e) => setForm({ ...form, phase: e.target.value })}
+          />
+        </label>
+      </div>
+      <div className="row" style={{ justifyContent: 'flex-end', gap: 8, marginBottom: 18 }}>
+        <span className="muted small">{dirty ? 'تعديلات غير محفوظة' : 'لا تعديلات غير محفوظة'}</span>
+        <button className="primary small" disabled={busy || !dirty || !complete} onClick={() => void save()}>
+          حفظ الاسم والمرحلة
+        </button>
       </div>
     </>
   )
@@ -469,7 +598,8 @@ function Gallery({
     .filter((d) => d.kind !== 'Document')
     .map((d) => ({ id: d.documentId, url: documentUrl(d.documentId), title: d.titleAr }))
   const [title, setTitle] = useState('')
-  const draft = ['Draft', 'Rejected'].includes(auction.status)
+  // While the auction is a draft, or upcoming without a pending amendment (§6.5).
+  const draft = canEditNow(auction)
 
   const add = (file: File) =>
     onAct(async () => {
@@ -517,7 +647,9 @@ function Gallery({
       )}
       {canAdd && !draft && (
         <p className="muted small" style={{ marginTop: 12 }}>
-          تُضاف الصور والمستندات العامة أثناء إعداد المزاد؛ بعد نشره لا يتغيّر ما عُرض على المزايدين.
+          {auction.amendment === 'PendingReview'
+            ? 'التعديل بانتظار اعتماد لجنة الترسية؛ لا تُضاف صور حتى تبتّ فيه.'
+            : 'تُضاف الصور والمستندات العامة أثناء إعداد المزاد، أو كتعديل عليه قبل بدئه؛ بعد بدء المزاد لا يتغيّر ما عُرض على المزايدين.'}
         </p>
       )}
     </>
@@ -585,7 +717,7 @@ function CoverPhoto({
 
 /**
  * المستندات — the booklet and the public documents of the auction, on their own
- * tab. They are attached under «الإعداد والاعتماد» while the auction is prepared.
+ * tab. They are attached under «تفاصيل المزاد» while the auction can be edited.
  */
 function Documents({ auction }: { auction: Auction }) {
   const papers = auction.attachments.filter((d) => d.kind !== 'Photo')

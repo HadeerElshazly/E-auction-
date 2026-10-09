@@ -64,6 +64,84 @@ public class ProcessorWiringTests
         Assert.True(h.Registry.TryGet(d.AuctionId, out _));
     }
 
+    [Fact]
+    public async Task A_definition_republished_before_the_start_replaces_the_auction()
+    {
+        // §6.5: the committee approved an amendment and auction-admin republished
+        // the definition. The auction had not opened, so it is simply run on the new
+        // terms — here, a later start.
+        await using var h = new ProcessorHarness(Grace);
+        var now = DateTimeOffset.UtcNow;
+        var d = Define(now.AddMinutes(-1), now.AddMinutes(30));
+
+        await h.PublishApprovalAsync(d);
+        await h.PublishReserveAsync(d);
+        await h.RecoverAsync();
+        var original = h.Running(d.AuctionId);
+        Assert.False(original.Announced);
+
+        var later = d with { StartsAt = now.AddMinutes(20), EndsAt = now.AddMinutes(50) };
+        await h.PublishApprovalAsync(later);
+        await h.RecoverAsync();
+
+        Assert.True(h.Registry.TryGet(d.AuctionId, out var ready));
+        Assert.Equal(later.StartsAt, ready.StartsAt);
+
+        var replaced = h.Running(d.AuctionId);
+        Assert.NotSame(original, replaced);
+        Assert.Equal(later.StartsAt, replaced.Definition.StartsAt);
+
+        // The old pump stopped; the new one runs. Only one of them must ever
+        // publish for this auction.
+        await original.Task!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(original.Task!.IsCompleted);
+        Assert.NotNull(replaced.Pump);
+
+        // Not announced at the old start; announced at the new one.
+        await h.Supervisor.TickAsync(now, h.Token);
+        Assert.Empty(await h.LifecycleOfAsync<AuctionStarted>(nameof(AuctionStarted)));
+
+        await h.Supervisor.TickAsync(later.StartsAt.AddSeconds(1), h.Token);
+        Assert.Single(await h.LifecycleOfAsync<AuctionStarted>(nameof(AuctionStarted)));
+    }
+
+    [Fact]
+    public async Task A_replayed_definition_is_not_a_redefinition()
+    {
+        // The long-running consumers re-read every topic from the beginning, so the
+        // same approval arrives again and again. An unchanged definition must not
+        // restart the pump.
+        var (h, d) = await RunningAuction();
+        await using var _ = h;
+        var running = h.Running(d.AuctionId);
+
+        await h.RecoverAsync();
+        await h.RecoverAsync();
+
+        Assert.Same(running, h.Running(d.AuctionId));
+        Assert.False(running.Task!.IsCompleted);
+    }
+
+    [Fact]
+    public async Task A_definition_republished_after_the_start_is_ignored()
+    {
+        // auction-admin refuses an amendment to an open auction, so this is a race
+        // with the clock. The auction keeps the terms it opened with.
+        var (h, d) = await RunningAuction();
+        await using var _ = h;
+
+        await h.Supervisor.TickAsync(DateTimeOffset.UtcNow, h.Token);
+        var running = h.Running(d.AuctionId);
+        Assert.True(running.Announced);
+
+        await h.PublishApprovalAsync(d with { EndsAt = d.EndsAt.AddHours(1) });
+        await h.RecoverAsync();
+
+        Assert.Same(running, h.Running(d.AuctionId));
+        Assert.Equal(d.EndsAt, running.Definition.EndsAt);
+        Assert.False(running.Task!.IsCompleted);
+    }
+
     private static async Task<(ProcessorHarness H, AuctionDefinition D)> RunningAuction(
         TimeSpan? quiet = null, int endsInMinutes = 30)
     {

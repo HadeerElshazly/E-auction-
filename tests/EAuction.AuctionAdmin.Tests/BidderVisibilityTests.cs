@@ -39,12 +39,13 @@ public class BidderVisibilityTests
     public void It_cannot_be_changed_once_the_auction_is_approved()
     {
         // The promise that matters. A bidder paid a deposit having been told their
-        // name would not be shown; turning that around afterwards is not an edit.
+        // name would not be shown; turning that around afterwards is not an edit —
+        // and not an amendment either (§6.5): the aggregate refuses it with the reason.
         var auction = Build.ReadyAuction(Now);
         auction.SubmitForReview(Now);
         auction.Approve(Now);
 
-        Assert.Throws<InvalidAuctionTransitionException>(() => auction.UpdateDetails(
+        var refused = Assert.Throws<AuctionValidationException>(() => auction.UpdateDetails(
             nameAr: "أ", nameEn: "A",
             channel: BidChannel.Online,
             bidderVisibility: BidderVisibility.Named,
@@ -54,7 +55,9 @@ public class BidderVisibilityTests
             brokerageFeePercent: 2.5m, bookletPriceMinorUnits: 1_000_00,
             quietPeriodSeconds: 120, maxExtensions: 3));
 
+        Assert.Contains(refused.Problems, p => p.Contains("ظهور المزايدين"));
         Assert.Equal(BidderVisibility.Masked, auction.BidderVisibility);
+        Assert.Equal(AmendmentStatus.None, auction.Amendment);
     }
 
     [Theory]

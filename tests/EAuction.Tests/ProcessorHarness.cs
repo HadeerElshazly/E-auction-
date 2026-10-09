@@ -48,6 +48,7 @@ internal sealed class ProcessorHarness : IAsyncDisposable
             NullLogger<AuctionSupervisor>.Instance);
 
         Registry.AuctionReady += definition => Supervisor.Start(definition, _cts.Token);
+        Registry.AuctionRedefined += definition => Supervisor.Redefine(definition, _cts.Token);
     }
 
     /// <summary>A fresh processor over the same topics — i.e. a restart.</summary>

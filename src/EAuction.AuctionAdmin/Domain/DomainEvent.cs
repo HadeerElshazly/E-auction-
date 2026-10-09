@@ -118,6 +118,13 @@ public sealed record AuctionApproved : DomainEvent
     public required decimal TotalAreaSqm { get; init; }
 
     /// <summary>
+    /// رقم المزاد — the sequential number staff quote and bidders read on the page.
+    /// Public by nature; null only on an event raised before the store assigned one,
+    /// which a consumer should treat as "not yet numbered" rather than zero.
+    /// </summary>
+    public long? Number { get; init; }
+
+    /// <summary>
     /// The plots themselves, not just the count. A bidder deciding whether to put
     /// down a deposit needs to know which land is in the package — deed numbers,
     /// areas and where it is. D-23 restricts the reserve price and nothing else, so
@@ -180,6 +187,23 @@ public sealed record NextBidderReferred : DomainEvent
     public required Guid AuctionId { get; init; }
     public required Guid BidderId { get; init; }
     public required long AmountMinorUnits { get; init; }
+
+    public override string AggregateType => "auction-lifecycle";
+    public override string AggregateId => AuctionId.ToString();
+}
+
+/// <summary>
+/// A published auction's terms changed and the committee approved the change (§6.5).
+/// Raised beside the republished <see cref="AuctionApproved"/>, on the lifecycle
+/// topic: the definition is what every read model applies, keyed on the auction;
+/// this is what the notification service tells the auction's bidders, once, keyed on
+/// <see cref="At"/>. It carries no detail of what changed — the bidder is sent to the
+/// page, which has the current terms rather than a summary that could drift from them.
+/// </summary>
+public sealed record AuctionAmended : DomainEvent
+{
+    public required Guid AuctionId { get; init; }
+    public required DateTimeOffset At { get; init; }
 
     public override string AggregateType => "auction-lifecycle";
     public override string AggregateId => AuctionId.ToString();

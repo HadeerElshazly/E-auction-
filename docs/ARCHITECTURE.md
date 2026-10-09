@@ -296,6 +296,71 @@ Adding these later would mean a migration against a table holding live and
 already-awarded auctions, plus re-approval workflow churn. Nullable-and-unused
 is free.
 
+### 6.5 Amending a published auction
+
+«Editing stops at approval» (§8) held until the municipality asked for the
+obvious thing: a published auction whose booklet has a typo, whose plan was
+re-issued, or whose date has to move. The rule is now: a published auction
+(`Approved`/`Scheduled`) can be edited **before it opens**, as an *amendment*
+that the committee approves again, and the bidders who registered are told.
+
+The status machine is not touched. An auction being amended is still
+`Scheduled` — on the catalogue, selling its booklet, taking deposits, and due to
+open on its published date. What is added is an orthogonal `AmendmentStatus`
+on the aggregate:
+
+```
+None ──edit──► Editing ──submit──► PendingReview ──approve──► None
+                  ▲                       │                  (republished)
+                  └───────reject──────────┘
+```
+
+- **Editing** sets the administrator's copy ahead of the published one. Nothing
+  leaves the service; bidders keep seeing the approved terms.
+- **Submit** validates as a first submission does and puts it before the
+  committee. Nothing can be edited until they decide.
+- **Approve** re-raises `AuctionApproved` and `AuctionReserveSet`, whole, on
+  the same two topics as the first time. Every read model upserts on the
+  auction's key (the catalogue, the catcher, the participant service, payments,
+  reporting, the notification service's name table), so the new terms reach
+  bidders when the relay publishes — and a third event, `AuctionAmended` on the
+  lifecycle topic, is what the notification service turns into «عُدّلت بيانات
+  المزاد» for every eligible bidder, deduplicated on the approval's timestamp.
+- **Reject** returns it to `Editing` with the reason, and publishes nothing.
+
+Three things are not amendable, and the aggregate refuses them with the reason:
+the **deposit** and the **booklet price**, because bidders have paid them at the
+published figures, and the **bidder visibility**, which was part of what they
+agreed to (D-22). Everything else — names, phase, dates, opening price, step,
+brokerage, extension policy, reserve, the plot, the files, the booklet — goes
+through the amendment.
+
+The bid processor was the one consumer that did not upsert: its registry
+assembled a definition once and ignored later records. It now raises
+`AuctionRedefined` when an assembled auction's definition changes (a replayed
+identical record is not a change), and the supervisor stops that auction's pump
+and starts it on the new terms — before the start there are no bids on the
+log, so nothing replays differently. After the start it logs and ignores the
+new definition: auction-admin refuses an amendment to an open auction (the
+lifecycle consumer moves it to `Live` on `AuctionStarted`), so reaching the
+processor after the start is a race with the clock, and the auction keeps the
+terms it opened with. The admin screen says so on the page.
+
+Withdrawing a published auction is still a cancellation (`POST /cancel`, with
+the refund decision), shown to the administrator as «حذف المزاد»; the record
+stays, marked `Cancelled`. A **draft** is deleted outright (`DELETE
+/auctions/{id}`, drafts and rejected auctions only): nothing was published and
+nobody paid, and the audit row written in the same transaction is the trace.
+
+### 6.6 The auction number
+
+`Auction.Number` is a PostgreSQL identity column, assigned when the draft is
+first saved and exposed on every staff response and on `AuctionApproved`. It
+exists because the id is a GUID that nobody can quote, and «رقم المزاد» on a
+telephone has to be a number. The migration that added it renumbered existing
+rows by creation date before building the unique index, so the first auction
+prepared is number 1 and the sequence continues from the last.
+
 ---
 
 ## 7. Bid flow
@@ -667,11 +732,13 @@ not yet binding.
 bidding closes. While the cascade can still reach a losing bidder, their
 deposit is held through the compliance window of everyone above them (§8.3).
 
-### Editing stops at approval
+### Editing stops at approval — and resumes as an amendment
 
-Edits are confined to `Draft` and `Rejected`. Once approved, the auction is
-public and bidders have relied on its terms; changing the dates or the deposit
-underneath them is not an edit, it is a different auction.
+Edits are confined to `Draft` and `Rejected`, and, before the auction opens,
+to an amendment the committee approves again (§6.5). Once approved, the
+auction is public and bidders have relied on its terms: what they see does not
+change until the committee says so, what they paid — the deposit and the
+booklet price — never changes, and once bidding opens nothing does.
 
 ### Verified
 
@@ -690,7 +757,7 @@ provider has no transactions worth testing.
 | A failed publish leaves the message queued for retry | `OutboxTests` |
 | Incomplete auctions report every problem at once and cannot be submitted | `PreparationWorkflowTests` |
 | A reserve below the opening price, or a past start date, is refused | `PreparationWorkflowTests` |
-| Editing is refused once approved | `PreparationWorkflowTests` |
+| Editing is refused once opened; before that a published auction is amended, never its deposit or booklet price (§6.5) | `PreparationWorkflowTests`, `AmendmentTests` |
 | The committee confirms the award; the system only offers a candidate | `AwardWorkflowTests` |
 | The winner is notified only after the signed letter returns | `AwardWorkflowTests` |
 | A cascade creates a fresh award and preserves the previous one | `AwardWorkflowTests` |

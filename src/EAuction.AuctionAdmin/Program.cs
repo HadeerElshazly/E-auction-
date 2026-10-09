@@ -183,6 +183,47 @@ app.MapPut("/auctions/{id:guid}", (
         diff: true))
     .RequireAuthorization(Policies.AuctionAdmin);
 
+// «اسم المزاد والمرحلة», on their own: they are edited on تفاصيل القطعة, beside the
+// land they name, and correcting a name should not mean restating every term.
+app.MapPut("/auctions/{id:guid}/name", (
+    Guid id, RenameAuctionRequest r, HttpContext http,
+    IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+    Mutate(f, id, ct, http, "RenameAuction", a => a.Rename(r.NameAr, r.NameEn, r.Phase), diff: true))
+    .RequireAuthorization(Policies.AuctionAdmin);
+
+// «حذف المسودة». A draft only: nothing was published and nobody paid, so the row
+// goes and the audit entry is the trace. A published auction has bidders and leaves
+// through POST /cancel, which tells them and returns their money.
+app.MapDelete("/auctions/{id:guid}", async (
+    Guid id, HttpContext http, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    await using var db = await f.CreateDbContextAsync(ct);
+    var auction = await Load(db, id, ct);
+    if (auction is null) return Results.NotFound();
+
+    try
+    {
+        auction.EnsureDeletable();
+    }
+    catch (InvalidAuctionTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, status = ex.From.ToString() });
+    }
+
+    db.Auctions.Remove(auction);
+
+    // Written in the same transaction as the delete, and it outlives the auction it
+    // is about — which is the point of it.
+    var actor = StaffAudit.ActorOf(http);
+    db.RecordStaffAction(
+        actor.Subject, actor.Roles, actor.SourceAddress, "DeleteAuctionDraft",
+        AuditSubject.Auction(id), $"حُذفت المسودة رقم {auction.Number}: {auction.NameAr}",
+        actor.Name, auction.NameAr);
+
+    await db.SaveChangesAsync(ct);
+    return Results.NoContent();
+}).RequireAuthorization(Policies.AuctionAdmin);
+
 // --- قاعة المزاد: the clerk on the floor (§29) ------------------------------
 
 app.MapPut("/auctions/{id:guid}/clerk", (
@@ -671,6 +712,33 @@ app.MapGet("/awards/follow-up", async (
     });
 }).RequireAuthorization(Policies.Reporting);
 
+// «بانتظار الاعتماد» — what the committee has waiting: auctions submitted for
+// approval, and published auctions whose amendment is (§6.5). Oldest submission
+// first, because the one that has waited longest is the one to open.
+app.MapGet("/auctions/awaiting-approval", async (
+    int? skip, int? take, IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
+{
+    var slice = Slice.From(skip, take, Slice.MaxTake);
+    await using var db = await f.CreateDbContextAsync(ct);
+
+    var query = db.Auctions.AsNoTracking()
+        .Where(a => a.Status == AuctionStatus.PendingReview
+                 || ((a.Status == AuctionStatus.Approved || a.Status == AuctionStatus.Scheduled)
+                     && a.Amendment == AmendmentStatus.PendingReview));
+
+    var total = await query.CountAsync(ct);
+    var items = await query
+        .OrderBy(a => a.SubmittedAt).ThenBy(a => a.Number)
+        .Skip(slice.Skip).Take(slice.Take)
+        .Select(a => new AwaitingApprovalEntry(
+            a.Id, a.Number, a.NameAr, a.NameEn, a.Phase, a.Status.ToString(),
+            a.Status == AuctionStatus.PendingReview ? "New" : "Amendment",
+            a.SubmittedAt, a.StartsAt, a.OpeningPriceMinorUnits, a.Plots.Count))
+        .ToListAsync(ct);
+
+    return Results.Ok(new { total, skip = slice.Skip, take = slice.Take, items });
+}).RequireAuthorization();
+
 app.MapGet("/auctions", async (
     string? status, string? state, string? q, int? skip, int? take,
     IDbContextFactory<AdminDbContext> f, CancellationToken ct) =>
@@ -724,7 +792,8 @@ app.MapGet("/auctions", async (
         .OrderByDescending(a => a.CreatedAt).ThenBy(a => a.Id)
         .Skip(offset).Take(page)
         .Select(a => new AuctionListItem(
-            a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
+            a.Id, a.Number, a.Status.ToString(), a.Amendment.ToString(),
+            a.NameAr, a.NameEn, a.Channel.ToString(),
             a.BidderVisibility.ToString(),
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.DepositMinorUnits,
             a.Plots.Count, a.CreatedAt,
@@ -890,6 +959,9 @@ public sealed record UpdateAuctionRequest(
     decimal BrokerageFeePercent, long BookletPriceMinorUnits,
     int? QuietPeriodSeconds, int MaxExtensions, string? Phase);
 
+/// <summary>«اسم المزاد والمرحلة» — edited apart from the terms. A blank phase clears it.</summary>
+public sealed record RenameAuctionRequest(string NameAr, string NameEn, string? Phase);
+
 public sealed record AssignClerkRequest(Guid ClerkUserId);
 public sealed record ExtendRequest(int Seconds);
 public sealed record SigningKeyResponse(string SecretHex, int KeyEpoch);
@@ -928,7 +1000,10 @@ public sealed record DisqualifyRequest(string Reason, bool ForfeitDeposit);
 /// auctions does not need every award and plot on each one.
 /// </summary>
 public sealed record AuctionListItem(
-    Guid Id, string Status, string NameAr, string NameEn, string Channel, string BidderVisibility,
+    Guid Id,
+    // رقم المزاد, and whether a change to it is waiting on the committee (§6.5).
+    long Number, string Status, string Amendment,
+    string NameAr, string NameEn, string Channel, string BidderVisibility,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long DepositMinorUnits,
     int PlotCount, DateTimeOffset CreatedAt,
@@ -947,7 +1022,14 @@ public sealed record PlotView(
 }
 
 public sealed record AuctionResponse(
-    Guid Id, string Status, string NameAr, string NameEn, string Channel,
+    Guid Id,
+    // رقم المزاد — what people quote; the id is for machines.
+    long Number,
+    string Status,
+    // "None", "Editing" or "PendingReview": where a change made after publication
+    // stands, and when it began and was last submitted (§6.5).
+    string Amendment, DateTimeOffset? AmendedAt, DateTimeOffset? SubmittedAt,
+    string NameAr, string NameEn, string Channel,
     string BidderVisibility, Guid? ClerkUserId, string? Phase,
     DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     long OpeningPriceMinorUnits, long MinIncrementMinorUnits, long DepositMinorUnits,
@@ -972,7 +1054,9 @@ public sealed record AuctionResponse(
     {
         var now = DateTimeOffset.UtcNow;
         return new(
-            a.Id, a.Status.ToString(), a.NameAr, a.NameEn, a.Channel.ToString(),
+            a.Id, a.Number, a.Status.ToString(),
+            a.Amendment.ToString(), a.AmendedAt, a.SubmittedAt,
+            a.NameAr, a.NameEn, a.Channel.ToString(),
             a.BidderVisibility.ToString(), a.ClerkUserId, a.Phase,
             a.StartsAt, a.EndsAt, a.OpeningPriceMinorUnits, a.MinIncrementMinorUnits,
             a.DepositMinorUnits, a.BrokerageFeePercent, a.BookletPriceMinorUnits,
@@ -1019,6 +1103,15 @@ public sealed record ReceiptResponse(
 
 public sealed record FollowUpEntry(
     Guid AuctionId, string NameAr, string Status, string? Phase, AwardResponse Award);
+
+/// <summary>
+/// One thing waiting on the committee: a new auction ("New") or a change to a
+/// published one ("Amendment"), with when it was put before them.
+/// </summary>
+public sealed record AwaitingApprovalEntry(
+    Guid Id, long Number, string NameAr, string NameEn, string? Phase, string Status,
+    string Kind, DateTimeOffset? SubmittedAt, DateTimeOffset? StartsAt,
+    long OpeningPriceMinorUnits, int PlotCount);
 
 public sealed record AwardReceiptRequest(
     long AmountMinorUnits, DateTimeOffset PaidOn, string Reference, Guid? DocumentId);

@@ -423,6 +423,25 @@ public sealed class EventConsumer(
                 return;
             }
 
+            // The terms a bidder relied on changed, with the committee's approval
+            // (§6.5). The new definition itself arrives on auctions.upcoming and
+            // renames the auction here; this is the notice. Deduped on the approval's
+            // own timestamp, so two amendments are two notices and a replay is none.
+            case InboundEvents.AuctionAmended:
+            {
+                var payload = JsonSerializer.Deserialize<AuctionAmendedPayload>(record.Payload, Json);
+                if (payload is null) return;
+
+                var name = await NameOf(db, payload.AuctionId, ct);
+                var (title, body) = Messages.AuctionAmended(name);
+
+                await RaiseForAudienceAsync(
+                    db, payload.AuctionId, NotificationKind.AuctionAmended,
+                    title, body, now, notify, ct,
+                    dedup: payload.At.ToUnixTimeMilliseconds().ToString());
+                return;
+            }
+
             case InboundEvents.AuctionClosed:
             {
                 var payload = JsonSerializer.Deserialize<AuctionIdPayload>(record.Payload, Json);
@@ -629,7 +648,8 @@ public sealed class EventConsumer(
 
     private async Task RaiseForAudienceAsync(
         NotificationsDbContext db, Guid auctionId, NotificationKind kind,
-        string title, string body, DateTimeOffset now, bool notify, CancellationToken ct)
+        string title, string body, DateTimeOffset now, bool notify, CancellationToken ct,
+        string dedup = "")
     {
         if (!notify) return;
 
@@ -641,7 +661,7 @@ public sealed class EventConsumer(
             .ToListAsync(ct);
 
         foreach (var bidder in audience)
-            await RaiseAsync(bidder, auctionId, kind, title, body, now, notify, ct);
+            await RaiseAsync(bidder, auctionId, kind, title, body, now, notify, ct, dedup);
     }
 
     /// <summary>

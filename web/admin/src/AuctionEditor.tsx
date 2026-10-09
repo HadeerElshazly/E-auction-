@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, config, parseRiyals, readEventStream, riyals, sar, when, type Api, type Session } from '@eauction/shared'
 import type { Auction } from './types'
-import { label } from './types'
+import { amendmentLabel, canEditNow, isUpcoming, label } from './types'
 import { BidderName, useLeaders } from './winners'
 
 interface Props {
@@ -9,31 +9,38 @@ interface Props {
   client: Api
   busy: boolean
   canEdit: boolean
-  canApprove: boolean
   onAct: (work: () => Promise<unknown>) => Promise<void>
 }
 
-/** Editing is confined to Draft and Rejected, as the domain enforces. */
-const editable = new Set(['Draft', 'Rejected'])
-
+/**
+ * «تفاصيل المزاد» — the terms, the files and the booklet, edited while the auction
+ * is a draft and, as an amendment the committee approves again, while it is
+ * upcoming (§6.5). The name and the phase are on «تفاصيل القطعة», with the land.
+ */
 export function AuctionEditor({
   auction,
   client,
   session,
   busy,
   canEdit,
-  canApprove,
   onAct,
 }: Props & { session: Session }) {
   const l = label(auction.status)
-  const open = editable.has(auction.status)
+  // Editing is confined to a draft and to an upcoming auction without a pending
+  // amendment, as the domain enforces.
+  const open = canEditNow(auction)
+  const amending = amendmentLabel(auction.amendment)
 
   return (
     <div className="card">
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0 }}>{auction.nameAr}</h2>
         <span className={`pill ${l.tone}`}>{l.ar}</span>
+        {amending && <span className="pill wait">{amending}</span>}
         <span className="grow" />
+        <span className="muted small">
+          رقم المزاد <b className="num">{auction.number}</b>
+        </span>
         <code className="muted small">{auction.id}</code>
       </div>
 
@@ -50,10 +57,20 @@ export function AuctionEditor({
 
       {/* The read-only summary lives on «تفاصيل القطعة»; here only what can be
           changed, and the approval workflow. */}
+      {open && canEdit && isUpcoming(auction) && (
+        <div className="notice info small">
+          تعديل مزاد منشور: ما يُحفظ هنا لا يظهر للمزايدين حتى تعتمده لجنة الترسية من جديد، ويُبلَّغ المتقدمون بالتعديل
+          عند اعتماده. لا يتغيّر مبلغ التأمين ولا سعر الكراسة.
+        </div>
+      )}
       {open && canEdit && <Details auction={auction} client={client} busy={busy} onAct={onAct} />}
       {!(open && canEdit) && (
         <p className="muted small">
-          بيانات المزاد معروضة في «تفاصيل القطعة». لا تُعدَّل بعد رفعه للاعتماد؛ الإجراءات المتاحة أدناه.
+          {auction.status === 'PendingReview'
+            ? 'بيانات المزاد معروضة في «تفاصيل القطعة». لا تُعدَّل بعد رفعه للاعتماد؛ الإجراءات المتاحة أدناه.'
+            : auction.amendment === 'PendingReview'
+              ? 'التعديل بانتظار اعتماد لجنة الترسية؛ لا يُعدَّل المزاد حتى تبتّ فيه.'
+              : 'بيانات المزاد معروضة في «تفاصيل القطعة». لا تُعدَّل بعد بدء المزاد؛ الإجراءات المتاحة أدناه.'}
         </p>
       )}
 
@@ -73,14 +90,7 @@ export function AuctionEditor({
         onAct={onAct}
       />
 
-      <Workflow
-        auction={auction}
-        client={client}
-        busy={busy}
-        canEdit={canEdit}
-        canApprove={canApprove}
-        onAct={onAct}
-      />
+      <Workflow auction={auction} />
     </div>
   )
 }
@@ -263,7 +273,7 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
  * The identifier is a user id because nothing in this system can list the
  * municipality's staff; a directory lookup belongs here when there is one to call.
  */
-function Clerk({ auction, client, busy, canEdit, onAct }: Omit<Props, 'canApprove'>) {
+function Clerk({ auction, client, busy, canEdit, onAct }: Props) {
   const [userId, setUserId] = useState(auction.clerkUserId ?? '')
 
   return (
@@ -319,7 +329,9 @@ function Clerk({ auction, client, busy, canEdit, onAct }: Omit<Props, 'canApprov
   )
 }
 
-function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canApprove'>) {
+function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit'>) {
+  // Published: the figures bidders paid on cannot move (the server refuses them too).
+  const locked = isUpcoming(auction)
   // Local form state, reseeded when a DIFFERENT auction is opened — keyed on the id,
   // not on the auction object.
   //
@@ -372,8 +384,10 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
       setProblems([])
 
       await client.put(`/auctions/${auction.id}`, {
-        nameAr: form.nameAr,
-        nameEn: form.nameEn,
+        // The name and the phase are edited on «تفاصيل القطعة»; the terms endpoint
+        // still takes them, so the current ones go back unchanged.
+        nameAr: auction.nameAr,
+        nameEn: auction.nameEn,
         channel: form.channel,
         bidderVisibility: form.bidderVisibility,
         startsAt: new Date(form.startsAt).toISOString(),
@@ -386,7 +400,7 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
         brokerageFeePercent: Number(form.brokerage),
         quietPeriodSeconds: form.extend ? Number(form.quiet) : null,
         maxExtensions: form.extend ? Number(form.maxExtensions) : 0,
-        phase: form.phase || null,
+        phase: auction.phase,
       })
       setBaseline(form)
   }
@@ -415,18 +429,6 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
 
       <div className="grid">
         <label>
-          <span>الاسم (عربي)</span>
-          <input value={form.nameAr} onChange={(e) => setForm({ ...form, nameAr: e.target.value })} />
-        </label>
-        <label>
-          <span>الاسم (إنجليزي)</span>
-          <input
-            className="ltr"
-            value={form.nameEn}
-            onChange={(e) => setForm({ ...form, nameEn: e.target.value })}
-          />
-        </label>
-        <label>
           <span>القناة</span>
           <select
             value={form.channel}
@@ -440,6 +442,7 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
           <span>ظهور المزايدين</span>
           <select
             value={form.bidderVisibility}
+            disabled={locked}
             onChange={(e) => setForm({ ...form, bidderVisibility: e.target.value })}
           >
             <option value="Masked">مُخفى — مزايد #1</option>
@@ -448,15 +451,6 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
           <span className="muted small">
             بالاسم يعني نشر اسم المزايد الأعلى للجميع. لا يمكن تغييره بعد الاعتماد.
           </span>
-        </label>
-        <label>
-          <span>المرحلة</span>
-          <input
-            className="ltr"
-            value={form.phase}
-            onChange={(e) => setForm({ ...form, phase: e.target.value })}
-            placeholder="phase-1"
-          />
         </label>
         <label>
           <span>بداية المزاد</span>
@@ -481,19 +475,25 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
           {form.endsAt && <span className="muted small">{when(form.endsAt)}</span>}
         </label>
 
-        {amounts.map(([key, text]) => (
-          <label key={String(key)}>
-            <span>
-              {text} <span className="muted">(ر.س)</span>
-            </span>
-            <input
-              className="ltr num"
-              inputMode="decimal"
-              value={String(form[key])}
-              onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-            />
-          </label>
-        ))}
+        {amounts.map(([key, text]) => {
+          // What bidders paid on: the deposit and the booklet fee stay as published.
+          const frozen = locked && (key === 'deposit' || key === 'booklet')
+          return (
+            <label key={String(key)}>
+              <span>
+                {text} <span className="muted">(ر.س)</span>
+              </span>
+              <input
+                className="ltr num"
+                inputMode="decimal"
+                value={String(form[key])}
+                disabled={frozen}
+                onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+              />
+              {frozen && <small className="muted">لا يتغيّر بعد نشر المزاد.</small>}
+            </label>
+          )
+        })}
 
         <label>
           <span>
@@ -590,11 +590,8 @@ function Details({ auction, client, busy, onAct }: Omit<Props, 'canEdit' | 'canA
 }
 
 interface FormState {
-  nameAr: string
-  nameEn: string
   channel: string
   bidderVisibility: string
-  phase: string
   startsAt: string
   endsAt: string
   opening: string
@@ -610,11 +607,8 @@ interface FormState {
 
 function toForm(a: Auction): FormState {
   return {
-    nameAr: a.nameAr,
-    nameEn: a.nameEn,
     channel: a.channel,
     bidderVisibility: a.bidderVisibility ?? 'Masked',
-    phase: a.phase ?? '',
     startsAt: forInput(a.startsAt) || forInput(new Date(Date.now() + 864e5).toISOString()),
     endsAt: forInput(a.endsAt) || forInput(new Date(Date.now() + 1728e5).toISOString()),
     opening: riyals(a.openingPriceMinorUnits || null) === '—' ? '' : riyalsPlain(a.openingPriceMinorUnits),
@@ -663,7 +657,7 @@ function Documents({
   busy,
   canEdit,
   onAct,
-}: Omit<Props, 'canApprove'> & { canEdit: boolean; session: Session }) {
+}: Props & { session: Session }) {
   const documents = api({ baseUrl: config.documentsApi, session })
 
   return (
@@ -875,53 +869,25 @@ function Attach({
   )
 }
 
-function Workflow({ auction, client, busy, canEdit, onAct }: Props) {
-  const [cancelReason, setCancelReason] = useState('')
+/**
+ * Where the auction stands with the committee, when it is with them. Withdrawing an
+ * upcoming auction is «حذف المزاد» in the side box, with the other decisions.
+ */
+function Workflow({ auction }: Pick<Props, 'auction'>) {
+  const pendingNew = auction.status === 'PendingReview'
+  const pendingAmendment = isUpcoming(auction) && auction.amendment === 'PendingReview'
+  if (!pendingNew && !pendingAmendment) return null
 
   return (
     <>
-      {/* Nothing to act on — an awarded or live auction — means no section. */}
-      {auction.status === 'PendingReview' ? <h3>سير العمل</h3> : null}
-
+      <h3>سير العمل</h3>
       <div className="row">
-        {auction.status === 'PendingReview' && (
-          <span className="muted small">
-            بانتظار لجنة الترسية — يُعتمد المزاد أو يُرفض من صفحته، ولا يعتمد مُعدّ المزاد مزاده بنفسه.
-          </span>
-        )}
+        <span className="muted small">
+          {pendingNew
+            ? 'بانتظار لجنة الترسية — يُعتمد المزاد أو يُرفض من صفحته، ولا يعتمد مُعدّ المزاد مزاده بنفسه.'
+            : 'التعديل بانتظار لجنة الترسية — يُعتمد فيُنشر للمزايدين ويُبلَّغون به، أو يُرفض بالسبب فيعود للتعديل. يبقى ما نُشر كما هو حتى ذلك.'}
+        </span>
       </div>
-
-      {/* «توثيق الإلغاء المصرح به»: withdrawing an approved auction before it
-          opens, with the reason on record and shown to its bidders. */}
-      {canEdit && (auction.status === 'Approved' || auction.status === 'Scheduled') && (
-        <>
-          <h3>إلغاء المزاد</h3>
-          <p className="muted small" style={{ marginTop: -4 }}>
-            يُتاح قبل بدء المزاد فقط. يُبلَّغ المشتركون، ويُرد التأمين المدفوع أو يُحرَّر الضمان.
-          </p>
-          <div className="row">
-            <input
-              placeholder="سبب الإلغاء (يظهر للمشتركين)"
-              aria-label="سبب الإلغاء"
-              style={{ flex: '1 1 280px' }}
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value)}
-            />
-            <button
-              className="danger"
-              disabled={busy || cancelReason.trim() === ''}
-              onClick={() => {
-                if (!window.confirm('إلغاء المزاد نهائي ولا يمكن التراجع عنه. متابعة؟')) return
-                void onAct(() =>
-                  client.post(`/auctions/${auction.id}/cancel`, { reason: cancelReason.trim() }),
-                )
-              }}
-            >
-              إلغاء المزاد
-            </button>
-          </div>
-        </>
-      )}
     </>
   )
 }
